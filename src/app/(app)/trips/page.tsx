@@ -1,17 +1,21 @@
 "use client";
 
+import { EditOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
   Button,
   Card,
   Form,
+  Grid,
   Input,
   InputNumber,
   Modal,
+  Pagination,
   Select,
   Space,
   Table,
+  Tag,
   Typography,
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
@@ -68,6 +72,13 @@ const tripStatusLabels: Record<string, string> = {
   archived: "В архиве",
 };
 
+const tripStatusTagColors: Record<string, string> = {
+  planned: "blue",
+  in_transit: "cyan",
+  ready: "green",
+  archived: "default",
+};
+
 const tripTypeLabels: Record<string, string> = {
   truck: "Грузовик",
   sea: "Море",
@@ -84,11 +95,25 @@ function formatTripType(value: string | null) {
   return tripTypeLabels[value] ?? value;
 }
 
+function renderTripStatus(value: string | null) {
+  if (!value) {
+    return <Tag className="crm-status-tag">-</Tag>;
+  }
+
+  return (
+    <Tag color={tripStatusTagColors[value] ?? "default"} className="crm-status-tag">
+      {formatTripStatus(value)}
+    </Tag>
+  );
+}
+
 function TripsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -154,6 +179,20 @@ function TripsPageContent() {
     },
   });
 
+  function openEdit(record: Trip) {
+    setSelected(record);
+    editForm.setFieldsValue({
+      ...record,
+      current_point_id: record.current_point_id ?? undefined,
+      current_point_name: record.current_point_name ?? undefined,
+      truck_plate: record.truck_plate ?? undefined,
+      truck_company_name: record.truck_company_name ?? undefined,
+      status_name: record.status_name ?? undefined,
+      type_name: record.type_name ?? undefined,
+    });
+    setEditOpen(true);
+  }
+
   const sortOrderFor = (field: string) => {
     if (params.sort_by !== field) return null;
     return params.sort_desc ? "descend" : "ascend";
@@ -174,7 +213,7 @@ function TripsPageContent() {
       key: "status_name",
       sorter: true,
       sortOrder: sortOrderFor("status_name"),
-      render: (v) => formatTripStatus(v),
+      render: (v) => renderTripStatus(v),
     },
     {
       title: "Тип",
@@ -203,24 +242,9 @@ function TripsPageContent() {
     {
       title: "Действия",
       key: "actions",
-      width: 120,
+      width: 150,
       render: (_, record) => (
-        <Button
-          size="small"
-          onClick={() => {
-            setSelected(record);
-            editForm.setFieldsValue({
-              ...record,
-              current_point_id: record.current_point_id ?? undefined,
-              current_point_name: record.current_point_name ?? undefined,
-              truck_plate: record.truck_plate ?? undefined,
-              truck_company_name: record.truck_company_name ?? undefined,
-              status_name: record.status_name ?? undefined,
-              type_name: record.type_name ?? undefined,
-            });
-            setEditOpen(true);
-          }}
-        >
+        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
           Редактировать
         </Button>
       ),
@@ -251,17 +275,32 @@ function TripsPageContent() {
     });
   }
 
-  return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Typography.Title level={3} style={{ marginTop: 0 }}>
-          Рейсы
-        </Typography.Title>
+  const rows = listQuery.data?.items ?? [];
+  const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
+  const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
+  const totalRows = listQuery.data?.meta.total ?? 0;
 
+  return (
+    <Space direction="vertical" size={16} className="crm-page-stack">
+      <Card className="crm-panel">
+        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+          <div>
+            <Typography.Title level={2} className="crm-page-title">
+              Рейсы
+            </Typography.Title>
+            <Typography.Paragraph className="crm-page-subtitle">
+              Планирование текущих перемещений и мониторинг транспорта по всем заказам.
+            </Typography.Paragraph>
+          </div>
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            Создать рейс
+          </Button>
+        </Space>
+      </Card>
+
+      <Card className="crm-panel filters">
         <Form
           form={filterForm}
-          layout="inline"
-          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: {
             query?: string;
             status_names?: string[];
@@ -277,45 +316,41 @@ function TripsPageContent() {
             });
           }}
         >
-          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
-            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            name="truck_plate"
-            style={{ marginBottom: 0, flex: "1 1 180px", minWidth: 160 }}
-          >
-            <Input placeholder="Номер тягача" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="status_names" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="Статус"
-              style={{ width: "100%" }}
-              options={["planned", "in_transit", "ready", "archived"].map((value) => ({
-                label: formatTripStatus(value),
-                value,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="type_names" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="Тип"
-              style={{ width: "100%" }}
-              options={["truck", "sea", "direct"].map((value) => ({
-                label: formatTripType(value),
-                value,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
+          <div className="crm-filter-grid">
+            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Input placeholder="Поиск по названию" allowClear />
+            </Form.Item>
+            <Form.Item name="truck_plate" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Input placeholder="Номер тягача" allowClear />
+            </Form.Item>
+            <Form.Item name="status_names" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Статус"
+                options={["planned", "in_transit", "ready", "archived"].map((value) => ({
+                  label: formatTripStatus(value),
+                  value,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="type_names" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Тип"
+                options={["truck", "sea", "direct"].map((value) => ({
+                  label: formatTripType(value),
+                  value,
+                }))}
+              />
+            </Form.Item>
+          </div>
+
+          <div className="crm-filter-actions">
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
             <Button
               onClick={() => {
                 filterForm.resetFields();
@@ -324,38 +359,96 @@ function TripsPageContent() {
             >
               Сбросить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="dashed" onClick={() => setCreateOpen(true)}>
-              Создать рейс
-            </Button>
-          </Form.Item>
+          </div>
         </Form>
       </Card>
 
-      <Card>
+      <Card className="crm-panel crm-table-card">
         {listQuery.error ? (
           <Typography.Text type="danger">
             {listQuery.error instanceof ApiError ? listQuery.error.detail : "Ошибка загрузки рейсов"}
           </Typography.Text>
         ) : null}
 
-        <Table<Trip>
-          rowKey="id"
-          loading={listQuery.isLoading}
-          dataSource={listQuery.data?.items ?? []}
-          columns={columns}
-          scroll={{ x: 1000 }}
-          pagination={{
-            current: listQuery.data?.meta.page ?? params.page ?? 1,
-            pageSize: listQuery.data?.meta.page_size ?? params.page_size ?? 50,
-            total: listQuery.data?.meta.total ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: [20, 50, 100, 200],
-          }}
-          onChange={handleTableChange}
-          locale={{ emptyText: "Нет данных" }}
-        />
+        {isMobile ? (
+          <>
+            <div className="crm-mobile-list">
+              {rows.map((record) => (
+                <article key={record.id} className="crm-row-card">
+                  <div className="crm-row-card-head">
+                    <div>
+                      <div className="crm-row-title">{record.name}</div>
+                      <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
+                    </div>
+                    {renderTripStatus(record.status_name)}
+                  </div>
+
+                  <div className="crm-row-meta">
+                    <div className="crm-row-meta-item">
+                      Тип
+                      <strong>{formatTripType(record.type_name)}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Точка
+                      <strong>{record.current_point_name ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Тягач
+                      <strong>{record.truck_plate ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Компания
+                      <strong>{record.truck_company_name ?? "-"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="crm-row-actions">
+                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                      Редактировать
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {!listQuery.isLoading && rows.length === 0 ? (
+              <Typography.Text type="secondary">Нет данных</Typography.Text>
+            ) : null}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <Pagination
+                current={currentPage}
+                pageSize={currentPageSize}
+                total={totalRows}
+                showSizeChanger
+                pageSizeOptions={[20, 50, 100, 200]}
+                onChange={(page, pageSize) => {
+                  applySearchPatch({
+                    page,
+                    page_size: pageSize,
+                  });
+                }}
+              />
+            </div>
+          </>
+        ) : (
+          <Table<Trip>
+            rowKey="id"
+            loading={listQuery.isLoading}
+            dataSource={rows}
+            columns={columns}
+            scroll={{ x: 1020 }}
+            pagination={{
+              current: currentPage,
+              pageSize: currentPageSize,
+              total: totalRows,
+              showSizeChanger: true,
+              pageSizeOptions: [20, 50, 100, 200],
+            }}
+            onChange={handleTableChange}
+            locale={{ emptyText: "Нет данных" }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -366,11 +459,7 @@ function TripsPageContent() {
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
       >
-        <Form<TripForm>
-          form={createForm}
-          layout="vertical"
-          onFinish={(values) => createMutation.mutate(values)}
-        >
+        <Form<TripForm> form={createForm} layout="vertical" onFinish={(values) => createMutation.mutate(values)}>
           <Form.Item name="name" label="Название" rules={[{ required: true }]}>
             <Input />
           </Form.Item>

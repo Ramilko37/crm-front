@@ -1,23 +1,27 @@
 "use client";
 
+import { EditOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
   Button,
   Card,
   Form,
+  Grid,
   Input,
   InputNumber,
   Modal,
+  Pagination,
   Select,
   Space,
   Table,
+  Tag,
   Typography,
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
@@ -68,9 +72,27 @@ const certificateStatusLabels: Record<string, string> = {
   expired: "Истек",
 };
 
+const certificateTagColors: Record<string, string> = {
+  active: "green",
+  pending: "gold",
+  expired: "red",
+};
+
 function formatCertificateStatus(value: string | null) {
   if (!value) return "-";
   return certificateStatusLabels[value] ?? value;
+}
+
+function renderCertificateStatus(value: string | null) {
+  if (!value) {
+    return <Tag className="crm-status-tag">-</Tag>;
+  }
+
+  return (
+    <Tag color={certificateTagColors[value] ?? "default"} className="crm-status-tag">
+      {formatCertificateStatus(value)}
+    </Tag>
+  );
 }
 
 function FactoriesPageContent() {
@@ -78,6 +100,8 @@ function FactoriesPageContent() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -145,6 +169,22 @@ function FactoriesPageContent() {
     },
   });
 
+  function openEdit(record: Factory) {
+    setSelected(record);
+    editForm.setFieldsValue({
+      ...record,
+      country_id: record.country_id ?? undefined,
+      country: record.country ?? undefined,
+      city: record.city ?? undefined,
+      address: record.address ?? undefined,
+      postcode: record.postcode ?? undefined,
+      phone: record.phone ?? undefined,
+      email: record.email ?? undefined,
+      certificate_status: record.certificate_status ?? undefined,
+    });
+    setEditOpen(true);
+  }
+
   const sortOrderFor = (field: string) => {
     if (params.sort_by !== field) return null;
     return params.sort_desc ? "descend" : "ascend";
@@ -182,31 +222,14 @@ function FactoriesPageContent() {
       key: "certificate_status",
       sorter: true,
       sortOrder: sortOrderFor("certificate_status"),
-      render: (v) => formatCertificateStatus(v),
+      render: (v) => renderCertificateStatus(v),
     },
     {
       title: "Действия",
       key: "actions",
-      width: 120,
+      width: 150,
       render: (_, record) => (
-        <Button
-          size="small"
-          onClick={() => {
-            setSelected(record);
-            editForm.setFieldsValue({
-              ...record,
-              country_id: record.country_id ?? undefined,
-              country: record.country ?? undefined,
-              city: record.city ?? undefined,
-              address: record.address ?? undefined,
-              postcode: record.postcode ?? undefined,
-              phone: record.phone ?? undefined,
-              email: record.email ?? undefined,
-              certificate_status: record.certificate_status ?? undefined,
-            });
-            setEditOpen(true);
-          }}
-        >
+        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
           Редактировать
         </Button>
       ),
@@ -237,17 +260,32 @@ function FactoriesPageContent() {
     });
   }
 
-  return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Typography.Title level={3} style={{ marginTop: 0 }}>
-          Фабрики
-        </Typography.Title>
+  const rows = listQuery.data?.items ?? [];
+  const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
+  const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
+  const totalRows = listQuery.data?.meta.total ?? 0;
 
+  return (
+    <Space direction="vertical" size={16} className="crm-page-stack">
+      <Card className="crm-panel">
+        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+          <div>
+            <Typography.Title level={2} className="crm-page-title">
+              Фабрики
+            </Typography.Title>
+            <Typography.Paragraph className="crm-page-subtitle">
+              Каталог фабрик, сертификаты и контактные данные для логистических операций.
+            </Typography.Paragraph>
+          </div>
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            Создать фабрику
+          </Button>
+        </Space>
+      </Card>
+
+      <Card className="crm-panel filters">
         <Form
           form={filterForm}
-          layout="inline"
-          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: {
             query?: string;
             country?: string;
@@ -263,36 +301,33 @@ function FactoriesPageContent() {
             });
           }}
         >
-          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
-            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="country" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
-            <Input placeholder="Страна" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="city" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
-            <Input placeholder="Город" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item
-            name="certificate_statuses"
-            style={{ marginBottom: 0, flex: "1 1 260px", minWidth: 200 }}
-          >
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="Статус сертификата"
-              style={{ width: "100%" }}
-              options={["active", "pending", "expired"].map((value) => ({
-                label: formatCertificateStatus(value),
-                value,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
+          <div className="crm-filter-grid">
+            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Input placeholder="Поиск по названию или email" allowClear />
+            </Form.Item>
+            <Form.Item name="country" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Input placeholder="Страна" allowClear />
+            </Form.Item>
+            <Form.Item name="city" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Input placeholder="Город" allowClear />
+            </Form.Item>
+            <Form.Item name="certificate_statuses" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Сертификат"
+                options={["active", "pending", "expired"].map((value) => ({
+                  label: formatCertificateStatus(value),
+                  value,
+                }))}
+              />
+            </Form.Item>
+          </div>
+
+          <div className="crm-filter-actions">
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
             <Button
               onClick={() => {
                 filterForm.resetFields();
@@ -301,40 +336,92 @@ function FactoriesPageContent() {
             >
               Сбросить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="dashed" onClick={() => setCreateOpen(true)}>
-              Создать фабрику
-            </Button>
-          </Form.Item>
+          </div>
         </Form>
       </Card>
 
-      <Card>
+      <Card className="crm-panel crm-table-card">
         {listQuery.error ? (
           <Typography.Text type="danger">
-            {listQuery.error instanceof ApiError
-              ? listQuery.error.detail
-              : "Ошибка загрузки фабрик"}
+            {listQuery.error instanceof ApiError ? listQuery.error.detail : "Ошибка загрузки фабрик"}
           </Typography.Text>
         ) : null}
 
-        <Table<Factory>
-          rowKey="id"
-          loading={listQuery.isLoading}
-          dataSource={listQuery.data?.items ?? []}
-          columns={columns}
-          scroll={{ x: 1000 }}
-          pagination={{
-            current: listQuery.data?.meta.page ?? params.page ?? 1,
-            pageSize: listQuery.data?.meta.page_size ?? params.page_size ?? 50,
-            total: listQuery.data?.meta.total ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: [20, 50, 100, 200],
-          }}
-          onChange={handleTableChange}
-          locale={{ emptyText: "Нет данных" }}
-        />
+        {isMobile ? (
+          <>
+            <div className="crm-mobile-list">
+              {rows.map((record) => (
+                <article key={record.id} className="crm-row-card">
+                  <div className="crm-row-card-head">
+                    <div>
+                      <div className="crm-row-title">{record.name}</div>
+                      <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
+                    </div>
+                    {renderCertificateStatus(record.certificate_status)}
+                  </div>
+
+                  <div className="crm-row-meta">
+                    <div className="crm-row-meta-item">
+                      Страна
+                      <strong>{record.country ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Город
+                      <strong>{record.city ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item" style={{ gridColumn: "1 / -1" }}>
+                      Email
+                      <strong>{record.email ?? "-"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="crm-row-actions">
+                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                      Редактировать
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {!listQuery.isLoading && rows.length === 0 ? (
+              <Typography.Text type="secondary">Нет данных</Typography.Text>
+            ) : null}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <Pagination
+                current={currentPage}
+                pageSize={currentPageSize}
+                total={totalRows}
+                showSizeChanger
+                pageSizeOptions={[20, 50, 100, 200]}
+                onChange={(page, pageSize) => {
+                  applySearchPatch({
+                    page,
+                    page_size: pageSize,
+                  });
+                }}
+              />
+            </div>
+          </>
+        ) : (
+          <Table<Factory>
+            rowKey="id"
+            loading={listQuery.isLoading}
+            dataSource={rows}
+            columns={columns}
+            scroll={{ x: 1020 }}
+            pagination={{
+              current: currentPage,
+              pageSize: currentPageSize,
+              total: totalRows,
+              showSizeChanger: true,
+              pageSizeOptions: [20, 50, 100, 200],
+            }}
+            onChange={handleTableChange}
+            locale={{ emptyText: "Нет данных" }}
+          />
+        )}
       </Card>
 
       <Modal

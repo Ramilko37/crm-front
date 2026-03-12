@@ -4,8 +4,8 @@ import { App, Button, Card, Form, Input, Typography } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
-import { ApiError } from "@/shared/lib/errors";
 import { apiRequest } from "@/shared/lib/api";
+import { ApiError } from "@/shared/lib/errors";
 import type { AuthTokenResponse } from "@/shared/types/entities";
 
 function LoginPageContent() {
@@ -38,21 +38,22 @@ function LoginPageContent() {
 
   return (
     <main className="login-page">
-      <Card className="login-card">
-        <Typography.Title level={3} style={{ marginBottom: 8 }}>
-          CRM Front
+      <Card className="login-card crm-panel">
+        <div className="login-eyebrow">Target Logistics CRM</div>
+        <Typography.Title level={2} style={{ marginBottom: 6, marginTop: 0 }}>
+          Вход в систему
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          Войдите под учетной записью backend (`root` / `root` по умолчанию).
+          Используйте данные backend-аккаунта (`root` / `root` по умолчанию).
         </Typography.Paragraph>
 
-        <Form layout="vertical" onFinish={handleSubmit}>
+        <Form layout="vertical" onFinish={handleSubmit} size="large">
           <Form.Item label="Логин" name="username" rules={[{ required: true }]}>
-            <Input autoComplete="username" />
+            <Input autoComplete="username" placeholder="Введите логин" />
           </Form.Item>
 
           <Form.Item label="Пароль" name="password" rules={[{ required: true }]}>
-            <Input.Password autoComplete="current-password" />
+            <Input.Password autoComplete="current-password" placeholder="Введите пароль" />
           </Form.Item>
 
           <Button type="primary" htmlType="submit" block loading={loading}>
@@ -69,7 +70,7 @@ export default function LoginPage() {
     <Suspense
       fallback={
         <main className="login-page">
-          <Card className="login-card" loading />
+          <Card className="login-card crm-panel" loading />
         </main>
       }
     >

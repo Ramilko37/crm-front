@@ -1,15 +1,24 @@
 "use client";
 
+import {
+  ApartmentOutlined,
+  EditOutlined,
+  MoreOutlined,
+  SwapOutlined,
+} from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
   Button,
   Card,
   DatePicker,
+  Dropdown,
   Form,
+  Grid,
   Input,
   InputNumber,
   Modal,
+  Pagination,
   Select,
   Space,
   Table,
@@ -59,9 +68,31 @@ const statusLabels: Record<string, string> = {
   in_review: "На проверке",
 };
 
+const statusTagColors: Record<string, string> = {
+  new: "blue",
+  processing: "gold",
+  ready: "green",
+  in_transit: "cyan",
+  in_moscow: "geekblue",
+  archived: "default",
+  in_review: "purple",
+};
+
 function formatOrderStatus(value: string | null) {
   if (!value) return "-";
   return statusLabels[value] ?? value;
+}
+
+function renderOrderStatus(value: string | null) {
+  if (!value) {
+    return <Tag className="crm-status-tag">-</Tag>;
+  }
+
+  return (
+    <Tag color={statusTagColors[value] ?? "default"} className="crm-status-tag">
+      {formatOrderStatus(value)}
+    </Tag>
+  );
 }
 
 function parseNumber(value: string | null): number | undefined {
@@ -102,6 +133,8 @@ function OrdersPageContent() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -219,6 +252,65 @@ function OrdersPageContent() {
     return params.sort_desc ? "descend" : "ascend";
   };
 
+  function applySearchPatch(
+    patch: Record<string, string | number | boolean | string[] | null | undefined>,
+  ) {
+    const nextSearch = setSearchPatch(searchParams, patch);
+    router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
+  }
+
+  function openEdit(record: Order) {
+    setSelected(record);
+    editForm.setFieldsValue({
+      order_number: record.order_number,
+      comment: record.comment ?? undefined,
+      status_name: record.status_name ?? undefined,
+      trip_id: record.trip_id ?? undefined,
+      user_id: record.user_id,
+      factory_id: record.factory_id,
+      company_id: record.company_id ?? undefined,
+    });
+    setEditOpen(true);
+  }
+
+  function openStatus(record: Order) {
+    setSelected(record);
+    statusForm.setFieldsValue({
+      status_name: record.status_name ?? undefined,
+      status_date: record.status_date ? dayjs(record.status_date) : undefined,
+    });
+    setStatusOpen(true);
+  }
+
+  function openAssign(record: Order) {
+    setSelected(record);
+    assignForm.setFieldsValue({ trip_id: record.trip_id ?? undefined });
+    setAssignOpen(true);
+  }
+
+  function orderActions(record: Order) {
+    return [
+      {
+        key: "edit",
+        label: "Редактировать",
+        icon: <EditOutlined />,
+        onClick: () => openEdit(record),
+      },
+      {
+        key: "status",
+        label: "Изменить статус",
+        icon: <SwapOutlined />,
+        onClick: () => openStatus(record),
+      },
+      {
+        key: "assign",
+        label: "Назначить рейс",
+        icon: <ApartmentOutlined />,
+        onClick: () => openAssign(record),
+      },
+    ];
+  }
+
   const columns: ColumnsType<Order> = [
     {
       title: "ID",
@@ -243,7 +335,7 @@ function OrdersPageContent() {
       key: "status_name",
       sorter: true,
       sortOrder: sortOrderFor("status_name"),
-      render: (value: string | null) => <Tag>{formatOrderStatus(value)}</Tag>,
+      render: (value: string | null) => renderOrderStatus(value),
     },
     {
       title: "Фабрика",
@@ -278,30 +370,19 @@ function OrdersPageContent() {
       title: "Действия",
       key: "actions",
       fixed: "right",
-      width: 280,
+      width: 178,
       render: (_, record) => (
-        <Space wrap>
-          <Button size="small" onClick={() => openEdit(record)}>
-            Редактировать
+        <Space size={4}>
+          <Button size="small" type="link" onClick={() => router.push(`/orders/${record.id}`)}>
+            Открыть
           </Button>
-          <Button size="small" onClick={() => openStatus(record)}>
-            Статус
-          </Button>
-          <Button size="small" onClick={() => openAssign(record)}>
-            Назначить рейс
-          </Button>
-          <Link href={`/orders/${record.id}`}>Открыть</Link>
+          <Dropdown trigger={["click"]} menu={{ items: orderActions(record) }}>
+            <Button size="small" icon={<MoreOutlined />} />
+          </Dropdown>
         </Space>
       ),
     },
   ];
-
-  function applySearchPatch(
-    patch: Record<string, string | number | boolean | string[] | null | undefined>,
-  ) {
-    const nextSearch = setSearchPatch(searchParams, patch);
-    router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
-  }
 
   function handleTableChange(
     pagination: TablePaginationConfig,
@@ -320,46 +401,32 @@ function OrdersPageContent() {
     });
   }
 
-  function openEdit(record: Order) {
-    setSelected(record);
-    editForm.setFieldsValue({
-      order_number: record.order_number,
-      comment: record.comment ?? undefined,
-      status_name: record.status_name ?? undefined,
-      trip_id: record.trip_id ?? undefined,
-      user_id: record.user_id,
-      factory_id: record.factory_id,
-      company_id: record.company_id ?? undefined,
-    });
-    setEditOpen(true);
-  }
-
-  function openStatus(record: Order) {
-    setSelected(record);
-    statusForm.setFieldsValue({
-      status_name: record.status_name ?? undefined,
-      status_date: record.status_date ? dayjs(record.status_date) : undefined,
-    });
-    setStatusOpen(true);
-  }
-
-  function openAssign(record: Order) {
-    setSelected(record);
-    assignForm.setFieldsValue({ trip_id: record.trip_id ?? undefined });
-    setAssignOpen(true);
-  }
+  const rows = listQuery.data?.items ?? [];
+  const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
+  const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
+  const totalRows = listQuery.data?.meta.total ?? 0;
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Typography.Title level={3} style={{ marginTop: 0 }}>
-          Заказы
-        </Typography.Title>
+    <Space direction="vertical" size={16} className="crm-page-stack">
+      <Card className="crm-panel">
+        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+          <div>
+            <Typography.Title level={2} className="crm-page-title">
+              Заказы
+            </Typography.Title>
+            <Typography.Paragraph className="crm-page-subtitle">
+              Контроль статусов, рейсов и приоритетных операций по отправкам.
+            </Typography.Paragraph>
+          </div>
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            Создать заказ
+          </Button>
+        </Space>
+      </Card>
 
+      <Card className="crm-panel filters">
         <Form
           form={filterForm}
-          layout="inline"
-          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: { query?: string; country?: string; status_names?: string[] }) => {
             applySearchPatch({
               query: values.query,
@@ -369,30 +436,30 @@ function OrdersPageContent() {
             });
           }}
         >
-          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
-            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="country" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
-            <Input placeholder="Страна" allowClear style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="status_names" style={{ marginBottom: 0, flex: "1 1 260px", minWidth: 200 }}>
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="Статус"
-              style={{ width: "100%" }}
-              options={statusOptions.map((status) => ({
-                label: formatOrderStatus(status),
-                value: status,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
+          <div className="crm-filter-grid">
+            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Input placeholder="Поиск по номеру или комментарию" allowClear />
+            </Form.Item>
+            <Form.Item name="country" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Input placeholder="Страна" allowClear />
+            </Form.Item>
+            <Form.Item name="status_names" className="crm-col-5" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Статусы"
+                options={statusOptions.map((status) => ({
+                  label: formatOrderStatus(status),
+                  value: status,
+                }))}
+              />
+            </Form.Item>
+          </div>
+
+          <div className="crm-filter-actions">
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
             <Button
               onClick={() => {
                 filterForm.resetFields();
@@ -401,40 +468,103 @@ function OrdersPageContent() {
             >
               Сбросить
             </Button>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="dashed" onClick={() => setCreateOpen(true)}>
-              Создать заказ
-            </Button>
-          </Form.Item>
+          </div>
         </Form>
       </Card>
 
-      <Card>
+      <Card className="crm-panel crm-table-card">
         {listQuery.error ? (
           <Typography.Text type="danger">
-            {listQuery.error instanceof ApiError
-              ? listQuery.error.detail
-              : "Ошибка загрузки заказов"}
+            {listQuery.error instanceof ApiError ? listQuery.error.detail : "Ошибка загрузки заказов"}
           </Typography.Text>
         ) : null}
 
-        <Table<Order>
-          rowKey="id"
-          loading={listQuery.isLoading}
-          dataSource={listQuery.data?.items ?? []}
-          columns={columns}
-          scroll={{ x: 1280 }}
-          pagination={{
-            current: listQuery.data?.meta.page ?? params.page ?? 1,
-            pageSize: listQuery.data?.meta.page_size ?? params.page_size ?? 50,
-            total: listQuery.data?.meta.total ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: [20, 50, 100, 200],
-          }}
-          onChange={handleTableChange}
-          locale={{ emptyText: "Нет данных" }}
-        />
+        {isMobile ? (
+          <>
+            <div className="crm-mobile-list">
+              {rows.map((record) => (
+                <article key={record.id} className="crm-row-card">
+                  <div className="crm-row-card-head">
+                    <div>
+                      <Link href={`/orders/${record.id}`} className="crm-row-title">
+                        {record.order_number}
+                      </Link>
+                      <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
+                    </div>
+                    {renderOrderStatus(record.status_name)}
+                  </div>
+
+                  <div className="crm-row-meta">
+                    <div className="crm-row-meta-item">
+                      Фабрика
+                      <strong>{record.factory_id}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Рейс
+                      <strong>{record.trip_id ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Страна
+                      <strong>{record.country ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Готовность
+                      <strong>{record.ready_date ?? "-"}</strong>
+                    </div>
+                  </div>
+
+                  <div className="crm-row-actions">
+                    <Button size="small" type="primary" ghost onClick={() => router.push(`/orders/${record.id}`)}>
+                      Открыть
+                    </Button>
+                    <Dropdown trigger={["click"]} menu={{ items: orderActions(record) }}>
+                      <Button size="small" icon={<MoreOutlined />}>
+                        Действия
+                      </Button>
+                    </Dropdown>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {!listQuery.isLoading && rows.length === 0 ? (
+              <Typography.Text type="secondary">Нет данных</Typography.Text>
+            ) : null}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <Pagination
+                current={currentPage}
+                pageSize={currentPageSize}
+                total={totalRows}
+                showSizeChanger
+                pageSizeOptions={[20, 50, 100, 200]}
+                onChange={(page, pageSize) => {
+                  applySearchPatch({
+                    page,
+                    page_size: pageSize,
+                  });
+                }}
+              />
+            </div>
+          </>
+        ) : (
+          <Table<Order>
+            rowKey="id"
+            loading={listQuery.isLoading}
+            dataSource={rows}
+            columns={columns}
+            scroll={{ x: 1160 }}
+            pagination={{
+              current: currentPage,
+              pageSize: currentPageSize,
+              total: totalRows,
+              showSizeChanger: true,
+              pageSizeOptions: [20, 50, 100, 200],
+            }}
+            onChange={handleTableChange}
+            locale={{ emptyText: "Нет данных" }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -445,11 +575,7 @@ function OrdersPageContent() {
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
       >
-        <Form<OrderForm>
-          form={createForm}
-          layout="vertical"
-          onFinish={(values) => createMutation.mutate(values)}
-        >
+        <Form<OrderForm> form={createForm} layout="vertical" onFinish={(values) => createMutation.mutate(values)}>
           <Form.Item name="order_number" label="Номер заказа" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
@@ -560,7 +686,7 @@ function OrdersPageContent() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} — ${trip.name}`,
+                label: `${trip.id} - ${trip.name}`,
                 value: trip.id,
               }))}
             />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, Descriptions, Form, Input, Select, Space, Typography } from "antd";
+import { App, Button, Card, Descriptions, Form, Grid, Input, Select, Space, Tag, Typography } from "antd";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect } from "react";
@@ -9,7 +9,7 @@ import { useEffect } from "react";
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
-import type { Order, Trip, PaginatedResponse } from "@/shared/types/entities";
+import type { Order, PaginatedResponse, Trip } from "@/shared/types/entities";
 
 const statusOptions = [
   "new",
@@ -31,9 +31,31 @@ const statusLabels: Record<string, string> = {
   in_review: "На проверке",
 };
 
+const statusTagColors: Record<string, string> = {
+  new: "blue",
+  processing: "gold",
+  ready: "green",
+  in_transit: "cyan",
+  in_moscow: "geekblue",
+  archived: "default",
+  in_review: "purple",
+};
+
 function formatOrderStatus(value: string | null) {
   if (!value) return "-";
   return statusLabels[value] ?? value;
+}
+
+function renderOrderStatus(value: string | null) {
+  if (!value) {
+    return <Tag className="crm-status-tag">-</Tag>;
+  }
+
+  return (
+    <Tag color={statusTagColors[value] ?? "default"} className="crm-status-tag">
+      {formatOrderStatus(value)}
+    </Tag>
+  );
 }
 
 export default function OrderDetailPage() {
@@ -41,6 +63,7 @@ export default function OrderDetailPage() {
   const orderId = Number(params.id);
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
   const [patchForm] = Form.useForm<{ comment?: string }>();
   const [statusForm] = Form.useForm<{ status_name: string }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
@@ -81,7 +104,7 @@ export default function OrderDetailPage() {
         body: payload,
       }),
     onSuccess: async () => {
-      message.success("Статус обновлён");
+      message.success("Статус обновлен");
       await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(orderId) });
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
@@ -120,12 +143,12 @@ export default function OrderDetailPage() {
   }, [assignForm, order, patchForm, statusForm]);
 
   if (orderQuery.isLoading) {
-    return <Card loading />;
+    return <Card className="crm-panel" loading />;
   }
 
   if (orderQuery.error || !order) {
     return (
-      <Card>
+      <Card className="crm-panel">
         <Typography.Text type="danger">
           {orderQuery.error instanceof ApiError ? orderQuery.error.detail : "Заказ не найден"}
         </Typography.Text>
@@ -134,20 +157,25 @@ export default function OrderDetailPage() {
   }
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Space style={{ width: "100%", justifyContent: "space-between" }}>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            Заказ #{order.id}
-          </Typography.Title>
+    <Space direction="vertical" size={16} className="crm-page-stack">
+      <Card className="crm-panel">
+        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+          <div>
+            <Typography.Title level={2} className="crm-page-title">
+              Заказ #{order.id}
+            </Typography.Title>
+            <Typography.Paragraph className="crm-page-subtitle">
+              Детальная карточка заказа, статусные операции и привязка к рейсу.
+            </Typography.Paragraph>
+          </div>
           <Link href="/orders">Назад к заказам</Link>
         </Space>
       </Card>
 
-      <Card>
-        <Descriptions bordered size="small" column={2}>
+      <Card className="crm-panel" title="Общие данные">
+        <Descriptions bordered size="small" column={screens.lg ? 2 : 1}>
           <Descriptions.Item label="Номер заказа">{order.order_number}</Descriptions.Item>
-          <Descriptions.Item label="Статус">{formatOrderStatus(order.status_name)}</Descriptions.Item>
+          <Descriptions.Item label="Статус">{renderOrderStatus(order.status_name)}</Descriptions.Item>
           <Descriptions.Item label="ID пользователя">{order.user_id}</Descriptions.Item>
           <Descriptions.Item label="ID фабрики">{order.factory_id}</Descriptions.Item>
           <Descriptions.Item label="ID рейса">{order.trip_id ?? "-"}</Descriptions.Item>
@@ -161,7 +189,7 @@ export default function OrderDetailPage() {
         </Descriptions>
       </Card>
 
-      <Card title="Изменить комментарий">
+      <Card className="crm-panel" title="Изменить комментарий">
         <Form
           form={patchForm}
           layout="vertical"
@@ -176,7 +204,7 @@ export default function OrderDetailPage() {
         </Form>
       </Card>
 
-      <Card title="Изменить статус">
+      <Card className="crm-panel" title="Изменить статус">
         <Form
           form={statusForm}
           layout="vertical"
@@ -196,7 +224,7 @@ export default function OrderDetailPage() {
         </Form>
       </Card>
 
-      <Card title="Назначить рейс">
+      <Card className="crm-panel" title="Назначить рейс">
         <Form
           form={assignForm}
           layout="vertical"
@@ -207,7 +235,7 @@ export default function OrderDetailPage() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} — ${trip.name}`,
+                label: `${trip.id} - ${trip.name}`,
                 value: trip.id,
               }))}
             />

@@ -96,6 +96,7 @@ export function AppShell({ children }: Props) {
     <Layout className="crm-layout">
       {screens.lg ? (
         <Sider
+          className="crm-sider"
           width={250}
           collapsedWidth={72}
           theme="light"
@@ -103,7 +104,10 @@ export function AppShell({ children }: Props) {
           collapsed={collapsed}
           onCollapse={setCollapsed}
         >
-          <div className="crm-logo">CRM</div>
+          <div className="crm-logo">
+            <span className="crm-logo-dot" />
+            <span>CRM</span>
+          </div>
           <Menu mode="inline" selectedKeys={[selectedKey]} items={menuItems} />
         </Sider>
       ) : (
@@ -135,15 +139,16 @@ export function AppShell({ children }: Props) {
                 onClick={() => setMobileMenuOpen(true)}
               />
             ) : null}
-            <Avatar icon={<UserOutlined />} />
-            <div>
-              <Typography.Text strong>
-                {meQuery.data?.username ?? "Пользователь"}
-              </Typography.Text>
-              <br />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {meQuery.data?.is_superuser ? "Администратор" : "Пользователь"}
-              </Typography.Text>
+            <div className="crm-header-user">
+              <Avatar icon={<UserOutlined />} />
+              <div className="crm-header-user-meta">
+                <Typography.Text strong>
+                  {meQuery.data?.username ?? "Пользователь"}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {meQuery.data?.is_superuser ? "Администратор" : "Пользователь"}
+                </Typography.Text>
+              </div>
             </div>
           </Space>
           <Button icon={<LogoutOutlined />} onClick={handleLogout}>
