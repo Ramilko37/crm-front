@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Card, Descriptions, Form, Input, Select, Space, Typography } from "antd";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useEffect } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
@@ -109,6 +110,15 @@ export default function OrderDetailPage() {
 
   const order = orderQuery.data;
 
+  useEffect(() => {
+    if (!order) {
+      return;
+    }
+    patchForm.setFieldsValue({ comment: order.comment ?? "" });
+    statusForm.setFieldsValue({ status_name: order.status_name ?? undefined });
+    assignForm.setFieldsValue({ trip_id: order.trip_id ?? undefined });
+  }, [assignForm, order, patchForm, statusForm]);
+
   if (orderQuery.isLoading) {
     return <Card loading />;
   }
@@ -130,9 +140,7 @@ export default function OrderDetailPage() {
           <Typography.Title level={3} style={{ margin: 0 }}>
             Заказ #{order.id}
           </Typography.Title>
-          <Button type="link">
-            <Link href="/orders">Назад к заказам</Link>
-          </Button>
+          <Link href="/orders">Назад к заказам</Link>
         </Space>
       </Card>
 
@@ -157,7 +165,6 @@ export default function OrderDetailPage() {
         <Form
           form={patchForm}
           layout="vertical"
-          initialValues={{ comment: order.comment ?? "" }}
           onFinish={(values: { comment?: string }) => patchMutation.mutate(values)}
         >
           <Form.Item name="comment" label="Комментарий">
@@ -173,7 +180,6 @@ export default function OrderDetailPage() {
         <Form
           form={statusForm}
           layout="vertical"
-          initialValues={{ status_name: order.status_name ?? undefined }}
           onFinish={(values: { status_name: string }) => statusMutation.mutate(values)}
         >
           <Form.Item name="status_name" label="Статус" rules={[{ required: true }]}>
@@ -194,7 +200,6 @@ export default function OrderDetailPage() {
         <Form
           form={assignForm}
           layout="vertical"
-          initialValues={{ trip_id: order.trip_id ?? undefined }}
           onFinish={(values: { trip_id?: number }) => assignMutation.mutate(values)}
         >
           <Form.Item name="trip_id" label="Рейс">

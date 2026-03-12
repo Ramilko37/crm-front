@@ -16,7 +16,7 @@ import {
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { apiRequest } from "@/shared/lib/api";
@@ -84,8 +84,25 @@ function FactoriesPageContent() {
   const [selected, setSelected] = useState<Factory | null>(null);
   const [createForm] = Form.useForm<FactoryForm>();
   const [editForm] = Form.useForm<FactoryForm>();
+  const [filterForm] = Form.useForm<{
+    query?: string;
+    country?: string;
+    city?: string;
+    certificate_statuses?: string[];
+  }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+
+  useEffect(() => {
+    filterForm.setFieldsValue({
+      query: params.query,
+      country: params.country,
+      city: params.city,
+      certificate_statuses: params.certificate_statuses?.length
+        ? params.certificate_statuses
+        : undefined,
+    });
+  }, [filterForm, params.certificate_statuses, params.city, params.country, params.query]);
 
   const listQuery = useQuery({
     queryKey: queryKeys.factories.list(params),
@@ -128,17 +145,43 @@ function FactoriesPageContent() {
     },
   });
 
+  const sortOrderFor = (field: string) => {
+    if (params.sort_by !== field) return null;
+    return params.sort_desc ? "descend" : "ascend";
+  };
+
   const columns: ColumnsType<Factory> = [
-    { title: "ID", dataIndex: "id", key: "id", sorter: true, width: 90 },
-    { title: "Название", dataIndex: "name", key: "name", sorter: true },
-    { title: "Страна", dataIndex: "country", key: "country", sorter: true, render: (v) => v ?? "-" },
-    { title: "Город", dataIndex: "city", key: "city", sorter: true, render: (v) => v ?? "-" },
+    { title: "ID", dataIndex: "id", key: "id", sorter: true, sortOrder: sortOrderFor("id"), width: 90 },
+    {
+      title: "Название",
+      dataIndex: "name",
+      key: "name",
+      sorter: true,
+      sortOrder: sortOrderFor("name"),
+    },
+    {
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      sorter: true,
+      sortOrder: sortOrderFor("country"),
+      render: (v) => v ?? "-",
+    },
+    {
+      title: "Город",
+      dataIndex: "city",
+      key: "city",
+      sorter: true,
+      sortOrder: sortOrderFor("city"),
+      render: (v) => v ?? "-",
+    },
     { title: "Эл. почта", dataIndex: "email", key: "email", render: (v) => v ?? "-" },
     {
       title: "Сертификат",
       dataIndex: "certificate_status",
       key: "certificate_status",
       sorter: true,
+      sortOrder: sortOrderFor("certificate_status"),
       render: (v) => formatCertificateStatus(v),
     },
     {
@@ -202,13 +245,9 @@ function FactoriesPageContent() {
         </Typography.Title>
 
         <Form
+          form={filterForm}
           layout="inline"
-          initialValues={{
-            query: params.query,
-            country: params.country,
-            city: params.city,
-            certificate_statuses: params.certificate_statuses,
-          }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: {
             query?: string;
             country?: string;
@@ -224,36 +263,46 @@ function FactoriesPageContent() {
             });
           }}
         >
-          <Form.Item name="query">
-            <Input placeholder="Поиск" allowClear style={{ width: 220 }} />
+          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
+            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="country">
-            <Input placeholder="Страна" allowClear style={{ width: 160 }} />
+          <Form.Item name="country" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
+            <Input placeholder="Страна" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="city">
-            <Input placeholder="Город" allowClear style={{ width: 160 }} />
+          <Form.Item name="city" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
+            <Input placeholder="Город" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="certificate_statuses">
+          <Form.Item
+            name="certificate_statuses"
+            style={{ marginBottom: 0, flex: "1 1 260px", minWidth: 200 }}
+          >
             <Select
               mode="multiple"
               allowClear
               placeholder="Статус сертификата"
-              style={{ width: 260 }}
+              style={{ width: "100%" }}
               options={["active", "pending", "expired"].map((value) => ({
                 label: formatCertificateStatus(value),
                 value,
               }))}
             />
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
           </Form.Item>
-          <Form.Item>
-            <Button onClick={() => router.replace("/factories")}>Сбросить</Button>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button
+              onClick={() => {
+                filterForm.resetFields();
+                router.replace("/factories");
+              }}
+            >
+              Сбросить
+            </Button>
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="dashed" onClick={() => setCreateOpen(true)}>
               Создать фабрику
             </Button>
@@ -275,6 +324,7 @@ function FactoriesPageContent() {
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.items ?? []}
           columns={columns}
+          scroll={{ x: 1000 }}
           pagination={{
             current: listQuery.data?.meta.page ?? params.page ?? 1,
             pageSize: listQuery.data?.meta.page_size ?? params.page_size ?? 50,
@@ -290,6 +340,7 @@ function FactoriesPageContent() {
       <Modal
         title="Создать фабрику"
         open={createOpen}
+        destroyOnHidden
         onCancel={() => setCreateOpen(false)}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
@@ -332,6 +383,7 @@ function FactoriesPageContent() {
       <Modal
         title={`Редактировать фабрику #${selected?.id ?? ""}`}
         open={editOpen}
+        destroyOnHidden
         onCancel={() => setEditOpen(false)}
         onOk={() => editForm.submit()}
         confirmLoading={updateMutation.isPending}

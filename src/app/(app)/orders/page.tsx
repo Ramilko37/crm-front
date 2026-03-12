@@ -21,7 +21,7 @@ import type { SorterResult } from "antd/es/table/interface";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
@@ -113,8 +113,17 @@ function OrdersPageContent() {
   const [editForm] = Form.useForm<Partial<OrderForm>>();
   const [statusForm] = Form.useForm<{ status_name: string; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
+  const [filterForm] = Form.useForm<{ query?: string; country?: string; status_names?: string[] }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+
+  useEffect(() => {
+    filterForm.setFieldsValue({
+      query: params.query,
+      country: params.country,
+      status_names: params.status_names?.length ? params.status_names : undefined,
+    });
+  }, [filterForm, params.country, params.query, params.status_names]);
 
   const listQuery = useQuery({
     queryKey: queryKeys.orders.list(params),
@@ -205,12 +214,18 @@ function OrdersPageContent() {
     },
   });
 
+  const sortOrderFor = (field: string) => {
+    if (params.sort_by !== field) return null;
+    return params.sort_desc ? "descend" : "ascend";
+  };
+
   const columns: ColumnsType<Order> = [
     {
       title: "ID",
       dataIndex: "id",
       key: "id",
       sorter: true,
+      sortOrder: sortOrderFor("id"),
       width: 90,
     },
     {
@@ -218,6 +233,7 @@ function OrdersPageContent() {
       dataIndex: "order_number",
       key: "order_number",
       sorter: true,
+      sortOrder: sortOrderFor("order_number"),
       width: 180,
       render: (value: string, record) => <Link href={`/orders/${record.id}`}>{value}</Link>,
     },
@@ -226,6 +242,7 @@ function OrdersPageContent() {
       dataIndex: "status_name",
       key: "status_name",
       sorter: true,
+      sortOrder: sortOrderFor("status_name"),
       render: (value: string | null) => <Tag>{formatOrderStatus(value)}</Tag>,
     },
     {
@@ -253,6 +270,7 @@ function OrdersPageContent() {
       dataIndex: "ready_date",
       key: "ready_date",
       sorter: true,
+      sortOrder: sortOrderFor("ready_date"),
       width: 140,
       render: (value: string | null) => value ?? "-",
     },
@@ -272,9 +290,7 @@ function OrdersPageContent() {
           <Button size="small" onClick={() => openAssign(record)}>
             Назначить рейс
           </Button>
-          <Button size="small" type="link">
-            <Link href={`/orders/${record.id}`}>Открыть</Link>
-          </Button>
+          <Link href={`/orders/${record.id}`}>Открыть</Link>
         </Space>
       ),
     },
@@ -341,12 +357,9 @@ function OrdersPageContent() {
         </Typography.Title>
 
         <Form
+          form={filterForm}
           layout="inline"
-          initialValues={{
-            query: params.query,
-            country: params.country,
-            status_names: params.status_names,
-          }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: { query?: string; country?: string; status_names?: string[] }) => {
             applySearchPatch({
               query: values.query,
@@ -356,39 +369,40 @@ function OrdersPageContent() {
             });
           }}
         >
-          <Form.Item name="query">
-            <Input placeholder="Поиск" allowClear style={{ width: 220 }} />
+          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
+            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="country">
-            <Input placeholder="Страна" allowClear style={{ width: 160 }} />
+          <Form.Item name="country" style={{ marginBottom: 0, flex: "1 1 160px", minWidth: 150 }}>
+            <Input placeholder="Страна" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="status_names">
+          <Form.Item name="status_names" style={{ marginBottom: 0, flex: "1 1 260px", minWidth: 200 }}>
             <Select
               mode="multiple"
               allowClear
               placeholder="Статус"
-              style={{ width: 260 }}
+              style={{ width: "100%" }}
               options={statusOptions.map((status) => ({
                 label: formatOrderStatus(status),
                 value: status,
               }))}
             />
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button
               onClick={() => {
+                filterForm.resetFields();
                 router.replace("/orders");
               }}
             >
               Сбросить
             </Button>
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="dashed" onClick={() => setCreateOpen(true)}>
               Создать заказ
             </Button>
@@ -426,6 +440,7 @@ function OrdersPageContent() {
       <Modal
         title="Создать заказ"
         open={createOpen}
+        destroyOnHidden
         onCancel={() => setCreateOpen(false)}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
@@ -456,6 +471,7 @@ function OrdersPageContent() {
       <Modal
         title={`Редактировать заказ #${selected?.id ?? ""}`}
         open={editOpen}
+        destroyOnHidden
         onCancel={() => setEditOpen(false)}
         onOk={() => editForm.submit()}
         confirmLoading={updateMutation.isPending}
@@ -492,6 +508,7 @@ function OrdersPageContent() {
       <Modal
         title={`Изменить статус #${selected?.id ?? ""}`}
         open={statusOpen}
+        destroyOnHidden
         onCancel={() => setStatusOpen(false)}
         onOk={() => statusForm.submit()}
         confirmLoading={changeStatusMutation.isPending}
@@ -525,6 +542,7 @@ function OrdersPageContent() {
       <Modal
         title={`Назначить рейс #${selected?.id ?? ""}`}
         open={assignOpen}
+        destroyOnHidden
         onCancel={() => setAssignOpen(false)}
         onOk={() => assignForm.submit()}
         confirmLoading={assignMutation.isPending}

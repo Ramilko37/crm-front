@@ -16,7 +16,7 @@ import {
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { apiRequest } from "@/shared/lib/api";
@@ -95,8 +95,23 @@ function TripsPageContent() {
   const [selected, setSelected] = useState<Trip | null>(null);
   const [createForm] = Form.useForm<TripForm>();
   const [editForm] = Form.useForm<TripForm>();
+  const [filterForm] = Form.useForm<{
+    query?: string;
+    status_names?: string[];
+    type_names?: string[];
+    truck_plate?: string;
+  }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+
+  useEffect(() => {
+    filterForm.setFieldsValue({
+      query: params.query,
+      status_names: params.status_names?.length ? params.status_names : undefined,
+      type_names: params.type_names?.length ? params.type_names : undefined,
+      truck_plate: params.truck_plate,
+    });
+  }, [filterForm, params.query, params.status_names, params.truck_plate, params.type_names]);
 
   const listQuery = useQuery({
     queryKey: queryKeys.trips.list(params),
@@ -139,14 +154,26 @@ function TripsPageContent() {
     },
   });
 
+  const sortOrderFor = (field: string) => {
+    if (params.sort_by !== field) return null;
+    return params.sort_desc ? "descend" : "ascend";
+  };
+
   const columns: ColumnsType<Trip> = [
-    { title: "ID", dataIndex: "id", key: "id", sorter: true, width: 90 },
-    { title: "Название", dataIndex: "name", key: "name", sorter: true },
+    { title: "ID", dataIndex: "id", key: "id", sorter: true, sortOrder: sortOrderFor("id"), width: 90 },
+    {
+      title: "Название",
+      dataIndex: "name",
+      key: "name",
+      sorter: true,
+      sortOrder: sortOrderFor("name"),
+    },
     {
       title: "Статус",
       dataIndex: "status_name",
       key: "status_name",
       sorter: true,
+      sortOrder: sortOrderFor("status_name"),
       render: (v) => formatTripStatus(v),
     },
     {
@@ -154,6 +181,7 @@ function TripsPageContent() {
       dataIndex: "type_name",
       key: "type_name",
       sorter: true,
+      sortOrder: sortOrderFor("type_name"),
       render: (v) => formatTripType(v),
     },
     {
@@ -161,6 +189,7 @@ function TripsPageContent() {
       dataIndex: "current_point_name",
       key: "current_point_name",
       sorter: true,
+      sortOrder: sortOrderFor("current_point_name"),
       render: (v) => v ?? "-",
     },
     {
@@ -168,6 +197,7 @@ function TripsPageContent() {
       dataIndex: "truck_plate",
       key: "truck_plate",
       sorter: true,
+      sortOrder: sortOrderFor("truck_plate"),
       render: (v) => v ?? "-",
     },
     {
@@ -229,13 +259,9 @@ function TripsPageContent() {
         </Typography.Title>
 
         <Form
+          form={filterForm}
           layout="inline"
-          initialValues={{
-            query: params.query,
-            status_names: params.status_names,
-            type_names: params.type_names,
-            truck_plate: params.truck_plate,
-          }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
           onFinish={(values: {
             query?: string;
             status_names?: string[];
@@ -251,45 +277,55 @@ function TripsPageContent() {
             });
           }}
         >
-          <Form.Item name="query">
-            <Input placeholder="Поиск" allowClear style={{ width: 220 }} />
+          <Form.Item name="query" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
+            <Input placeholder="Поиск" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="truck_plate">
-            <Input placeholder="Номер тягача" allowClear style={{ width: 180 }} />
+          <Form.Item
+            name="truck_plate"
+            style={{ marginBottom: 0, flex: "1 1 180px", minWidth: 160 }}
+          >
+            <Input placeholder="Номер тягача" allowClear style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="status_names">
+          <Form.Item name="status_names" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
             <Select
               mode="multiple"
               allowClear
               placeholder="Статус"
-              style={{ width: 220 }}
+              style={{ width: "100%" }}
               options={["planned", "in_transit", "ready", "archived"].map((value) => ({
                 label: formatTripStatus(value),
                 value,
               }))}
             />
           </Form.Item>
-          <Form.Item name="type_names">
+          <Form.Item name="type_names" style={{ marginBottom: 0, flex: "1 1 220px", minWidth: 180 }}>
             <Select
               mode="multiple"
               allowClear
               placeholder="Тип"
-              style={{ width: 220 }}
+              style={{ width: "100%" }}
               options={["truck", "sea", "direct"].map((value) => ({
                 label: formatTripType(value),
                 value,
               }))}
             />
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
           </Form.Item>
-          <Form.Item>
-            <Button onClick={() => router.replace("/trips")}>Сбросить</Button>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button
+              onClick={() => {
+                filterForm.resetFields();
+                router.replace("/trips");
+              }}
+            >
+              Сбросить
+            </Button>
           </Form.Item>
-          <Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
             <Button type="dashed" onClick={() => setCreateOpen(true)}>
               Создать рейс
             </Button>
@@ -309,6 +345,7 @@ function TripsPageContent() {
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.items ?? []}
           columns={columns}
+          scroll={{ x: 1000 }}
           pagination={{
             current: listQuery.data?.meta.page ?? params.page ?? 1,
             pageSize: listQuery.data?.meta.page_size ?? params.page_size ?? 50,
@@ -324,6 +361,7 @@ function TripsPageContent() {
       <Modal
         title="Создать рейс"
         open={createOpen}
+        destroyOnHidden
         onCancel={() => setCreateOpen(false)}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
@@ -360,6 +398,7 @@ function TripsPageContent() {
       <Modal
         title={`Редактировать рейс #${selected?.id ?? ""}`}
         open={editOpen}
+        destroyOnHidden
         onCancel={() => setEditOpen(false)}
         onOk={() => editForm.submit()}
         confirmLoading={updateMutation.isPending}

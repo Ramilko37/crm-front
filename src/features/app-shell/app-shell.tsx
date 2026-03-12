@@ -4,11 +4,12 @@ import {
   ApartmentOutlined,
   CarOutlined,
   LogoutOutlined,
+  MenuOutlined,
   OrderedListOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { App, Avatar, Button, Grid, Layout, Menu, Space, Typography } from "antd";
+import { App, Avatar, Button, Drawer, Grid, Layout, Menu, Space, Typography } from "antd";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -30,6 +31,7 @@ export function AppShell({ children }: Props) {
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const meQuery = useCurrentUser(true);
 
@@ -54,6 +56,32 @@ export function AppShell({ children }: Props) {
     return "/orders";
   }, [pathname]);
 
+  const menuItems = useMemo(
+    () => [
+      {
+        key: "/orders",
+        icon: <OrderedListOutlined />,
+        label: <Link href="/orders">Заказы</Link>,
+      },
+      {
+        key: "/factories",
+        icon: <ApartmentOutlined />,
+        label: <Link href="/factories">Фабрики</Link>,
+      },
+      {
+        key: "/trips",
+        icon: <CarOutlined />,
+        label: <Link href="/trips">Рейсы</Link>,
+      },
+      {
+        key: "/profile",
+        icon: <UserOutlined />,
+        label: <Link href="/profile">Профиль</Link>,
+      },
+    ],
+    [],
+  );
+
   async function handleLogout() {
     try {
       await apiRequest("/api/auth/logout", { method: "POST" });
@@ -64,54 +92,49 @@ export function AppShell({ children }: Props) {
     }
   }
 
-  const effectiveCollapsed = screens.lg ? collapsed : true;
-
   return (
     <Layout className="crm-layout">
-      <Sider
-        width={250}
-        collapsedWidth={72}
-        theme="light"
-        collapsible
-        collapsed={effectiveCollapsed}
-        onCollapse={(next) => {
-          if (screens.lg) {
-            setCollapsed(next);
-          }
-        }}
-      >
-        <div className="crm-logo">CRM</div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={[
-            {
-              key: "/orders",
-              icon: <OrderedListOutlined />,
-              label: <Link href="/orders">Заказы</Link>,
-            },
-            {
-              key: "/factories",
-              icon: <ApartmentOutlined />,
-              label: <Link href="/factories">Фабрики</Link>,
-            },
-            {
-              key: "/trips",
-              icon: <CarOutlined />,
-              label: <Link href="/trips">Рейсы</Link>,
-            },
-            {
-              key: "/profile",
-              icon: <UserOutlined />,
-              label: <Link href="/profile">Профиль</Link>,
-            },
-          ]}
-        />
-      </Sider>
+      {screens.lg ? (
+        <Sider
+          width={250}
+          collapsedWidth={72}
+          theme="light"
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+        >
+          <div className="crm-logo">CRM</div>
+          <Menu mode="inline" selectedKeys={[selectedKey]} items={menuItems} />
+        </Sider>
+      ) : (
+        <Drawer
+          title="CRM"
+          placement="left"
+          width={260}
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          styles={{ body: { padding: 0 } }}
+        >
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={menuItems}
+            onClick={() => setMobileMenuOpen(false)}
+          />
+        </Drawer>
+      )}
 
       <Layout>
         <Header className="crm-header">
           <Space>
+            {!screens.lg ? (
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                aria-label="Открыть меню"
+                onClick={() => setMobileMenuOpen(true)}
+              />
+            ) : null}
             <Avatar icon={<UserOutlined />} />
             <div>
               <Typography.Text strong>
