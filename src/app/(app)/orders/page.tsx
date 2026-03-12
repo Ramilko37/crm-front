@@ -21,7 +21,7 @@ import type { SorterResult } from "antd/es/table/interface";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
@@ -97,7 +97,7 @@ function getParams(searchParams: URLSearchParams): OrderFilterParams {
   };
 }
 
-export default function OrdersPage() {
+function OrdersPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -550,5 +550,13 @@ export default function OrdersPage() {
         </Form>
       </Modal>
     </Space>
+  );
+}
+
+export default function OrdersPage() {
+  return (
+    <Suspense fallback={<Card loading />}>
+      <OrdersPageContent />
+    </Suspense>
   );
 }

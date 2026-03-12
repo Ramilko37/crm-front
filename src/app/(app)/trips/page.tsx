@@ -16,7 +16,7 @@ import {
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { apiRequest } from "@/shared/lib/api";
@@ -84,7 +84,7 @@ function formatTripType(value: string | null) {
   return tripTypeLabels[value] ?? value;
 }
 
-export default function TripsPage() {
+function TripsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -396,5 +396,13 @@ export default function TripsPage() {
         </Form>
       </Modal>
     </Space>
+  );
+}
+
+export default function TripsPage() {
+  return (
+    <Suspense fallback={<Card loading />}>
+      <TripsPageContent />
+    </Suspense>
   );
 }

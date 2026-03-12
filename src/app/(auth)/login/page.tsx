@@ -2,13 +2,13 @@
 
 import { App, Button, Card, Form, Input, Typography } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 import { ApiError } from "@/shared/lib/errors";
 import { apiRequest } from "@/shared/lib/api";
 import type { AuthTokenResponse } from "@/shared/types/entities";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -61,5 +61,19 @@ export default function LoginPage() {
         </Form>
       </Card>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="login-page">
+          <Card className="login-card" loading />
+        </main>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   );
 }

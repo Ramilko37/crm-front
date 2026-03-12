@@ -16,7 +16,7 @@ import {
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { apiRequest } from "@/shared/lib/api";
@@ -73,7 +73,7 @@ function formatCertificateStatus(value: string | null) {
   return certificateStatusLabels[value] ?? value;
 }
 
-export default function FactoriesPage() {
+function FactoriesPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -374,5 +374,13 @@ export default function FactoriesPage() {
         </Form>
       </Modal>
     </Space>
+  );
+}
+
+export default function FactoriesPage() {
+  return (
+    <Suspense fallback={<Card loading />}>
+      <FactoriesPageContent />
+    </Suspense>
   );
 }
