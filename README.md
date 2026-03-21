@@ -25,6 +25,15 @@ Open: <http://127.0.0.1:3000/login>
 
 Default backend creds (dev): `root` / `root`
 
+For local frontend against production backend:
+
+```bash
+cat > .env.local <<'EOF'
+BASE_BACKEND_URL=http://84.47.150.248:8000
+COOKIE_SECURE=false
+EOF
+```
+
 ## Scripts
 
 ```bash
@@ -59,3 +68,18 @@ See [REPORT_ROADMAP.md](./REPORT_ROADMAP.md).
 Free production-like deployment (Vercel + Render + Supabase):
 
 - See [DEPLOY_FREE.md](./DEPLOY_FREE.md).
+
+## Docker Server Deploy
+
+Production deploy on a Linux server:
+
+```bash
+cp env.production.sample .env.production
+docker compose -f docker-compose.server.yml --env-file .env.production up -d --build
+```
+
+Default server target:
+
+- `BASE_BACKEND_URL=http://155.212.218.145:8000`
+- `FRONTEND_PORT=3000`
+- `COOKIE_SECURE=false` for plain `http://IP:PORT` deploys

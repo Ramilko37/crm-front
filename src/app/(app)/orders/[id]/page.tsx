@@ -7,55 +7,18 @@ import { useParams } from "next/navigation";
 import { useEffect } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
+import { formatEnumCode, ORDER_STATUS_VALUES, type OrderStatus } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
+import { PageHeader } from "@/shared/ui/page-frame";
 import type { Order, PaginatedResponse, Trip } from "@/shared/types/entities";
 
-const statusOptions = [
-  "new",
-  "processing",
-  "ready",
-  "in_transit",
-  "in_moscow",
-  "archived",
-  "in_review",
-];
-
-const statusLabels: Record<string, string> = {
-  new: "Новый",
-  processing: "В обработке",
-  ready: "Готов",
-  in_transit: "В пути",
-  in_moscow: "В Москве",
-  archived: "В архиве",
-  in_review: "На проверке",
-};
-
-const statusTagColors: Record<string, string> = {
-  new: "blue",
-  processing: "gold",
-  ready: "green",
-  in_transit: "cyan",
-  in_moscow: "geekblue",
-  archived: "default",
-  in_review: "purple",
-};
-
-function formatOrderStatus(value: string | null) {
-  if (!value) return "-";
-  return statusLabels[value] ?? value;
-}
-
-function renderOrderStatus(value: string | null) {
+function renderOrderStatus(value: OrderStatus | null) {
   if (!value) {
     return <Tag className="crm-status-tag">-</Tag>;
   }
 
-  return (
-    <Tag color={statusTagColors[value] ?? "default"} className="crm-status-tag">
-      {formatOrderStatus(value)}
-    </Tag>
-  );
+  return <Tag className="crm-status-tag">{formatEnumCode(value)}</Tag>;
 }
 
 export default function OrderDetailPage() {
@@ -65,7 +28,7 @@ export default function OrderDetailPage() {
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
   const [patchForm] = Form.useForm<{ comment?: string }>();
-  const [statusForm] = Form.useForm<{ status_name: string }>();
+  const [statusForm] = Form.useForm<{ status_name: OrderStatus }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
 
   const orderQuery = useQuery({
@@ -98,7 +61,7 @@ export default function OrderDetailPage() {
   });
 
   const statusMutation = useMutation({
-    mutationFn: (payload: { status_name: string }) =>
+    mutationFn: (payload: { status_name: OrderStatus }) =>
       apiRequest<Order>(`/api/orders/${orderId}/status`, {
         method: "POST",
         body: payload,
@@ -158,25 +121,18 @@ export default function OrderDetailPage() {
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
-      <Card className="crm-panel">
-        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-          <div>
-            <Typography.Title level={2} className="crm-page-title">
-              Заказ #{order.id}
-            </Typography.Title>
-            <Typography.Paragraph className="crm-page-subtitle">
-              Детальная карточка заказа, статусные операции и привязка к рейсу.
-            </Typography.Paragraph>
-          </div>
-          <Link href="/orders">Назад к заказам</Link>
-        </Space>
-      </Card>
+      <PageHeader
+        title={`Заказ #${order.id}`}
+        subtitle="Детальная карточка заказа, статусные операции и привязка к рейсу."
+        actions={<Link href="/orders">Назад к заказам</Link>}
+      />
 
       <Card className="crm-panel" title="Общие данные">
         <Descriptions bordered size="small" column={screens.lg ? 2 : 1}>
           <Descriptions.Item label="Номер заказа">{order.order_number}</Descriptions.Item>
           <Descriptions.Item label="Статус">{renderOrderStatus(order.status_name)}</Descriptions.Item>
           <Descriptions.Item label="ID пользователя">{order.user_id}</Descriptions.Item>
+          <Descriptions.Item label="ID компании">{order.company_id ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="ID фабрики">{order.factory_id}</Descriptions.Item>
           <Descriptions.Item label="ID рейса">{order.trip_id ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Инвойс">{order.invoice_number ?? "-"}</Descriptions.Item>
@@ -208,12 +164,12 @@ export default function OrderDetailPage() {
         <Form
           form={statusForm}
           layout="vertical"
-          onFinish={(values: { status_name: string }) => statusMutation.mutate(values)}
+          onFinish={(values: { status_name: OrderStatus }) => statusMutation.mutate(values)}
         >
-          <Form.Item name="status_name" label="Статус" rules={[{ required: true }]}>
+          <Form.Item name="status_name" label="Статус" rules={[{ required: true }]}> 
             <Select
-              options={statusOptions.map((status) => ({
-                label: formatOrderStatus(status),
+              options={ORDER_STATUS_VALUES.map((status) => ({
+                label: formatEnumCode(status),
                 value: status,
               }))}
             />

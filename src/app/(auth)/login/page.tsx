@@ -16,7 +16,7 @@ function LoginPageContent() {
 
   const nextPath = searchParams.get("next") || "/orders";
 
-  async function handleSubmit(values: { username: string; password: string }) {
+  async function handleSubmit(values: { login: string; password: string }) {
     setLoading(true);
     try {
       await apiRequest<AuthTokenResponse>("/api/auth/login", {
@@ -39,16 +39,16 @@ function LoginPageContent() {
   return (
     <main className="login-page">
       <Card className="login-card crm-panel">
-        <div className="login-eyebrow">Target Logistics CRM</div>
+        <div className="login-eyebrow">CRM</div>
         <Typography.Title level={2} style={{ marginBottom: 6, marginTop: 0 }}>
           Вход в систему
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          Используйте данные backend-аккаунта (`root` / `root` по умолчанию).
+          Авторизуйтесь, чтобы перейти в рабочий контур CRM.
         </Typography.Paragraph>
 
         <Form layout="vertical" onFinish={handleSubmit} size="large">
-          <Form.Item label="Логин" name="username" rules={[{ required: true }]}>
+          <Form.Item label="Логин" name="login" rules={[{ required: true }]}>
             <Input autoComplete="username" placeholder="Введите логин" />
           </Form.Item>
 

@@ -1,24 +1,21 @@
 "use client";
 
 import {
-  ApartmentOutlined,
-  CarOutlined,
   LogoutOutlined,
   MenuOutlined,
-  OrderedListOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { App, Avatar, Button, Drawer, Grid, Layout, Menu, Space, Typography } from "antd";
-import Link from "next/link";
+import { App, Avatar, Button, Drawer, Grid, Layout, Menu, Typography } from "antd";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
+import { normalizeRoleName } from "@/shared/lib/rbac";
 
-const { Header, Sider, Content } = Layout;
+const { Header, Content } = Layout;
 
 type Props = {
   children: React.ReactNode;
@@ -30,7 +27,6 @@ export function AppShell({ children }: Props) {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
-  const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const meQuery = useCurrentUser(true);
@@ -60,27 +56,33 @@ export function AppShell({ children }: Props) {
     () => [
       {
         key: "/orders",
-        icon: <OrderedListOutlined />,
-        label: <Link href="/orders">Заказы</Link>,
+        label: "Заказы",
       },
       {
         key: "/factories",
-        icon: <ApartmentOutlined />,
-        label: <Link href="/factories">Фабрики</Link>,
+        label: "Фабрики",
       },
       {
         key: "/trips",
-        icon: <CarOutlined />,
-        label: <Link href="/trips">Рейсы</Link>,
+        label: "Рейсы",
       },
       {
         key: "/profile",
-        icon: <UserOutlined />,
-        label: <Link href="/profile">Профиль</Link>,
+        label: "Профиль",
       },
     ],
     [],
   );
+
+  const roleLabelByName: Record<string, string> = {
+    administrator: "Администратор",
+    logist: "Логист",
+    accountant: "Бухгалтер",
+    forwarder: "Экспедитор",
+    warehouse: "Склад",
+    client: "Клиент",
+    anonymous: "Пользователь",
+  };
 
   async function handleLogout() {
     try {
@@ -92,46 +94,17 @@ export function AppShell({ children }: Props) {
     }
   }
 
-  return (
-    <Layout className="crm-layout">
-      {screens.lg ? (
-        <Sider
-          className="crm-sider"
-          width={250}
-          collapsedWidth={72}
-          theme="light"
-          collapsible
-          collapsed={collapsed}
-          onCollapse={setCollapsed}
-        >
-          <div className="crm-logo">
-            <span className="crm-logo-dot" />
-            <span>CRM</span>
-          </div>
-          <Menu mode="inline" selectedKeys={[selectedKey]} items={menuItems} />
-        </Sider>
-      ) : (
-        <Drawer
-          title="CRM"
-          placement="left"
-          width={260}
-          open={mobileMenuOpen}
-          onClose={() => setMobileMenuOpen(false)}
-          styles={{ body: { padding: 0 } }}
-        >
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedKey]}
-            items={menuItems}
-            onClick={() => setMobileMenuOpen(false)}
-          />
-        </Drawer>
-      )}
+  function handleMenuClick(key: string) {
+    router.push(key);
+    setMobileMenuOpen(false);
+  }
 
-      <Layout>
-        <Header className="crm-header">
-          <Space>
-            {!screens.lg ? (
+  return (
+    <Layout className="crm-layout crm-layout-topnav">
+      <Header className="crm-top-nav">
+        <div className="crm-top-nav-shell">
+          <div className="crm-top-nav-left">
+            {!screens.md ? (
               <Button
                 type="text"
                 icon={<MenuOutlined />}
@@ -139,25 +112,61 @@ export function AppShell({ children }: Props) {
                 onClick={() => setMobileMenuOpen(true)}
               />
             ) : null}
-            <div className="crm-header-user">
-              <Avatar icon={<UserOutlined />} />
-              <div className="crm-header-user-meta">
-                <Typography.Text strong>
-                  {meQuery.data?.username ?? "Пользователь"}
+
+            <button className="crm-brand" onClick={() => handleMenuClick("/orders")}>
+              CRM
+            </button>
+
+            {screens.md ? (
+              <Menu
+                mode="horizontal"
+                selectedKeys={[selectedKey]}
+                items={menuItems}
+                className="crm-top-nav-menu"
+                onClick={({ key }) => handleMenuClick(String(key))}
+              />
+            ) : null}
+          </div>
+
+          <div className="crm-top-nav-right">
+            <div className="crm-user-chip">
+              <Avatar size={28} icon={<UserOutlined />} />
+              <div className="crm-user-chip-meta">
+                <Typography.Text strong ellipsis style={{ maxWidth: 170 }}>
+                  {meQuery.data?.full_name || meQuery.data?.login || "Пользователь"}
                 </Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {meQuery.data?.is_superuser ? "Администратор" : "Пользователь"}
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {meQuery.data?.is_superuser
+                    ? "Суперпользователь"
+                    : roleLabelByName[normalizeRoleName(meQuery.data?.role_name)] ?? "Пользователь"}
                 </Typography.Text>
               </div>
             </div>
-          </Space>
-          <Button icon={<LogoutOutlined />} onClick={handleLogout}>
-            Выйти
-          </Button>
-        </Header>
 
-        <Content className="crm-content">{children}</Content>
-      </Layout>
+            <Button icon={<LogoutOutlined />} size="small" onClick={handleLogout}>
+              Выйти
+            </Button>
+          </div>
+        </div>
+      </Header>
+
+      <Drawer
+        title="Навигация"
+        placement="left"
+        width={270}
+        open={!screens.md && mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+        styles={{ body: { padding: 0 } }}
+      >
+        <Menu
+          mode="inline"
+          selectedKeys={[selectedKey]}
+          items={menuItems}
+          onClick={({ key }) => handleMenuClick(String(key))}
+        />
+      </Drawer>
+
+      <Content className="crm-content">{children}</Content>
     </Layout>
   );
 }

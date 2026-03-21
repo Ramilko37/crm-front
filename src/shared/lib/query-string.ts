@@ -35,9 +35,28 @@ export function parseCsv(value: string | null): string[] {
     .filter(Boolean);
 }
 
+function normalizeArrayValues(values: string[]): string[] {
+  return values
+    .flatMap((value) => value.split(","))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function parseSearchArray(searchParams: URLSearchParams, key: string): string[] {
+  const repeatedValues = searchParams.getAll(key);
+  if (repeatedValues.length === 0) {
+    return [];
+  }
+
+  return normalizeArrayValues(repeatedValues);
+}
+
 export function setSearchPatch(
   current: URLSearchParams,
-  patch: Record<string, string | number | boolean | string[] | null | undefined>,
+  patch: Record<
+    string,
+    string | number | boolean | (string | number | boolean)[] | null | undefined
+  >,
 ): string {
   const next = new URLSearchParams(current.toString());
 
@@ -49,9 +68,12 @@ export function setSearchPatch(
     }
 
     if (Array.isArray(value)) {
-      if (value.length > 0) {
-        next.set(key, value.join(","));
-      }
+      value.forEach((item) => {
+        if (item === undefined || item === null || item === "") {
+          return;
+        }
+        next.append(key, String(item));
+      });
       return;
     }
 

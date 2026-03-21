@@ -5,10 +5,37 @@ import { postToBackend } from "@/server/bff/proxy";
 import type { AuthTokenResponse } from "@/shared/types/entities";
 
 export async function POST(request: NextRequest) {
-  const payload = await request.json();
-  const { response, data } = await postToBackend("/auth/login", payload);
+  const payload = (await request.json()) as { login?: string; password?: string };
+  if (!payload.login || !payload.password) {
+    return NextResponse.json({ detail: "login and password are required" }, { status: 400 });
+  }
+
+  let backendResult: Awaited<ReturnType<typeof postToBackend>>;
+  try {
+    backendResult = await postToBackend("/auth/login", {
+      login: payload.login,
+      password: payload.password,
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        detail: "Backend is unavailable. Check BASE_BACKEND_URL and backend health.",
+      },
+      { status: 503 },
+    );
+  }
+
+  const { response, data } = backendResult;
 
   if (!response.ok) {
+    if (response.status >= 500) {
+      return NextResponse.json(
+        {
+          detail: "Login failed on backend. Try root/root or check backend users state.",
+        },
+        { status: 401 },
+      );
+    }
     return NextResponse.json(data, { status: response.status });
   }
 

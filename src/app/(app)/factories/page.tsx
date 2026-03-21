@@ -1,33 +1,52 @@
 "use client";
 
-import { EditOutlined } from "@ant-design/icons";
+import { EditOutlined, SettingOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
   Button,
   Card,
+  DatePicker,
   Form,
   Grid,
   Input,
   InputNumber,
   Modal,
   Pagination,
+  Popconfirm,
   Select,
   Space,
+  Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
+import dayjs from "dayjs";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
+import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
+import {
+  FACTORY_CERTIFICATE_STATUS_VALUES,
+  formatEnumCode,
+  type FactoryCertificateStatus,
+} from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
-import { parseCsv, setSearchPatch } from "@/shared/lib/query-string";
-import type { Factory, FactoryFilterParams, PaginatedResponse } from "@/shared/types/entities";
+import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
+import { isBackOfficeRole } from "@/shared/lib/rbac";
+import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
+import type {
+  Factory,
+  FactoryCertificate,
+  FactoryEmail,
+  FactoryFilterParams,
+  PaginatedResponse,
+} from "@/shared/types/entities";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -50,7 +69,7 @@ function getParams(searchParams: URLSearchParams): FactoryFilterParams {
     query: searchParams.get("query") ?? undefined,
     country: searchParams.get("country") ?? undefined,
     city: searchParams.get("city") ?? undefined,
-    certificate_statuses: parseCsv(searchParams.get("certificate_statuses")),
+    certificate_statuses: parseSearchArray(searchParams, "certificate_statuses") as FactoryCertificateStatus[],
   };
 }
 
@@ -62,37 +81,43 @@ type FactoryForm = {
   address?: string;
   postcode?: string;
   phone?: string;
-  email?: string;
-  certificate_status?: string;
+  primary_email?: string;
+  certificate_status?: FactoryCertificateStatus;
 };
 
-const certificateStatusLabels: Record<string, string> = {
-  active: "Активен",
-  pending: "В ожидании",
-  expired: "Истек",
+type FactoryEmailForm = {
+  email: string;
+  is_primary?: boolean;
 };
 
-const certificateTagColors: Record<string, string> = {
-  active: "green",
-  pending: "gold",
-  expired: "red",
+type FactoryCertificateForm = {
+  number?: string;
+  status?: FactoryCertificateStatus;
+  file_path?: string;
+  issued_date?: dayjs.Dayjs;
+  expires_date?: dayjs.Dayjs;
 };
 
-function formatCertificateStatus(value: string | null) {
-  if (!value) return "-";
-  return certificateStatusLabels[value] ?? value;
+function formatCertificateStatus(value: FactoryCertificateStatus | null) {
+  return formatEnumCode(value);
 }
 
-function renderCertificateStatus(value: string | null) {
+function renderCertificateStatus(value: FactoryCertificateStatus | null) {
   if (!value) {
     return <Tag className="crm-status-tag">-</Tag>;
   }
 
-  return (
-    <Tag color={certificateTagColors[value] ?? "default"} className="crm-status-tag">
-      {formatCertificateStatus(value)}
-    </Tag>
-  );
+  return <Tag className="crm-status-tag">{formatCertificateStatus(value)}</Tag>;
+}
+
+function serializeCertificateForm(values: FactoryCertificateForm) {
+  return {
+    number: values.number,
+    status: values.status,
+    file_path: values.file_path,
+    issued_date: values.issued_date?.format("YYYY-MM-DD"),
+    expires_date: values.expires_date?.format("YYYY-MM-DD"),
+  };
 }
 
 function FactoriesPageContent() {
@@ -103,28 +128,45 @@ function FactoriesPageContent() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
 
+  const meQuery = useCurrentUser(true);
+  const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
+
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [selected, setSelected] = useState<Factory | null>(null);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [emailEditOpen, setEmailEditOpen] = useState(false);
+  const [certificateEditOpen, setCertificateEditOpen] = useState(false);
+
+  const [selectedFactory, setSelectedFactory] = useState<Factory | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState<FactoryEmail | null>(null);
+  const [selectedCertificate, setSelectedCertificate] = useState<FactoryCertificate | null>(null);
+
   const [createForm] = Form.useForm<FactoryForm>();
   const [editForm] = Form.useForm<FactoryForm>();
   const [filterForm] = Form.useForm<{
     query?: string;
     country?: string;
     city?: string;
-    certificate_statuses?: string[];
+    certificate_statuses?: FactoryCertificateStatus[];
   }>();
 
+  const [emailCreateForm] = Form.useForm<FactoryEmailForm>();
+  const [emailEditForm] = Form.useForm<FactoryEmailForm>();
+  const [certificateCreateForm] = Form.useForm<FactoryCertificateForm>();
+  const [certificateEditForm] = Form.useForm<FactoryCertificateForm>();
+
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const hasActiveFilters = Boolean(
+    params.query || params.country || params.city || (params.certificate_statuses?.length ?? 0) > 0,
+  );
+  const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
 
   useEffect(() => {
     filterForm.setFieldsValue({
       query: params.query,
       country: params.country,
       city: params.city,
-      certificate_statuses: params.certificate_statuses?.length
-        ? params.certificate_statuses
-        : undefined,
+      certificate_statuses: params.certificate_statuses?.length ? params.certificate_statuses : undefined,
     });
   }, [filterForm, params.certificate_statuses, params.city, params.country, params.query]);
 
@@ -134,6 +176,26 @@ function FactoriesPageContent() {
       apiRequest<PaginatedResponse<Factory>>("/api/factories", {
         query: params,
       }),
+  });
+
+  const emailsQuery = useQuery({
+    queryKey: selectedFactory ? queryKeys.factories.emails(selectedFactory.id) : ["factories", "emails", "idle"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryEmail>>(`/api/factories/${selectedFactory?.id}/emails`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: resourcesOpen && Boolean(selectedFactory),
+  });
+
+  const certificatesQuery = useQuery({
+    queryKey: selectedFactory
+      ? queryKeys.factories.certificates(selectedFactory.id)
+      : ["factories", "certificates", "idle"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryCertificate>>(`/api/factories/${selectedFactory?.id}/certificates`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: resourcesOpen && Boolean(selectedFactory),
   });
 
   const createMutation = useMutation({
@@ -169,8 +231,124 @@ function FactoriesPageContent() {
     },
   });
 
+  const createEmailMutation = useMutation({
+    mutationFn: (payload: FactoryEmailForm) =>
+      apiRequest<FactoryEmail>(`/api/factories/${selectedFactory?.id}/emails`, {
+        method: "POST",
+        body: payload,
+      }),
+    onSuccess: async () => {
+      message.success("Email добавлен");
+      emailCreateForm.resetFields();
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.emails(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления email");
+    },
+  });
+
+  const updateEmailMutation = useMutation({
+    mutationFn: ({ emailId, payload }: { emailId: number; payload: FactoryEmailForm }) =>
+      apiRequest<FactoryEmail>(`/api/factories/${selectedFactory?.id}/emails/${emailId}`, {
+        method: "PATCH",
+        body: payload,
+      }),
+    onSuccess: async () => {
+      message.success("Email обновлен");
+      setEmailEditOpen(false);
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.emails(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления email");
+    },
+  });
+
+  const deleteEmailMutation = useMutation({
+    mutationFn: (emailId: number) =>
+      apiRequest<null>(`/api/factories/${selectedFactory?.id}/emails/${emailId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: async () => {
+      message.success("Email удален");
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.emails(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка удаления email");
+    },
+  });
+
+  const createCertificateMutation = useMutation({
+    mutationFn: (payload: FactoryCertificateForm) =>
+      apiRequest<FactoryCertificate>(`/api/factories/${selectedFactory?.id}/certificates`, {
+        method: "POST",
+        body: serializeCertificateForm(payload),
+      }),
+    onSuccess: async () => {
+      message.success("Сертификат создан");
+      certificateCreateForm.resetFields();
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.certificates(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка создания сертификата");
+    },
+  });
+
+  const updateCertificateMutation = useMutation({
+    mutationFn: ({ certificateId, payload }: { certificateId: number; payload: FactoryCertificateForm }) =>
+      apiRequest<FactoryCertificate>(`/api/factories/${selectedFactory?.id}/certificates/${certificateId}`, {
+        method: "PATCH",
+        body: serializeCertificateForm(payload),
+      }),
+    onSuccess: async () => {
+      message.success("Сертификат обновлен");
+      setCertificateEditOpen(false);
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.certificates(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления сертификата");
+    },
+  });
+
+  const deleteCertificateMutation = useMutation({
+    mutationFn: (certificateId: number) =>
+      apiRequest<null>(`/api/factories/${selectedFactory?.id}/certificates/${certificateId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: async () => {
+      message.success("Сертификат удален");
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.certificates(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка удаления сертификата");
+    },
+  });
+
   function openEdit(record: Factory) {
-    setSelected(record);
+    setSelectedFactory(record);
     editForm.setFieldsValue({
       ...record,
       country_id: record.country_id ?? undefined,
@@ -179,10 +357,36 @@ function FactoriesPageContent() {
       address: record.address ?? undefined,
       postcode: record.postcode ?? undefined,
       phone: record.phone ?? undefined,
-      email: record.email ?? undefined,
+      primary_email: record.primary_email ?? undefined,
       certificate_status: record.certificate_status ?? undefined,
     });
     setEditOpen(true);
+  }
+
+  function openResources(record: Factory) {
+    setSelectedFactory(record);
+    setResourcesOpen(true);
+  }
+
+  function openEmailEdit(record: FactoryEmail) {
+    setSelectedEmail(record);
+    emailEditForm.setFieldsValue({
+      email: record.email,
+      is_primary: record.is_primary,
+    });
+    setEmailEditOpen(true);
+  }
+
+  function openCertificateEdit(record: FactoryCertificate) {
+    setSelectedCertificate(record);
+    certificateEditForm.setFieldsValue({
+      number: record.number ?? undefined,
+      status: record.status ?? undefined,
+      file_path: record.file_path ?? undefined,
+      issued_date: record.issued_date ? dayjs(record.issued_date) : undefined,
+      expires_date: record.expires_date ? dayjs(record.expires_date) : undefined,
+    });
+    setCertificateEditOpen(true);
   }
 
   const sortOrderFor = (field: string) => {
@@ -206,6 +410,7 @@ function FactoriesPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("country"),
       render: (v) => v ?? "-",
+      width: 150,
     },
     {
       title: "Город",
@@ -214,30 +419,39 @@ function FactoriesPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("city"),
       render: (v) => v ?? "-",
+      width: 150,
     },
-    { title: "Эл. почта", dataIndex: "email", key: "email", render: (v) => v ?? "-" },
+    { title: "Primary Email", dataIndex: "primary_email", key: "primary_email", render: (v) => v ?? "-" },
     {
       title: "Сертификат",
       dataIndex: "certificate_status",
       key: "certificate_status",
       sorter: true,
       sortOrder: sortOrderFor("certificate_status"),
-      render: (v) => renderCertificateStatus(v),
+      render: (v: FactoryCertificateStatus | null) => renderCertificateStatus(v),
+      width: 220,
     },
     {
       title: "Действия",
       key: "actions",
-      width: 150,
+      width: 280,
       render: (_, record) => (
-        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-          Редактировать
-        </Button>
+        <Space>
+          {canMutate ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+              Редактировать
+            </Button>
+          ) : null}
+          <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
+            Emails / Сертификаты
+          </Button>
+        </Space>
       ),
     },
   ];
 
   function applySearchPatch(
-    patch: Record<string, string | number | boolean | string[] | null | undefined>,
+    patch: Record<string, string | number | boolean | (string | number | boolean)[] | null | undefined>,
   ) {
     const nextSearch = setSearchPatch(searchParams, patch);
     router.replace(`/factories${nextSearch ? `?${nextSearch}` : ""}`);
@@ -265,32 +479,138 @@ function FactoriesPageContent() {
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
 
+  const emailColumns: ColumnsType<FactoryEmail> = [
+    { title: "ID", dataIndex: "id", key: "id", width: 90 },
+    { title: "Email", dataIndex: "email", key: "email" },
+    {
+      title: "Primary",
+      dataIndex: "is_primary",
+      key: "is_primary",
+      width: 120,
+      render: (value: boolean) => (value ? <Tag color="green">Да</Tag> : "Нет"),
+    },
+    {
+      title: "Действия",
+      key: "actions",
+      width: 220,
+      render: (_, record) =>
+        canMutate ? (
+          <Space>
+            <Button size="small" onClick={() => openEmailEdit(record)}>
+              Изменить
+            </Button>
+            <Popconfirm
+              title="Удалить email?"
+              okText="Да"
+              cancelText="Нет"
+              onConfirm={() => deleteEmailMutation.mutate(record.id)}
+            >
+              <Button size="small" danger>
+                Удалить
+              </Button>
+            </Popconfirm>
+          </Space>
+        ) : (
+          "-"
+        ),
+    },
+  ];
+
+  const certificateColumns: ColumnsType<FactoryCertificate> = [
+    { title: "ID", dataIndex: "id", key: "id", width: 90 },
+    { title: "Номер", dataIndex: "number", key: "number", render: (value) => value ?? "-" },
+    {
+      title: "Статус",
+      dataIndex: "status",
+      key: "status",
+      width: 220,
+      render: (value: FactoryCertificateStatus | null) => renderCertificateStatus(value),
+    },
+    { title: "Файл", dataIndex: "file_path", key: "file_path", render: (value) => value ?? "-" },
+    {
+      title: "Выдан",
+      dataIndex: "issued_date",
+      key: "issued_date",
+      width: 130,
+      render: (value) => value ?? "-",
+    },
+    {
+      title: "Истекает",
+      dataIndex: "expires_date",
+      key: "expires_date",
+      width: 130,
+      render: (value) => value ?? "-",
+    },
+    {
+      title: "Действия",
+      key: "actions",
+      width: 220,
+      render: (_, record) =>
+        canMutate ? (
+          <Space>
+            <Button size="small" onClick={() => openCertificateEdit(record)}>
+              Изменить
+            </Button>
+            <Popconfirm
+              title="Удалить сертификат?"
+              okText="Да"
+              cancelText="Нет"
+              onConfirm={() => deleteCertificateMutation.mutate(record.id)}
+            >
+              <Button size="small" danger>
+                Удалить
+              </Button>
+            </Popconfirm>
+          </Space>
+        ) : (
+          "-"
+        ),
+    },
+  ];
+
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
-      <Card className="crm-panel">
-        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-          <div>
-            <Typography.Title level={2} className="crm-page-title">
-              Фабрики
-            </Typography.Title>
-            <Typography.Paragraph className="crm-page-subtitle">
-              Каталог фабрик, сертификаты и контактные данные для логистических операций.
-            </Typography.Paragraph>
-          </div>
-          <Button type="primary" onClick={() => setCreateOpen(true)}>
-            Создать фабрику
-          </Button>
-        </Space>
-      </Card>
+      <PageHeader
+        title="Фабрики"
+        subtitle="Каталог фабрик и nested-ресурсы emails/certificates."
+        actions={
+          canMutate ? (
+            <Button type="primary" onClick={() => setCreateOpen(true)}>
+              Создать фабрику
+            </Button>
+          ) : null
+        }
+      />
 
-      <Card className="crm-panel filters">
+      <PageToolbar
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((open) => !open)}
+        toggleLabel="Фильтры"
+        search={
+          <Input.Search
+            key={params.query ?? "factories-query"}
+            allowClear
+            enterButton="Найти"
+            placeholder="Поиск по названию или email"
+            defaultValue={params.query}
+            onSearch={(value) => {
+              applySearchPatch({
+                query: value || null,
+                page: 1,
+              });
+            }}
+          />
+        }
+      />
+
+      <FilterPanel open={filtersOpen}>
         <Form
           form={filterForm}
           onFinish={(values: {
             query?: string;
             country?: string;
             city?: string;
-            certificate_statuses?: string[];
+            certificate_statuses?: FactoryCertificateStatus[];
           }) => {
             applySearchPatch({
               query: values.query,
@@ -316,7 +636,7 @@ function FactoriesPageContent() {
                 mode="multiple"
                 allowClear
                 placeholder="Сертификат"
-                options={["active", "pending", "expired"].map((value) => ({
+                options={FACTORY_CERTIFICATE_STATUS_VALUES.map((value) => ({
                   label: formatCertificateStatus(value),
                   value,
                 }))}
@@ -332,13 +652,14 @@ function FactoriesPageContent() {
               onClick={() => {
                 filterForm.resetFields();
                 router.replace("/factories");
+                setFiltersOpen(false);
               }}
             >
               Сбросить
             </Button>
           </div>
         </Form>
-      </Card>
+      </FilterPanel>
 
       <Card className="crm-panel crm-table-card">
         {listQuery.error ? (
@@ -370,14 +691,19 @@ function FactoriesPageContent() {
                       <strong>{record.city ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item" style={{ gridColumn: "1 / -1" }}>
-                      Email
-                      <strong>{record.email ?? "-"}</strong>
+                      Primary Email
+                      <strong>{record.primary_email ?? "-"}</strong>
                     </div>
                   </div>
 
                   <div className="crm-row-actions">
-                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-                      Редактировать
+                    {canMutate ? (
+                      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                        Редактировать
+                      </Button>
+                    ) : null}
+                    <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
+                      Emails / Сертификаты
                     </Button>
                   </div>
                 </article>
@@ -410,7 +736,7 @@ function FactoriesPageContent() {
             loading={listQuery.isLoading}
             dataSource={rows}
             columns={columns}
-            scroll={{ x: 1020 }}
+            scroll={{ x: 1280 }}
             pagination={{
               current: currentPage,
               pageSize: currentPageSize,
@@ -458,17 +784,23 @@ function FactoriesPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="email" label="Эл. почта">
+          <Form.Item name="primary_email" label="Primary email">
             <Input />
           </Form.Item>
           <Form.Item name="certificate_status" label="Статус сертификата">
-            <Input />
+            <Select
+              allowClear
+              options={FACTORY_CERTIFICATE_STATUS_VALUES.map((value) => ({
+                label: formatCertificateStatus(value),
+                value,
+              }))}
+            />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={`Редактировать фабрику #${selected?.id ?? ""}`}
+        title={`Редактировать фабрику #${selectedFactory?.id ?? ""}`}
         open={editOpen}
         destroyOnHidden
         onCancel={() => setEditOpen(false)}
@@ -479,8 +811,8 @@ function FactoriesPageContent() {
           form={editForm}
           layout="vertical"
           onFinish={(values) => {
-            if (!selected) return;
-            updateMutation.mutate({ id: selected.id, payload: values });
+            if (!selectedFactory) return;
+            updateMutation.mutate({ id: selectedFactory.id, payload: values });
           }}
         >
           <Form.Item name="name" label="Название">
@@ -504,11 +836,216 @@ function FactoriesPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="email" label="Эл. почта">
+          <Form.Item name="primary_email" label="Primary email">
             <Input />
           </Form.Item>
           <Form.Item name="certificate_status" label="Статус сертификата">
+            <Select
+              allowClear
+              options={FACTORY_CERTIFICATE_STATUS_VALUES.map((value) => ({
+                label: formatCertificateStatus(value),
+                value,
+              }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Ресурсы фабрики #${selectedFactory?.id ?? ""} — ${selectedFactory?.name ?? ""}`}
+        open={resourcesOpen}
+        destroyOnHidden
+        width={980}
+        footer={null}
+        onCancel={() => {
+          setResourcesOpen(false);
+          setSelectedEmail(null);
+          setSelectedCertificate(null);
+          emailCreateForm.resetFields();
+          certificateCreateForm.resetFields();
+        }}
+      >
+        <Tabs
+          items={[
+            {
+              key: "emails",
+              label: "Emails",
+              children: (
+                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                  {canMutate ? (
+                    <Form<FactoryEmailForm>
+                      form={emailCreateForm}
+                      layout="inline"
+                      onFinish={(values) => createEmailMutation.mutate({ ...values, is_primary: Boolean(values.is_primary) })}
+                    >
+                      <Form.Item name="email" rules={[{ required: true, message: "Введите email" }]}>
+                        <Input placeholder="Email" style={{ width: 280 }} />
+                      </Form.Item>
+                      <Form.Item name="is_primary" label="Primary" valuePropName="checked" initialValue={false}>
+                        <Switch />
+                      </Form.Item>
+                      <Button type="primary" htmlType="submit" loading={createEmailMutation.isPending}>
+                        Добавить email
+                      </Button>
+                    </Form>
+                  ) : null}
+
+                  <Table<FactoryEmail>
+                    rowKey="id"
+                    loading={emailsQuery.isLoading}
+                    columns={emailColumns}
+                    dataSource={emailsQuery.data?.items ?? []}
+                    pagination={false}
+                    locale={{ emptyText: "Нет email-адресов" }}
+                  />
+                </Space>
+              ),
+            },
+            {
+              key: "certificates",
+              label: "Сертификаты",
+              children: (
+                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                  {canMutate ? (
+                    <Form<FactoryCertificateForm>
+                      form={certificateCreateForm}
+                      layout="vertical"
+                      onFinish={(values) => createCertificateMutation.mutate(values)}
+                    >
+                      <div className="crm-filter-grid">
+                        <Form.Item name="number" label="Номер" className="crm-col-3" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name="status"
+                          label="Статус"
+                          className="crm-col-3"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <Select
+                            allowClear
+                            options={FACTORY_CERTIFICATE_STATUS_VALUES.map((value) => ({
+                              label: formatCertificateStatus(value),
+                              value,
+                            }))}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          name="file_path"
+                          label="Путь к файлу"
+                          className="crm-col-4"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name="issued_date"
+                          label="Дата выдачи"
+                          className="crm-col-2"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+                        </Form.Item>
+                        <Form.Item
+                          name="expires_date"
+                          label="Дата окончания"
+                          className="crm-col-2"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+                        </Form.Item>
+                      </div>
+                      <Button type="primary" htmlType="submit" loading={createCertificateMutation.isPending}>
+                        Добавить сертификат
+                      </Button>
+                    </Form>
+                  ) : null}
+
+                  <Table<FactoryCertificate>
+                    rowKey="id"
+                    loading={certificatesQuery.isLoading}
+                    columns={certificateColumns}
+                    dataSource={certificatesQuery.data?.items ?? []}
+                    pagination={false}
+                    locale={{ emptyText: "Нет сертификатов" }}
+                  />
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      <Modal
+        title={`Изменить email #${selectedEmail?.id ?? ""}`}
+        open={emailEditOpen}
+        destroyOnHidden
+        onCancel={() => setEmailEditOpen(false)}
+        onOk={() => emailEditForm.submit()}
+        confirmLoading={updateEmailMutation.isPending}
+      >
+        <Form<FactoryEmailForm>
+          form={emailEditForm}
+          layout="vertical"
+          onFinish={(values) => {
+            if (!selectedEmail) return;
+            updateEmailMutation.mutate({
+              emailId: selectedEmail.id,
+              payload: {
+                ...values,
+                is_primary: Boolean(values.is_primary),
+              },
+            });
+          }}
+        >
+          <Form.Item name="email" label="Email" rules={[{ required: true }]}> 
             <Input />
+          </Form.Item>
+          <Form.Item name="is_primary" label="Primary" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Изменить сертификат #${selectedCertificate?.id ?? ""}`}
+        open={certificateEditOpen}
+        destroyOnHidden
+        onCancel={() => setCertificateEditOpen(false)}
+        onOk={() => certificateEditForm.submit()}
+        confirmLoading={updateCertificateMutation.isPending}
+      >
+        <Form<FactoryCertificateForm>
+          form={certificateEditForm}
+          layout="vertical"
+          onFinish={(values) => {
+            if (!selectedCertificate) return;
+            updateCertificateMutation.mutate({
+              certificateId: selectedCertificate.id,
+              payload: values,
+            });
+          }}
+        >
+          <Form.Item name="number" label="Номер">
+            <Input />
+          </Form.Item>
+          <Form.Item name="status" label="Статус">
+            <Select
+              allowClear
+              options={FACTORY_CERTIFICATE_STATUS_VALUES.map((value) => ({
+                label: formatCertificateStatus(value),
+                value,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="file_path" label="Путь к файлу">
+            <Input />
+          </Form.Item>
+          <Form.Item name="issued_date" label="Дата выдачи">
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item name="expires_date" label="Дата окончания">
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
         </Form>
       </Modal>

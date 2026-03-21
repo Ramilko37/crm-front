@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.vercel
+.playwright-cli
+output
+test-results
+coverage
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store

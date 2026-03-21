@@ -1,0 +1,13 @@
+services:
+  crm-front:
+    container_name: crm-front
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      BASE_BACKEND_URL: ${BASE_BACKEND_URL}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      NODE_ENV: production
