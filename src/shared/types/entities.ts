@@ -18,9 +18,10 @@ export type AuthTokenResponse = {
 
 export type AuthUser = {
   id: number | null;
+  company_id: number | null;
   login: string;
   full_name: string | null;
-  role_name: RoleName | "manager" | string;
+  role_name: RoleName | string;
   is_superuser: boolean;
   is_active: boolean;
 };
@@ -243,4 +244,134 @@ export type TripFilterParams = ListParams & {
   truck_plate?: string;
   truck_company_name?: string;
   has_orders?: boolean;
+};
+
+export type UserAdmin = {
+  id: number;
+  company_id: number | null;
+  personal_manager_id: number | null;
+  full_name: string;
+  login: string;
+  email: string | null;
+  phone: string | null;
+  country: string | null;
+  city: string | null;
+  role_name: RoleName | string;
+  is_active: boolean;
+  is_logist: boolean;
+  total_orders: number | null;
+  last_order_date: string | null;
+};
+
+export type UserWritePayload = {
+  company_id?: number;
+  full_name?: string;
+  login?: string;
+  password?: string;
+  role_name?: RoleName | string;
+  personal_manager_id?: number | null;
+  email?: string | null;
+  phone?: string | null;
+  country?: string | null;
+  city?: string | null;
+  is_active?: boolean;
+  is_logist?: boolean;
+  total_orders?: number | null;
+  last_order_date?: string | null;
+};
+
+export type UserFilterParams = ListParams & {
+  query?: string;
+  ids?: number[];
+  company_id?: number;
+  role_name?: RoleName | string;
+  personal_manager_id?: number;
+  is_logist?: boolean;
+  country?: string;
+  city?: string;
+  has_email?: boolean;
+  has_orders?: boolean;
+  last_order_date_from?: string;
+  last_order_date_to?: string;
+};
+
+export type PathPoint = {
+  id: number;
+  name_ru: string;
+  name_it: string | null;
+  name_en: string | null;
+};
+
+export type PathPointWritePayload = {
+  name_ru?: string;
+  name_it?: string | null;
+  name_en?: string | null;
+};
+
+export type PathPointFilterParams = ListParams & {
+  query?: string;
+  ids?: number[];
+};
+
+export type Country = {
+  id: number;
+  name_ru: string;
+  name_en: string | null;
+  iso2: string;
+  iso3: string | null;
+};
+
+export type CountryWritePayload = {
+  name_ru?: string;
+  name_en?: string | null;
+  iso2?: string;
+  iso3?: string | null;
+};
+
+export type CountryFilterParams = ListParams & {
+  query?: string;
+  ids?: number[];
+  iso2?: string;
+  iso3?: string;
+};
+
+export type NormativeDocument = {
+  id: number;
+  title: string;
+  file_path: string;
+  document_date: string;
+};
+
+export type NormativeDocumentWritePayload = {
+  title?: string;
+  file_path?: string;
+  document_date?: string;
+};
+
+export type NormativeDocumentFilterParams = ListParams & {
+  query?: string;
+  ids?: number[];
+  document_date_from?: string;
+  document_date_to?: string;
+};
+
+export type EmailTemplate = {
+  id: number;
+  title: string;
+  subject: string;
+  body: string | null;
+  is_active: boolean;
+};
+
+export type EmailTemplateWritePayload = {
+  title?: string;
+  subject?: string;
+  body?: string | null;
+  is_active?: boolean;
+};
+
+export type EmailTemplateFilterParams = ListParams & {
+  query?: string;
+  ids?: number[];
+  is_active?: boolean;
 };

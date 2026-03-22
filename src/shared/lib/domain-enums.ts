@@ -1,5 +1,6 @@
 export const ROLE_NAMES = [
   "administrator",
+  "manager",
   "logist",
   "accountant",
   "forwarder",

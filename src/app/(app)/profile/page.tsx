@@ -101,6 +101,7 @@ export default function ProfilePage() {
       <Card className="crm-panel" title="Контекст авторизации" loading={authQuery.isLoading}>
         <Descriptions bordered column={1} size="small">
           <Descriptions.Item label="ID">{authContext?.id ?? "-"}</Descriptions.Item>
+          <Descriptions.Item label="ID компании">{authContext?.company_id ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Логин">{authContext?.login ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Полное имя">{authContext?.full_name ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Роль">{authContext?.role_name ?? "-"}</Descriptions.Item>

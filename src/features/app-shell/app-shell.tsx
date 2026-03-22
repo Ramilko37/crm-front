@@ -13,13 +13,43 @@ import { useEffect, useMemo, useState } from "react";
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
-import { normalizeRoleName } from "@/shared/lib/rbac";
+import { canAccessModule, getVisibleModules, normalizeRoleName, type AppModule } from "@/shared/lib/rbac";
 
 const { Header, Content } = Layout;
 
 type Props = {
   children: React.ReactNode;
 };
+
+type ModuleMenuConfig = {
+  key: string;
+  module: AppModule;
+  label: string;
+};
+
+const MODULE_MENU_CONFIG: ModuleMenuConfig[] = [
+  { key: "/orders", module: "orders", label: "Заказы" },
+  { key: "/path-points", module: "path-points", label: "Путевые точки" },
+  { key: "/factories", module: "factories", label: "Фабрики" },
+  { key: "/trips", module: "trips", label: "Рейсы" },
+  { key: "/users", module: "users", label: "Пользователи" },
+  { key: "/countries", module: "countries", label: "Страны" },
+  { key: "/normative-documents", module: "normative-documents", label: "Нормативные документы" },
+  { key: "/email-templates", module: "email-templates", label: "Email шаблоны" },
+  { key: "/profile", module: "profile", label: "Профиль" },
+];
+
+function resolveModule(pathname: string): AppModule {
+  if (pathname.startsWith("/orders")) return "orders";
+  if (pathname.startsWith("/path-points")) return "path-points";
+  if (pathname.startsWith("/factories")) return "factories";
+  if (pathname.startsWith("/trips")) return "trips";
+  if (pathname.startsWith("/users")) return "users";
+  if (pathname.startsWith("/countries")) return "countries";
+  if (pathname.startsWith("/normative-documents")) return "normative-documents";
+  if (pathname.startsWith("/email-templates")) return "email-templates";
+  return "profile";
+}
 
 export function AppShell({ children }: Props) {
   const router = useRouter();
@@ -30,6 +60,7 @@ export function AppShell({ children }: Props) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const meQuery = useCurrentUser(true);
+  const currentModule = useMemo(() => resolveModule(pathname), [pathname]);
 
   useEffect(() => {
     if (!meQuery.error) {
@@ -44,38 +75,44 @@ export function AppShell({ children }: Props) {
     }
   }, [meQuery.error, router]);
 
+  useEffect(() => {
+    const me = meQuery.data;
+    if (!me) {
+      return;
+    }
+
+    const allowed = canAccessModule(currentModule, me.role_name, me.is_superuser);
+    if (!allowed && pathname !== "/orders") {
+      message.warning("Раздел недоступен для вашей роли");
+      router.replace("/orders");
+    }
+  }, [currentModule, meQuery.data, message, pathname, router]);
+
   const selectedKey = useMemo(() => {
     if (pathname.startsWith("/orders")) return "/orders";
+    if (pathname.startsWith("/path-points")) return "/path-points";
     if (pathname.startsWith("/factories")) return "/factories";
     if (pathname.startsWith("/trips")) return "/trips";
+    if (pathname.startsWith("/users")) return "/users";
+    if (pathname.startsWith("/countries")) return "/countries";
+    if (pathname.startsWith("/normative-documents")) return "/normative-documents";
+    if (pathname.startsWith("/email-templates")) return "/email-templates";
     if (pathname.startsWith("/profile")) return "/profile";
     return "/orders";
   }, [pathname]);
 
-  const menuItems = useMemo(
-    () => [
-      {
-        key: "/orders",
-        label: "Заказы",
-      },
-      {
-        key: "/factories",
-        label: "Фабрики",
-      },
-      {
-        key: "/trips",
-        label: "Рейсы",
-      },
-      {
-        key: "/profile",
-        label: "Профиль",
-      },
-    ],
-    [],
-  );
+  const menuItems = useMemo(() => {
+    const me = meQuery.data;
+    const visibleModules = getVisibleModules(me?.role_name, me?.is_superuser);
+    return MODULE_MENU_CONFIG.filter((item) => visibleModules.includes(item.module)).map((item) => ({
+      key: item.key,
+      label: item.label,
+    }));
+  }, [meQuery.data]);
 
   const roleLabelByName: Record<string, string> = {
     administrator: "Администратор",
+    manager: "Менеджер",
     logist: "Логист",
     accountant: "Бухгалтер",
     forwarder: "Экспедитор",
