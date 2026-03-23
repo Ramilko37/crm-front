@@ -44,6 +44,29 @@ export const ORDER_STATUS_VALUES = [
 
 export type OrderStatus = (typeof ORDER_STATUS_VALUES)[number];
 
+export const ORDER_TYPE_VALUES = [
+  "delivery",
+  "delivery_europe",
+  "quote_request",
+  "request",
+] as const;
+
+export type OrderType = (typeof ORDER_TYPE_VALUES)[number];
+
+export const QUOTE_STATUS_VALUES = [
+  "pending_manager_price",
+  "priced_waiting_client",
+  "accepted",
+  "declined",
+  "re_requested",
+] as const;
+
+export type QuoteStatus = (typeof QUOTE_STATUS_VALUES)[number];
+
+export const REQUEST_STATUS_VALUES = ["new"] as const;
+
+export type RequestStatus = (typeof REQUEST_STATUS_VALUES)[number];
+
 export const TRIP_STATUS_VALUES = [
   "new",
   "in_transit",

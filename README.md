@@ -56,6 +56,7 @@ pnpm build
 
 - Login/Profile
 - Orders (`/orders`, `/orders/[id]`)
+- Requests (`/requests`)
 - Factories (`/factories`)
 - Trips (`/trips`)
 
@@ -80,6 +81,6 @@ docker compose -f docker-compose.server.yml --env-file .env.production up -d --b
 
 Default server target:
 
-- `BASE_BACKEND_URL=http://155.212.218.145:8000`
-- `FRONTEND_PORT=3000`
+- `BASE_BACKEND_URL=http://84.47.150.248:8000`
+- `FRONTEND_PORT=3001`
 - `COOKIE_SECURE=false` for plain `http://IP:PORT` deploys

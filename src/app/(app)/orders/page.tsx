@@ -35,15 +35,27 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
-import { formatEnumCode, ORDER_STATUS_VALUES, type OrderStatus } from "@/shared/lib/domain-enums";
+import {
+  formatEnumCode,
+  ORDER_STATUS_VALUES,
+  ORDER_TYPE_VALUES,
+  QUOTE_STATUS_VALUES,
+  type OrderStatus,
+  type OrderType,
+  type QuoteStatus,
+} from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { toOrderWritePayload } from "@/shared/lib/order-dto";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
-import { isBackOfficeRole } from "@/shared/lib/rbac";
+import { isBackOfficeRole, normalizeRoleName } from "@/shared/lib/rbac";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
+  ClientFactoryDetail,
+  ClientFactoryListItem,
+  Factory,
+  FactoryLoadingAddress,
   Order,
   OrderFilterParams,
   OrderWritePayload,
@@ -51,10 +63,21 @@ import type {
   Trip,
 } from "@/shared/types/entities";
 
-type OrderForm = {
+type OrderCreateForm = {
   order_number: string;
-  user_id: number;
+  company_id?: number;
+  contact_user_id?: number;
+  ready_date: dayjs.Dayjs;
+  order_type?: OrderType;
   factory_id: number;
+  loading_address_id: number;
+  additional_description?: string;
+  invoice_number?: string;
+  comment?: string;
+};
+
+type OrderEditForm = {
+  order_number?: string;
   trip_id?: number;
   comment?: string;
   status_name?: OrderStatus;
@@ -123,6 +146,8 @@ function getParams(searchParams: URLSearchParams): OrderFilterParams {
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
     query: searchParams.get("query") ?? undefined,
     status_names: parseSearchArray(searchParams, "status_names") as OrderStatus[],
+    order_types: parseSearchArray(searchParams, "order_types") as OrderType[],
+    quote_statuses: parseSearchArray(searchParams, "quote_statuses") as QuoteStatus[],
     country: searchParams.get("country") ?? undefined,
     user_id: parseNumber(searchParams.get("user_id")),
     company_id: parseNumber(searchParams.get("company_id")),
@@ -145,12 +170,17 @@ function OrdersPageContent() {
   const isMobile = !screens.md;
 
   const meQuery = useCurrentUser(true);
+  const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
+  const isClientRole = normalizedRole === "client" && !meQuery.data?.is_superuser;
   const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
+  const canCreate = canMutate || isClientRole;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [quotePriceOpen, setQuotePriceOpen] = useState(false);
+  const [quoteDecisionOpen, setQuoteDecisionOpen] = useState(false);
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
   const [bulkCommentOpen, setBulkCommentOpen] = useState(false);
@@ -158,14 +188,18 @@ function OrdersPageContent() {
   const [selected, setSelected] = useState<Order | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
-  const [createForm] = Form.useForm<OrderForm>();
-  const [editForm] = Form.useForm<Partial<OrderForm>>();
+  const [createForm] = Form.useForm<OrderCreateForm>();
+  const [editForm] = Form.useForm<OrderEditForm>();
   const [statusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
+  const [quotePriceForm] = Form.useForm<{ amount: number; currency?: string }>();
+  const [quoteDecisionForm] = Form.useForm<{ decision: "agree" | "decline" | "request_again" }>();
   const [filterForm] = Form.useForm<{
     query?: string;
     country?: string;
     status_names?: OrderStatus[];
+    order_types?: OrderType[];
+    quote_statuses?: QuoteStatus[];
     user_id?: number;
     factory_id?: number;
     trip_id?: number;
@@ -177,10 +211,16 @@ function OrdersPageContent() {
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
+  const createFactoryId = Form.useWatch("factory_id", createForm);
+  const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
-    params.query || params.country || (params.status_names?.length ?? 0) > 0,
+    params.query ||
+      params.country ||
+      (params.status_names?.length ?? 0) > 0 ||
+      (params.order_types?.length ?? 0) > 0 ||
+      (params.quote_statuses?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
 
@@ -189,6 +229,8 @@ function OrdersPageContent() {
       query: params.query,
       country: params.country,
       status_names: params.status_names?.length ? params.status_names : undefined,
+      order_types: params.order_types?.length ? params.order_types : undefined,
+      quote_statuses: params.quote_statuses?.length ? params.quote_statuses : undefined,
       user_id: params.user_id,
       factory_id: params.factory_id,
       trip_id: params.trip_id,
@@ -205,7 +247,9 @@ function OrdersPageContent() {
     params.has_documents,
     params.order_date_from,
     params.order_date_to,
+    params.order_types,
     params.query,
+    params.quote_statuses,
     params.status_names,
     params.trip_id,
     params.user_id,
@@ -227,16 +271,115 @@ function OrdersPageContent() {
       }),
   });
 
+  const factoryOptionsQuery = useQuery({
+    queryKey: [isClientRole ? "client-factories" : "factories", "order-create-options"],
+    queryFn: async () => {
+      if (isClientRole) {
+        const response = await apiRequest<PaginatedResponse<ClientFactoryListItem>>("/api/client/factories", {
+          query: { page: 1, page_size: 200, sort_desc: false },
+        });
+        return response.items.map((factory) => ({
+          id: factory.id,
+          name: factory.name,
+          subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+        }));
+      }
+
+      const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+        query: { page: 1, page_size: 200, sort_desc: false },
+      });
+      return response.items.map((factory) => ({
+        id: factory.id,
+        name: factory.name,
+        subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+      }));
+    },
+    enabled: createOpen && canCreate,
+  });
+
+  const loadingAddressesQuery = useQuery({
+    queryKey: ["orders", "create-loading-addresses", isClientRole, createFactoryId],
+    queryFn: async () => {
+      if (!createFactoryId) {
+        return [] as FactoryLoadingAddress[];
+      }
+
+      if (isClientRole) {
+        const detail = await apiRequest<ClientFactoryDetail>(`/api/client/factories/${createFactoryId}`);
+        return detail.loading_addresses;
+      }
+
+      const response = await apiRequest<PaginatedResponse<FactoryLoadingAddress>>(
+        `/api/factories/${createFactoryId}/loading-addresses`,
+        {
+          query: { page: 1, page_size: 200 },
+        },
+      );
+      return response.items;
+    },
+    enabled: createOpen && Boolean(createFactoryId) && canCreate,
+  });
+
+  useEffect(() => {
+    if (!createOpen || !createFactoryId) {
+      return;
+    }
+
+    const addresses = loadingAddressesQuery.data ?? [];
+    if (!addresses.length) {
+      createForm.setFieldValue("loading_address_id", undefined);
+      return;
+    }
+
+    const stillValid = addresses.some((address) => address.id === createLoadingAddressId);
+    if (stillValid) {
+      return;
+    }
+
+    const primaryAddress = addresses.find((address) => address.is_primary) ?? addresses[0];
+    createForm.setFieldValue("loading_address_id", primaryAddress.id);
+  }, [createFactoryId, createForm, createLoadingAddressId, createOpen, loadingAddressesQuery.data]);
+
   const createMutation = useMutation({
-    mutationFn: (payload: OrderForm) =>
-      apiRequest<Order>("/api/orders", {
+    mutationFn: async (payload: OrderCreateForm) => {
+      const ready_date = payload.ready_date.format("YYYY-MM-DD");
+
+      if (isClientRole) {
+        return apiRequest<Order>("/api/client/orders", {
+          method: "POST",
+          body: {
+            order_number: payload.order_number,
+            ready_date,
+            factory_id: payload.factory_id,
+            loading_address_id: payload.loading_address_id,
+            additional_description: payload.additional_description,
+            comment: payload.comment,
+            invoice_number: payload.invoice_number,
+          },
+        });
+      }
+
+      return apiRequest<Order>("/api/orders", {
         method: "POST",
-        body: toOrderWritePayload(payload),
-      }),
+        body: {
+          order_number: payload.order_number,
+          company_id: payload.company_id,
+          contact_user_id: payload.contact_user_id,
+          ready_date,
+          order_type: payload.order_type ?? "delivery",
+          factory_id: payload.factory_id,
+          loading_address_id: payload.loading_address_id,
+          additional_description: payload.additional_description,
+          comment: payload.comment,
+          invoice_number: payload.invoice_number,
+        },
+      });
+    },
     onSuccess: async () => {
       message.success("Заказ создан");
       setCreateOpen(false);
       createForm.resetFields();
+      setSelected(null);
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
@@ -245,7 +388,7 @@ function OrdersPageContent() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: Partial<OrderForm> }) =>
+    mutationFn: ({ id, payload }: { id: number; payload: OrderEditForm }) =>
       apiRequest<Order>(`/api/orders/${id}`, {
         method: "PATCH",
         body: toOrderWritePayload(payload as OrderWritePayload),
@@ -300,6 +443,49 @@ function OrdersPageContent() {
     },
   });
 
+  const quotePriceMutation = useMutation({
+    mutationFn: ({ id, amount, currency }: { id: number; amount: number; currency?: string }) =>
+      apiRequest<Order>(`/api/orders/${id}/quote-price`, {
+        method: "POST",
+        body: {
+          amount,
+          currency: currency || "EUR",
+        },
+      }),
+    onSuccess: async () => {
+      message.success("Цена квоты обновлена");
+      setQuotePriceOpen(false);
+      quotePriceForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      if (selected) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
+      }
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления цены квоты");
+    },
+  });
+
+  const quoteDecisionMutation = useMutation({
+    mutationFn: ({ id, decision }: { id: number; decision: "agree" | "decline" | "request_again" }) =>
+      apiRequest<Order>(`/api/orders/${id}/quote-decision`, {
+        method: "POST",
+        body: { decision },
+      }),
+    onSuccess: async () => {
+      message.success("Решение по квоте отправлено");
+      setQuoteDecisionOpen(false);
+      quoteDecisionForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      if (selected) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
+      }
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка отправки решения по квоте");
+    },
+  });
+
   const bulkMutation = useMutation({
     mutationFn: ({ endpoint, body }: { endpoint: OrderBulkEndpoint; body: Record<string, unknown> }) =>
       apiRequest<BulkMutationResponse<Order>>(`/api/orders/bulk/${endpoint}`, {
@@ -341,8 +527,6 @@ function OrdersPageContent() {
       comment: record.comment ?? undefined,
       status_name: record.status_name ?? undefined,
       trip_id: record.trip_id ?? undefined,
-      user_id: record.user_id,
-      factory_id: record.factory_id,
     });
     setEditOpen(true);
   }
@@ -360,6 +544,21 @@ function OrdersPageContent() {
     setSelected(record);
     assignForm.setFieldsValue({ trip_id: record.trip_id ?? undefined });
     setAssignOpen(true);
+  }
+
+  function openQuotePrice(record: Order) {
+    setSelected(record);
+    quotePriceForm.setFieldsValue({
+      amount: record.quote_price_amount ? Number(record.quote_price_amount) : undefined,
+      currency: record.quote_price_currency ?? "EUR",
+    });
+    setQuotePriceOpen(true);
+  }
+
+  function openQuoteDecision(record: Order) {
+    setSelected(record);
+    quoteDecisionForm.setFieldValue("decision", "agree");
+    setQuoteDecisionOpen(true);
   }
 
   function toggleRowSelection(id: number, checked: boolean) {
@@ -393,30 +592,53 @@ function OrdersPageContent() {
   }
 
   function orderActions(record: Order) {
-    if (!canMutate) {
-      return [];
+    const actions = [];
+
+    if (canMutate) {
+      actions.push(
+        {
+          key: "edit",
+          label: "Редактировать",
+          icon: <EditOutlined />,
+          onClick: () => openEdit(record),
+        },
+        {
+          key: "status",
+          label: "Изменить статус",
+          icon: <SwapOutlined />,
+          onClick: () => openStatus(record),
+        },
+        {
+          key: "assign",
+          label: "Назначить рейс",
+          icon: <ApartmentOutlined />,
+          onClick: () => openAssign(record),
+        },
+      );
     }
 
-    return [
-      {
-        key: "edit",
-        label: "Редактировать",
-        icon: <EditOutlined />,
-        onClick: () => openEdit(record),
-      },
-      {
-        key: "status",
-        label: "Изменить статус",
+    if (
+      (meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager") &&
+      record.order_type === "quote_request"
+    ) {
+      actions.push({
+        key: "quote-price",
+        label: "Выставить цену",
         icon: <SwapOutlined />,
-        onClick: () => openStatus(record),
-      },
-      {
-        key: "assign",
-        label: "Назначить рейс",
-        icon: <ApartmentOutlined />,
-        onClick: () => openAssign(record),
-      },
-    ];
+        onClick: () => openQuotePrice(record),
+      });
+    }
+
+    if (isClientRole && record.order_type === "quote_request" && record.quote_status === "priced_waiting_client") {
+      actions.push({
+        key: "quote-decision",
+        label: "Решение по квоте",
+        icon: <SwapOutlined />,
+        onClick: () => openQuoteDecision(record),
+      });
+    }
+
+    return actions;
   }
 
   const columns: ColumnsType<Order> = [
@@ -510,6 +732,20 @@ function OrdersPageContent() {
       width: 200,
     },
     {
+      title: "Тип заказа",
+      dataIndex: "order_type",
+      key: "order_type",
+      width: 150,
+      render: (value: OrderType | null) => (value ? formatEnumCode(value) : "-"),
+    },
+    {
+      title: "Статус квоты",
+      dataIndex: "quote_status",
+      key: "quote_status",
+      width: 170,
+      render: (value: QuoteStatus | null) => (value ? formatEnumCode(value) : "-"),
+    },
+    {
       title: "Эксп.",
       dataIndex: "trip_id",
       key: "trip_id",
@@ -545,13 +781,13 @@ function OrdersPageContent() {
       title: "Действия",
       key: "actions",
       fixed: "right",
-      width: canMutate ? 178 : 92,
+      width: 190,
       render: (_, record) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => router.push(`/orders/${record.id}`)}>
             Открыть
           </Button>
-          {canMutate ? (
+          {orderActions(record).length ? (
             <Dropdown trigger={["click"]} menu={{ items: orderActions(record) }}>
               <Button size="small" icon={<MoreOutlined />} />
             </Dropdown>
@@ -629,7 +865,7 @@ function OrdersPageContent() {
           />
         }
         actions={
-          canMutate ? (
+          canCreate ? (
             <Button type="primary" onClick={() => setCreateOpen(true)}>
               + Новый заказ
             </Button>
@@ -645,6 +881,8 @@ function OrdersPageContent() {
               query: values.query,
               country: values.country,
               status_names: values.status_names,
+              order_types: values.order_types,
+              quote_statuses: values.quote_statuses,
               user_id: values.user_id,
               factory_id: values.factory_id,
               trip_id: values.trip_id,
@@ -671,6 +909,28 @@ function OrdersPageContent() {
                 options={ORDER_STATUS_VALUES.map((status) => ({
                   label: formatEnumCode(status),
                   value: status,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="order_types" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Тип заказа"
+                options={ORDER_TYPE_VALUES.map((orderType) => ({
+                  label: formatEnumCode(orderType),
+                  value: orderType,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="quote_statuses" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="Статус квоты"
+                options={QUOTE_STATUS_VALUES.map((quoteStatus) => ({
+                  label: formatEnumCode(quoteStatus),
+                  value: quoteStatus,
                 }))}
               />
             </Form.Item>
@@ -897,13 +1157,21 @@ function OrdersPageContent() {
                       Готовность
                       <strong>{record.ready_date ?? "-"}</strong>
                     </div>
+                    <div className="crm-row-meta-item">
+                      Тип
+                      <strong>{record.order_type ? formatEnumCode(record.order_type) : "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Квота
+                      <strong>{record.quote_status ? formatEnumCode(record.quote_status) : "-"}</strong>
+                    </div>
                   </div>
 
                   <div className="crm-row-actions">
                     <Button size="small" type="primary" ghost onClick={() => router.push(`/orders/${record.id}`)}>
                       Открыть
                     </Button>
-                    {canMutate ? (
+                    {orderActions(record).length ? (
                       <Dropdown trigger={["click"]} menu={{ items: orderActions(record) }}>
                         <Button size="small" icon={<MoreOutlined />}>
                           Действия
@@ -949,7 +1217,7 @@ function OrdersPageContent() {
                   }
                 : undefined
             }
-            scroll={{ x: 2280 }}
+            scroll={{ x: 2560 }}
             pagination={{
               current: currentPage,
               pageSize: currentPageSize,
@@ -964,35 +1232,100 @@ function OrdersPageContent() {
       </Card>
 
       <Modal
-        title="Создать заказ"
+        title={isClientRole ? "Создать заказ (клиентский контур)" : "Создать заказ"}
         open={createOpen}
         destroyOnHidden
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setCreateOpen(false);
+          createForm.resetFields();
+        }}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
       >
-        <Form<OrderForm> form={createForm} layout="vertical" onFinish={(values) => createMutation.mutate(values)}>
+        <Form<OrderCreateForm>
+          form={createForm}
+          layout="vertical"
+          initialValues={{
+            order_type: "delivery",
+          }}
+          onFinish={(values) => {
+            const addresses = loadingAddressesQuery.data ?? [];
+            if (!addresses.length) {
+              message.error("Для выбранной фабрики нет доступных адресов загрузки");
+              return;
+            }
+            createMutation.mutate(values);
+          }}
+        >
           <Form.Item name="order_number" label="Номер заказа" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="user_id" label="ID пользователя" rules={[{ required: true }]}>
-            <InputNumber min={1} style={{ width: "100%" }} />
+          {!isClientRole ? (
+            <Form.Item name="company_id" label="ID компании" rules={[{ required: true }]}>
+              <InputNumber min={1} style={{ width: "100%" }} />
+            </Form.Item>
+          ) : null}
+          {!isClientRole ? (
+            <Form.Item name="contact_user_id" label="ID контактного пользователя">
+              <InputNumber min={1} style={{ width: "100%" }} />
+            </Form.Item>
+          ) : null}
+          <Form.Item name="ready_date" label="Дата готовности" rules={[{ required: true }]}>
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
-          <Form.Item name="factory_id" label="ID фабрики" rules={[{ required: true }]}>
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="trip_id" label="ID рейса">
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="status_name" label="Статус">
+          {!isClientRole ? (
+            <Form.Item name="order_type" label="Тип заказа" rules={[{ required: true }]}>
+              <Select
+                options={ORDER_TYPE_VALUES.filter((value) => value !== "request").map((orderType) => ({
+                  label: formatEnumCode(orderType),
+                  value: orderType,
+                }))}
+              />
+            </Form.Item>
+          ) : null}
+          <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]}>
             <Select
-              allowClear
-              options={ORDER_STATUS_VALUES.map((status) => ({
-                label: formatEnumCode(status),
-                value: status,
+              showSearch
+              optionFilterProp="label"
+              loading={factoryOptionsQuery.isLoading}
+              options={(factoryOptionsQuery.data ?? []).map((factory) => ({
+                label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
+                value: factory.id,
               }))}
+              onChange={() => createForm.setFieldValue("loading_address_id", undefined)}
             />
           </Form.Item>
+          <Form.Item name="loading_address_id" label="Адрес загрузки" rules={[{ required: true }]}>
+            <Select
+              loading={loadingAddressesQuery.isLoading}
+              disabled={!createFactoryId}
+              options={(loadingAddressesQuery.data ?? []).map((address) => ({
+                label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
+                value: address.id,
+              }))}
+              notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
+            />
+          </Form.Item>
+          <Form.Item name="invoice_number" label="Инвойс / проформа">
+            <Input />
+          </Form.Item>
+          <Form.Item name="additional_description" label="Описание груза" rules={[{ required: true }]}>
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="comment" label="Комментарий">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          {loadingAddressesQuery.data?.length ? (
+            <Typography.Text type="secondary">
+              Доступно адресов загрузки: {loadingAddressesQuery.data.length}
+              {createLoadingAddressId ? `, выбран ID: ${createLoadingAddressId}` : ""}
+            </Typography.Text>
+          ) : null}
+          {!loadingAddressesQuery.isLoading && createFactoryId && !loadingAddressesQuery.data?.length ? (
+            <Typography.Text type="danger">
+              Для выбранной фабрики отсутствуют loading addresses. Создание заказа будет отклонено.
+            </Typography.Text>
+          ) : null}
         </Form>
       </Modal>
 
@@ -1004,7 +1337,7 @@ function OrdersPageContent() {
         onOk={() => editForm.submit()}
         confirmLoading={updateMutation.isPending}
       >
-        <Form<Partial<OrderForm>>
+        <Form<OrderEditForm>
           form={editForm}
           layout="vertical"
           onFinish={(values) => {
@@ -1091,6 +1424,67 @@ function OrdersPageContent() {
                 label: `${trip.id} - ${trip.name}`,
                 value: trip.id,
               }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Выставить цену по квоте #${selected?.id ?? ""}`}
+        open={quotePriceOpen}
+        destroyOnHidden
+        onCancel={() => setQuotePriceOpen(false)}
+        onOk={() => quotePriceForm.submit()}
+        confirmLoading={quotePriceMutation.isPending}
+      >
+        <Form
+          form={quotePriceForm}
+          layout="vertical"
+          initialValues={{ currency: "EUR" }}
+          onFinish={(values: { amount: number; currency?: string }) => {
+            if (!selected) return;
+            quotePriceMutation.mutate({
+              id: selected.id,
+              amount: values.amount,
+              currency: values.currency,
+            });
+          }}
+        >
+          <Form.Item name="amount" label="Сумма" rules={[{ required: true }]}>
+            <InputNumber min={0} precision={2} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="currency" label="Валюта">
+            <Input maxLength={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Решение по квоте #${selected?.id ?? ""}`}
+        open={quoteDecisionOpen}
+        destroyOnHidden
+        onCancel={() => setQuoteDecisionOpen(false)}
+        onOk={() => quoteDecisionForm.submit()}
+        confirmLoading={quoteDecisionMutation.isPending}
+      >
+        <Form
+          form={quoteDecisionForm}
+          layout="vertical"
+          onFinish={(values: { decision: "agree" | "decline" | "request_again" }) => {
+            if (!selected) return;
+            quoteDecisionMutation.mutate({
+              id: selected.id,
+              decision: values.decision,
+            });
+          }}
+        >
+          <Form.Item name="decision" label="Решение" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { label: "Согласовать", value: "agree" },
+                { label: "Отклонить", value: "decline" },
+                { label: "Запросить повторно", value: "request_again" },
+              ]}
             />
           </Form.Item>
         </Form>

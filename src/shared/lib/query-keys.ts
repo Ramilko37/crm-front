@@ -16,6 +16,11 @@ export const queryKeys = {
     detail: (id: number) => ["factories", "detail", id] as const,
     emails: (factoryId: number) => ["factories", "emails", factoryId] as const,
     certificates: (factoryId: number) => ["factories", "certificates", factoryId] as const,
+    loadingAddresses: (factoryId: number) => ["factories", "loading-addresses", factoryId] as const,
+  },
+  clientFactories: {
+    list: (params: unknown) => ["client-factories", "list", params] as const,
+    detail: (factoryId: number) => ["client-factories", "detail", factoryId] as const,
   },
   trips: {
     list: (params: unknown) => ["trips", "list", params] as const,
@@ -36,5 +41,10 @@ export const queryKeys = {
   emailTemplates: {
     list: (params: unknown) => ["email-templates", "list", params] as const,
     detail: (id: number) => ["email-templates", "detail", id] as const,
+  },
+  requests: {
+    list: (params: unknown) => ["requests", "list", params] as const,
+    detail: (id: number) => ["requests", "detail", id] as const,
+    documents: (id: number) => ["requests", "documents", id] as const,
   },
 };

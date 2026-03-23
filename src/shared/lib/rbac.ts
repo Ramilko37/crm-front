@@ -32,6 +32,7 @@ const KNOWN_ROLES = new Set<RoleName>([
 
 export type AppModule =
   | "orders"
+  | "requests"
   | "factories"
   | "trips"
   | "users"
@@ -82,11 +83,19 @@ export function canAccessModule(module: AppModule, roleName: RoleLike, isSuperus
     return normalizedRole === "administrator" || normalizedRole === "manager";
   }
 
+  if (module === "requests") {
+    return normalizedRole === "administrator" || normalizedRole === "manager";
+  }
+
   return INTERNAL_READ_ROLES.has(normalizedRole);
 }
 
 export function getVisibleModules(roleName: RoleLike, isSuperuser = false): AppModule[] {
   const modules: AppModule[] = ["orders"];
+
+  if (canAccessModule("requests", roleName, isSuperuser)) {
+    modules.push("requests");
+  }
 
   if (canAccessModule("factories", roleName, isSuperuser)) {
     modules.push("factories", "trips", "path-points", "countries", "normative-documents", "email-templates");

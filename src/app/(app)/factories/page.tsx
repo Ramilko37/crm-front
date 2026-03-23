@@ -45,6 +45,8 @@ import type {
   FactoryCertificate,
   FactoryEmail,
   FactoryFilterParams,
+  FactoryLoadingAddress,
+  FactoryLoadingAddressWritePayload,
   PaginatedResponse,
 } from "@/shared/types/entities";
 
@@ -98,6 +100,17 @@ type FactoryCertificateForm = {
   expires_date?: dayjs.Dayjs;
 };
 
+type FactoryLoadingAddressForm = {
+  country_id?: number;
+  postcode?: string;
+  city?: string;
+  address?: string;
+  phone?: string;
+  fax?: string;
+  messenger_type?: string;
+  messenger_value?: string;
+};
+
 function formatCertificateStatus(value: FactoryCertificateStatus | null) {
   return formatEnumCode(value);
 }
@@ -136,10 +149,12 @@ function FactoriesPageContent() {
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [emailEditOpen, setEmailEditOpen] = useState(false);
   const [certificateEditOpen, setCertificateEditOpen] = useState(false);
+  const [loadingAddressEditOpen, setLoadingAddressEditOpen] = useState(false);
 
   const [selectedFactory, setSelectedFactory] = useState<Factory | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<FactoryEmail | null>(null);
   const [selectedCertificate, setSelectedCertificate] = useState<FactoryCertificate | null>(null);
+  const [selectedLoadingAddress, setSelectedLoadingAddress] = useState<FactoryLoadingAddress | null>(null);
 
   const [createForm] = Form.useForm<FactoryForm>();
   const [editForm] = Form.useForm<FactoryForm>();
@@ -154,6 +169,8 @@ function FactoriesPageContent() {
   const [emailEditForm] = Form.useForm<FactoryEmailForm>();
   const [certificateCreateForm] = Form.useForm<FactoryCertificateForm>();
   const [certificateEditForm] = Form.useForm<FactoryCertificateForm>();
+  const [loadingAddressCreateForm] = Form.useForm<FactoryLoadingAddressForm>();
+  const [loadingAddressEditForm] = Form.useForm<FactoryLoadingAddressForm>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
@@ -193,6 +210,17 @@ function FactoriesPageContent() {
       : ["factories", "certificates", "idle"],
     queryFn: () =>
       apiRequest<PaginatedResponse<FactoryCertificate>>(`/api/factories/${selectedFactory?.id}/certificates`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: resourcesOpen && Boolean(selectedFactory),
+  });
+
+  const loadingAddressesQuery = useQuery({
+    queryKey: selectedFactory
+      ? queryKeys.factories.loadingAddresses(selectedFactory.id)
+      : ["factories", "loading-addresses", "idle"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${selectedFactory?.id}/loading-addresses`, {
         query: { page: 1, page_size: 200 },
       }),
     enabled: resourcesOpen && Boolean(selectedFactory),
@@ -347,6 +375,83 @@ function FactoriesPageContent() {
     },
   });
 
+  const createLoadingAddressMutation = useMutation({
+    mutationFn: (payload: FactoryLoadingAddressWritePayload) =>
+      apiRequest<FactoryLoadingAddress>(`/api/factories/${selectedFactory?.id}/loading-addresses`, {
+        method: "POST",
+        body: payload,
+      }),
+    onSuccess: async () => {
+      message.success("Адрес загрузки добавлен");
+      loadingAddressCreateForm.resetFields();
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.loadingAddresses(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления адреса загрузки");
+    },
+  });
+
+  const updateLoadingAddressMutation = useMutation({
+    mutationFn: ({ addressId, payload }: { addressId: number; payload: FactoryLoadingAddressWritePayload }) =>
+      apiRequest<FactoryLoadingAddress>(`/api/factories/${selectedFactory?.id}/loading-addresses/${addressId}`, {
+        method: "PATCH",
+        body: payload,
+      }),
+    onSuccess: async () => {
+      message.success("Адрес загрузки обновлен");
+      setLoadingAddressEditOpen(false);
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.loadingAddresses(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления адреса загрузки");
+    },
+  });
+
+  const makePrimaryLoadingAddressMutation = useMutation({
+    mutationFn: (addressId: number) =>
+      apiRequest<FactoryLoadingAddress>(
+        `/api/factories/${selectedFactory?.id}/loading-addresses/${addressId}/make-primary`,
+        { method: "POST" },
+      ),
+    onSuccess: async () => {
+      message.success("Primary адрес обновлен");
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.loadingAddresses(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка смены primary-адреса");
+    },
+  });
+
+  const deleteLoadingAddressMutation = useMutation({
+    mutationFn: (addressId: number) =>
+      apiRequest<null>(`/api/factories/${selectedFactory?.id}/loading-addresses/${addressId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: async () => {
+      message.success("Адрес загрузки удален");
+      if (!selectedFactory) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.factories.loadingAddresses(selectedFactory.id) }),
+        queryClient.invalidateQueries({ queryKey: ["factories"] }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка удаления адреса загрузки");
+    },
+  });
+
   function openEdit(record: Factory) {
     setSelectedFactory(record);
     editForm.setFieldsValue({
@@ -387,6 +492,21 @@ function FactoriesPageContent() {
       expires_date: record.expires_date ? dayjs(record.expires_date) : undefined,
     });
     setCertificateEditOpen(true);
+  }
+
+  function openLoadingAddressEdit(record: FactoryLoadingAddress) {
+    setSelectedLoadingAddress(record);
+    loadingAddressEditForm.setFieldsValue({
+      country_id: record.country_id ?? undefined,
+      postcode: record.postcode ?? undefined,
+      city: record.city ?? undefined,
+      address: record.address ?? undefined,
+      phone: record.phone ?? undefined,
+      fax: record.fax ?? undefined,
+      messenger_type: record.messenger_type ?? undefined,
+      messenger_value: record.messenger_value ?? undefined,
+    });
+    setLoadingAddressEditOpen(true);
   }
 
   const sortOrderFor = (field: string) => {
@@ -443,7 +563,7 @@ function FactoriesPageContent() {
             </Button>
           ) : null}
           <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
-            Emails / Сертификаты
+            Ресурсы
           </Button>
         </Space>
       ),
@@ -568,11 +688,60 @@ function FactoriesPageContent() {
     },
   ];
 
+  const loadingAddressColumns: ColumnsType<FactoryLoadingAddress> = [
+    { title: "ID", dataIndex: "id", key: "id", width: 90 },
+    { title: "Страна ID", dataIndex: "country_id", key: "country_id", width: 110, render: (v) => v ?? "-" },
+    { title: "Город", dataIndex: "city", key: "city", width: 140, render: (v) => v ?? "-" },
+    { title: "Адрес", dataIndex: "address", key: "address", render: (v) => v ?? "-" },
+    { title: "Индекс", dataIndex: "postcode", key: "postcode", width: 120, render: (v) => v ?? "-" },
+    { title: "Телефон", dataIndex: "phone", key: "phone", width: 140, render: (v) => v ?? "-" },
+    {
+      title: "Primary",
+      dataIndex: "is_primary",
+      key: "is_primary",
+      width: 100,
+      render: (value: boolean) => (value ? <Tag color="green">Да</Tag> : "Нет"),
+    },
+    {
+      title: "Действия",
+      key: "actions",
+      width: 320,
+      render: (_, record) =>
+        canMutate ? (
+          <Space wrap>
+            <Button size="small" onClick={() => openLoadingAddressEdit(record)}>
+              Изменить
+            </Button>
+            <Button
+              size="small"
+              disabled={record.is_primary}
+              loading={makePrimaryLoadingAddressMutation.isPending}
+              onClick={() => makePrimaryLoadingAddressMutation.mutate(record.id)}
+            >
+              Сделать primary
+            </Button>
+            <Popconfirm
+              title="Удалить адрес загрузки?"
+              okText="Да"
+              cancelText="Нет"
+              onConfirm={() => deleteLoadingAddressMutation.mutate(record.id)}
+            >
+              <Button size="small" danger>
+                Удалить
+              </Button>
+            </Popconfirm>
+          </Space>
+        ) : (
+          "-"
+        ),
+    },
+  ];
+
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
       <PageHeader
         title="Фабрики"
-        subtitle="Каталог фабрик и nested-ресурсы emails/certificates."
+        subtitle="Каталог фабрик и nested-ресурсы emails/certificates/loading-addresses."
         actions={
           canMutate ? (
             <Button type="primary" onClick={() => setCreateOpen(true)}>
@@ -703,7 +872,7 @@ function FactoriesPageContent() {
                       </Button>
                     ) : null}
                     <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
-                      Emails / Сертификаты
+                      Ресурсы
                     </Button>
                   </div>
                 </article>
@@ -861,8 +1030,11 @@ function FactoriesPageContent() {
           setResourcesOpen(false);
           setSelectedEmail(null);
           setSelectedCertificate(null);
+          setSelectedLoadingAddress(null);
           emailCreateForm.resetFields();
           certificateCreateForm.resetFields();
+          loadingAddressCreateForm.resetFields();
+          loadingAddressEditForm.resetFields();
         }}
       >
         <Tabs
@@ -972,6 +1144,71 @@ function FactoriesPageContent() {
                 </Space>
               ),
             },
+            {
+              key: "loading-addresses",
+              label: "Адреса загрузки",
+              children: (
+                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                  {canMutate ? (
+                    <Form<FactoryLoadingAddressForm>
+                      form={loadingAddressCreateForm}
+                      layout="vertical"
+                      onFinish={(values) => createLoadingAddressMutation.mutate(values)}
+                    >
+                      <div className="crm-filter-grid">
+                        <Form.Item name="country_id" label="Страна ID" className="crm-col-2" style={{ marginBottom: 8 }}>
+                          <InputNumber min={1} style={{ width: "100%" }} />
+                        </Form.Item>
+                        <Form.Item name="city" label="Город" className="crm-col-3" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name="address" label="Адрес" className="crm-col-4" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name="postcode" label="Индекс" className="crm-col-2" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name="phone" label="Телефон" className="crm-col-3" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name="fax" label="Fax" className="crm-col-2" style={{ marginBottom: 8 }}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name="messenger_type"
+                          label="Мессенджер тип"
+                          className="crm-col-2"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name="messenger_value"
+                          label="Мессенджер контакт"
+                          className="crm-col-2"
+                          style={{ marginBottom: 8 }}
+                        >
+                          <Input />
+                        </Form.Item>
+                      </div>
+                      <Button type="primary" htmlType="submit" loading={createLoadingAddressMutation.isPending}>
+                        Добавить адрес загрузки
+                      </Button>
+                    </Form>
+                  ) : null}
+
+                  <Table<FactoryLoadingAddress>
+                    rowKey="id"
+                    loading={loadingAddressesQuery.isLoading}
+                    columns={loadingAddressColumns}
+                    dataSource={loadingAddressesQuery.data?.items ?? []}
+                    pagination={false}
+                    scroll={{ x: 1280 }}
+                    locale={{ emptyText: "Нет адресов загрузки" }}
+                  />
+                </Space>
+              ),
+            },
           ]}
         />
       </Modal>
@@ -1046,6 +1283,52 @@ function FactoriesPageContent() {
           </Form.Item>
           <Form.Item name="expires_date" label="Дата окончания">
             <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Изменить адрес загрузки #${selectedLoadingAddress?.id ?? ""}`}
+        open={loadingAddressEditOpen}
+        destroyOnHidden
+        onCancel={() => setLoadingAddressEditOpen(false)}
+        onOk={() => loadingAddressEditForm.submit()}
+        confirmLoading={updateLoadingAddressMutation.isPending}
+      >
+        <Form<FactoryLoadingAddressForm>
+          form={loadingAddressEditForm}
+          layout="vertical"
+          onFinish={(values) => {
+            if (!selectedLoadingAddress) return;
+            updateLoadingAddressMutation.mutate({
+              addressId: selectedLoadingAddress.id,
+              payload: values,
+            });
+          }}
+        >
+          <Form.Item name="country_id" label="Страна ID">
+            <InputNumber min={1} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="city" label="Город">
+            <Input />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес">
+            <Input />
+          </Form.Item>
+          <Form.Item name="postcode" label="Индекс">
+            <Input />
+          </Form.Item>
+          <Form.Item name="phone" label="Телефон">
+            <Input />
+          </Form.Item>
+          <Form.Item name="fax" label="Fax">
+            <Input />
+          </Form.Item>
+          <Form.Item name="messenger_type" label="Мессенджер тип">
+            <Input />
+          </Form.Item>
+          <Form.Item name="messenger_value" label="Мессенджер контакт">
+            <Input />
           </Form.Item>
         </Form>
       </Modal>

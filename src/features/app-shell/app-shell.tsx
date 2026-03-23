@@ -29,6 +29,7 @@ type ModuleMenuConfig = {
 
 const MODULE_MENU_CONFIG: ModuleMenuConfig[] = [
   { key: "/orders", module: "orders", label: "Заказы" },
+  { key: "/requests", module: "requests", label: "Заявки" },
   { key: "/path-points", module: "path-points", label: "Путевые точки" },
   { key: "/factories", module: "factories", label: "Фабрики" },
   { key: "/trips", module: "trips", label: "Рейсы" },
@@ -41,6 +42,7 @@ const MODULE_MENU_CONFIG: ModuleMenuConfig[] = [
 
 function resolveModule(pathname: string): AppModule {
   if (pathname.startsWith("/orders")) return "orders";
+  if (pathname.startsWith("/requests")) return "requests";
   if (pathname.startsWith("/path-points")) return "path-points";
   if (pathname.startsWith("/factories")) return "factories";
   if (pathname.startsWith("/trips")) return "trips";
@@ -90,6 +92,7 @@ export function AppShell({ children }: Props) {
 
   const selectedKey = useMemo(() => {
     if (pathname.startsWith("/orders")) return "/orders";
+    if (pathname.startsWith("/requests")) return "/requests";
     if (pathname.startsWith("/path-points")) return "/path-points";
     if (pathname.startsWith("/factories")) return "/factories";
     if (pathname.startsWith("/trips")) return "/trips";

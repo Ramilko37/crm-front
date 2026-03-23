@@ -1,6 +1,9 @@
 import type {
   FactoryCertificateStatus,
+  OrderType,
   OrderStatus,
+  QuoteStatus,
+  RequestStatus,
   RoleName,
   TripStatus,
   TripType,
@@ -82,7 +85,16 @@ export type Order = {
   order_number: string;
   user_id: number;
   company_id: number | null;
+  order_type: OrderType | null;
+  quote_status: QuoteStatus | null;
+  quote_price_amount: string | null;
+  quote_price_currency: string | null;
+  special_tariff_amount: string | null;
+  special_tariff_currency: string | null;
+  quote_priced_at: string | null;
+  quote_client_decision_at: string | null;
   factory_id: number;
+  factory_loading_address_id: number | null;
   trip_id: number | null;
   invoice_number: string | null;
   country: string | null;
@@ -114,6 +126,8 @@ export type OrderWritePayload = {
   order_number?: string;
   user_id?: number;
   factory_id?: number;
+  order_type?: OrderType;
+  quote_status?: QuoteStatus;
   trip_id?: number | null;
   invoice_number?: string;
   country?: string;
@@ -161,6 +175,31 @@ export type FactoryEmail = {
   is_primary: boolean;
 };
 
+export type FactoryLoadingAddress = {
+  id: number;
+  factory_id: number;
+  country_id: number | null;
+  postcode: string | null;
+  city: string | null;
+  address: string | null;
+  phone: string | null;
+  fax: string | null;
+  messenger_type: string | null;
+  messenger_value: string | null;
+  is_primary: boolean;
+};
+
+export type FactoryLoadingAddressWritePayload = {
+  country_id?: number | null;
+  postcode?: string | null;
+  city?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  fax?: string | null;
+  messenger_type?: string | null;
+  messenger_value?: string | null;
+};
+
 export type FactoryCertificate = {
   id: number;
   factory_id: number;
@@ -203,6 +242,8 @@ export type ListParams = {
 export type OrderFilterParams = ListParams & {
   query?: string;
   status_names?: OrderStatus[];
+  order_types?: OrderType[];
+  quote_statuses?: QuoteStatus[];
   user_id?: number;
   company_id?: number;
   factory_id?: number;
@@ -374,4 +415,56 @@ export type EmailTemplateFilterParams = ListParams & {
   query?: string;
   ids?: number[];
   is_active?: boolean;
+};
+
+export type Request = {
+  id: number;
+  request_number: string;
+  company_id: number;
+  contact_user_id: number | null;
+  contact_name_snapshot: string | null;
+  payload_json: Record<string, unknown> | null;
+  comment: string | null;
+  status: RequestStatus;
+  created_at: string;
+  updated_at: string | null;
+};
+
+export type RequestFilterParams = ListParams & {
+  status?: RequestStatus;
+};
+
+export type RequestCreatePayload = {
+  request: {
+    company_id: number;
+    contact_user_id?: number;
+    contact_name_snapshot?: string;
+    payload_json?: Record<string, unknown>;
+    comment?: string;
+  };
+  documents?: Array<{
+    document_type: string;
+    file_slot: string;
+    display_name?: string;
+  }>;
+};
+
+export type ClientFactoryListItem = {
+  id: number;
+  name: string;
+  country: string | null;
+  city: string | null;
+  primary_email: string | null;
+};
+
+export type ClientFactoryDetail = {
+  id: number;
+  name: string;
+  country: string | null;
+  city: string | null;
+  address: string | null;
+  postcode: string | null;
+  phone: string | null;
+  primary_email: string | null;
+  loading_addresses: FactoryLoadingAddress[];
 };

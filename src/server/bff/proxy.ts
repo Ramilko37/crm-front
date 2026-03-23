@@ -13,12 +13,18 @@ async function parseBackendPayload(response: Response): Promise<unknown> {
   return response.text();
 }
 
-function createHeaders(request: NextRequest, token: string | null): Headers {
+function createHeaders(
+  request: NextRequest,
+  token: string | null,
+  options: {
+    omitContentType?: boolean;
+  } = {},
+): Headers {
   const headers = new Headers();
   headers.set("Accept", "application/json");
 
   const contentType = request.headers.get("content-type");
-  if (contentType) {
+  if (!options.omitContentType && contentType) {
     headers.set("Content-Type", contentType);
   }
 
@@ -29,37 +35,14 @@ function createHeaders(request: NextRequest, token: string | null): Headers {
   return headers;
 }
 
-export async function proxyToBackend(
-  request: NextRequest,
-  backendPath: string,
-  options: {
-    requireAuth?: boolean;
-    methodOverride?: string;
-  } = {},
-) {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(ACCESS_COOKIE_NAME)?.value ?? null;
-
-  if (options.requireAuth !== false && !token) {
-    return NextResponse.json(getUnauthorizedPayload(), {
-      status: 401,
-      headers: { "WWW-Authenticate": "Bearer" },
-    });
-  }
-
-  const targetUrl = buildBackendUrl(backendPath, request.nextUrl.search);
-  const method = options.methodOverride ?? request.method;
-  const body = method === "GET" || method === "HEAD" ? undefined : await request.text();
-
-  const response = await fetch(targetUrl, {
-    method,
-    headers: createHeaders(request, token),
-    body,
-    cache: "no-store",
+function createUnauthorizedResponse() {
+  return NextResponse.json(getUnauthorizedPayload(), {
+    status: 401,
+    headers: { "WWW-Authenticate": "Bearer" },
   });
+}
 
-  const payload = await parseBackendPayload(response);
-
+function toResponse(response: Response, payload: unknown) {
   if (typeof payload === "string") {
     return new NextResponse(payload, {
       status: response.status,
@@ -77,6 +60,42 @@ export async function proxyToBackend(
   });
 }
 
+export async function proxyToBackend(
+  request: NextRequest,
+  backendPath: string,
+  options: {
+    requireAuth?: boolean;
+    methodOverride?: string;
+  } = {},
+) {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(ACCESS_COOKIE_NAME)?.value ?? null;
+
+  if (options.requireAuth !== false && !token) {
+    return createUnauthorizedResponse();
+  }
+
+  const targetUrl = buildBackendUrl(backendPath, request.nextUrl.search);
+  const method = options.methodOverride ?? request.method;
+  let body: ArrayBuffer | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    const rawBody = await request.arrayBuffer();
+    if (rawBody.byteLength > 0) {
+      body = rawBody;
+    }
+  }
+
+  const response = await fetch(targetUrl, {
+    method,
+    headers: createHeaders(request, token),
+    body,
+    cache: "no-store",
+  });
+
+  const payload = await parseBackendPayload(response);
+  return toResponse(response, payload);
+}
+
 export async function postToBackend(path: string, payload: unknown) {
   const response = await fetch(buildBackendUrl(path, ""), {
     method: "POST",
@@ -90,4 +109,44 @@ export async function postToBackend(path: string, payload: unknown) {
 
   const data = await parseBackendPayload(response);
   return { response, data };
+}
+
+export async function proxyJsonPayloadAsMultipart(
+  request: NextRequest,
+  backendPath: string,
+  options: {
+    requireAuth?: boolean;
+    methodOverride?: string;
+    payloadBuilder?: (payload: unknown) => unknown;
+  } = {},
+) {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(ACCESS_COOKIE_NAME)?.value ?? null;
+
+  if (options.requireAuth !== false && !token) {
+    return createUnauthorizedResponse();
+  }
+
+  let incomingPayload: unknown;
+  try {
+    incomingPayload = await request.json();
+  } catch {
+    return NextResponse.json({ detail: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const payload = options.payloadBuilder ? options.payloadBuilder(incomingPayload) : incomingPayload;
+  const formData = new FormData();
+  formData.set("payload", JSON.stringify(payload));
+
+  const targetUrl = buildBackendUrl(backendPath, request.nextUrl.search);
+  const method = options.methodOverride ?? request.method;
+  const response = await fetch(targetUrl, {
+    method,
+    headers: createHeaders(request, token, { omitContentType: true }),
+    body: formData,
+    cache: "no-store",
+  });
+
+  const backendPayload = await parseBackendPayload(response);
+  return toResponse(response, backendPayload);
 }
