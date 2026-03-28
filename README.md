@@ -64,6 +64,12 @@ pnpm build
 
 See [REPORT_ROADMAP.md](./REPORT_ROADMAP.md).
 
+## QA Smoke
+
+Production smoke checklist for roles/actions/file flows:
+
+- See [QA_SMOKE_CHECKLIST.md](./QA_SMOKE_CHECKLIST.md).
+
 ## Free Deployment
 
 Free production-like deployment (Vercel + Render + Supabase):
