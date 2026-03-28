@@ -8,6 +8,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const contentType = request.headers.get("content-type") ?? "";
+
+  // Canonical request create is multipart/form-data. In that case proxy body as-is.
+  if (contentType.includes("multipart/form-data")) {
+    return proxyToBackend(request, "/requests");
+  }
+
+  // Keep backward compatibility for JSON callers.
   return proxyJsonPayloadAsMultipart(request, "/requests", {
     payloadBuilder: buildRequestMultipartPayload,
   });

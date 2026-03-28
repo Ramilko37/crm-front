@@ -26,11 +26,18 @@ import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
 import { formatEnumCode, REQUEST_STATUS_VALUES, type RequestStatus } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
+import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
-import type { PaginatedResponse, Request, RequestDocument, RequestFilterParams } from "@/shared/types/entities";
+import type {
+  PaginatedResponse,
+  Request,
+  RequestCreatePayload,
+  RequestDocument,
+  RequestFilterParams,
+} from "@/shared/types/entities";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -61,6 +68,8 @@ type RequestCreateForm = {
   contact_name_snapshot?: string;
   comment?: string;
   payload_json?: string;
+  document_type?: string;
+  files?: FileList;
 };
 
 function RequestsPageContent() {
@@ -77,6 +86,7 @@ function RequestsPageContent() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<number | null>(null);
   const [createForm] = Form.useForm<RequestCreateForm>();
   const [filterForm] = Form.useForm<{ status?: RequestStatus; query?: string }>();
 
@@ -112,15 +122,35 @@ function RequestsPageContent() {
         parsedPayloadJson = JSON.parse(payload.payload_json) as Record<string, unknown>;
       }
 
-      return apiRequest<Request>("/api/requests", {
-        method: "POST",
-        body: {
+      const files = payload.files ? Array.from(payload.files) : [];
+      const requestPayload: RequestCreatePayload = {
+        request: {
           company_id: payload.company_id,
           contact_user_id: payload.contact_user_id,
           contact_name_snapshot: payload.contact_name_snapshot,
           comment: payload.comment,
           payload_json: parsedPayloadJson,
         },
+      };
+
+      if (files.length > 0) {
+        requestPayload.documents = files.map((file, index) => ({
+          document_type: payload.document_type?.trim() || "attachment",
+          file_slot: `request_file_${index + 1}`,
+          display_name: file.name,
+        }));
+      }
+
+      const formData = new FormData();
+      formData.set("payload", JSON.stringify(requestPayload));
+
+      files.forEach((file, index) => {
+        formData.append(`request_file_${index + 1}`, file);
+      });
+
+      return apiRequest<Request>("/api/requests", {
+        method: "POST",
+        body: formData,
       });
     },
     onSuccess: async () => {
@@ -134,9 +164,25 @@ function RequestsPageContent() {
         message.error("payload_json должен быть валидным JSON");
         return;
       }
+      if (error instanceof ApiError && error.status === 503) {
+        message.error(getFileOperationErrorMessage(error, "Ошибка создания заявки"));
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка создания заявки");
     },
   });
+
+  async function handleRequestDocumentDownload(requestId: number, row: RequestDocument) {
+    const fallbackName = row.file_name || `request-${requestId}-document-${row.id}`;
+    setDownloadingDocumentId(row.id);
+    try {
+      await downloadFileWithCredentials(`/api/requests/${requestId}/documents/${row.id}/download`, fallbackName);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания документа"));
+    } finally {
+      setDownloadingDocumentId(null);
+    }
+  }
 
   function applySearchPatch(
     patch: Record<string, string | number | boolean | (string | number | boolean)[] | null | undefined>,
@@ -361,6 +407,17 @@ function RequestsPageContent() {
           <Form.Item name="payload_json" label="payload_json (JSON)">
             <Input.TextArea rows={5} placeholder='{"source":"frontend"}' />
           </Form.Item>
+          <Form.Item name="document_type" label="Тип документов (опционально)">
+            <Input placeholder="например: invoice" />
+          </Form.Item>
+          <Form.Item
+            name="files"
+            label="Файлы документов"
+            valuePropName="fileList"
+            getValueFromEvent={(event) => (event?.target?.files as FileList | undefined) || undefined}
+          >
+            <Input type="file" multiple />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -423,7 +480,14 @@ function RequestsPageContent() {
               width: 130,
               render: (_, row) =>
                 selectedRequestId ? (
-                  <Button size="small" type="link" href={`/api/requests/${selectedRequestId}/documents/${row.id}/download`}>
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={downloadingDocumentId === row.id}
+                    onClick={() => {
+                      void handleRequestDocumentDownload(selectedRequestId, row);
+                    }}
+                  >
                     Скачать
                   </Button>
                 ) : null,

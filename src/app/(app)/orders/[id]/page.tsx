@@ -20,11 +20,12 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { apiRequest } from "@/shared/lib/api";
 import { formatEnumCode, ORDER_STATUS_VALUES, type OrderStatus } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
+import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { PageHeader } from "@/shared/ui/page-frame";
 import type {
@@ -69,6 +70,8 @@ export default function OrderDetailPage() {
     expires_date?: string;
   }>();
   const [certificateFileForm] = Form.useForm<{ file?: FileList }>();
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<number | null>(null);
+  const [certificateDownloadPending, setCertificateDownloadPending] = useState(false);
 
   const orderQuery = useQuery({
     queryKey: queryKeys.orders.detail(orderId),
@@ -299,7 +302,7 @@ export default function OrderDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка загрузки документа");
+      message.error(getFileOperationErrorMessage(error, "Ошибка загрузки документа"));
     },
   });
 
@@ -344,7 +347,7 @@ export default function OrderDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка загрузки файла сертификата");
+      message.error(getFileOperationErrorMessage(error, "Ошибка загрузки файла сертификата"));
     },
   });
 
@@ -398,7 +401,14 @@ export default function OrderDetailPage() {
       key: "actions",
       width: 140,
       render: (_, row) => (
-        <Button size="small" type="link" href={`/api/orders/${orderId}/documents/${row.id}/download`}>
+        <Button
+          size="small"
+          type="link"
+          loading={downloadingDocumentId === row.id}
+          onClick={() => {
+            void handleDocumentDownload(row);
+          }}
+        >
           Скачать
         </Button>
       ),
@@ -444,6 +454,29 @@ export default function OrderDetailPage() {
   ];
 
   const goodsLines = useMemo(() => order?.goods_lines ?? [], [order?.goods_lines]);
+
+  async function handleDocumentDownload(row: OrderDocument) {
+    const fallbackName = row.file_name || `order-${orderId}-document-${row.id}`;
+    setDownloadingDocumentId(row.id);
+    try {
+      await downloadFileWithCredentials(`/api/orders/${orderId}/documents/${row.id}/download`, fallbackName);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания документа"));
+    } finally {
+      setDownloadingDocumentId(null);
+    }
+  }
+
+  async function handleCertificateDownload() {
+    setCertificateDownloadPending(true);
+    try {
+      await downloadFileWithCredentials(`/api/orders/${orderId}/certificate/download`, `order-${orderId}-certificate`);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания сертификата"));
+    } finally {
+      setCertificateDownloadPending(false);
+    }
+  }
 
   if (orderQuery.isLoading) {
     return <Card className="crm-panel" loading />;
@@ -685,7 +718,14 @@ export default function OrderDetailPage() {
             <Descriptions.Item label="Истекает">{certificate?.expires_date ?? "-"}</Descriptions.Item>
             <Descriptions.Item label="Файл" span={screens.lg ? 2 : 1}>
               {certificate?.file_path ? (
-                <Button size="small" type="link" href={`/api/orders/${orderId}/certificate/download`}>
+                <Button
+                  size="small"
+                  type="link"
+                  loading={certificateDownloadPending}
+                  onClick={() => {
+                    void handleCertificateDownload();
+                  }}
+                >
                   Скачать сертификат
                 </Button>
               ) : (
