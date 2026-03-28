@@ -42,21 +42,48 @@ function createUnauthorizedResponse() {
   });
 }
 
-function toResponse(response: Response, payload: unknown) {
-  if (typeof payload === "string") {
-    return new NextResponse(payload, {
+function pickForwardHeaders(response: Response) {
+  const nextHeaders = new Headers();
+
+  const contentType = response.headers.get("content-type");
+  if (contentType) {
+    nextHeaders.set("Content-Type", contentType);
+  }
+
+  const contentDisposition = response.headers.get("content-disposition");
+  if (contentDisposition) {
+    nextHeaders.set("Content-Disposition", contentDisposition);
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    nextHeaders.set("Content-Length", contentLength);
+  }
+
+  const wwwAuthenticate = response.headers.get("www-authenticate");
+  if (wwwAuthenticate) {
+    nextHeaders.set("WWW-Authenticate", wwwAuthenticate);
+  }
+
+  return nextHeaders;
+}
+
+async function toProxyResponse(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  const headers = pickForwardHeaders(response);
+
+  if (contentType.includes("application/json")) {
+    const payload = await response.json();
+    return NextResponse.json(payload, {
       status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("content-type") ?? "text/plain",
-      },
+      headers,
     });
   }
 
-  return NextResponse.json(payload, {
+  const payload = await response.arrayBuffer();
+  return new NextResponse(payload, {
     status: response.status,
-    headers: response.headers.get("www-authenticate")
-      ? { "WWW-Authenticate": response.headers.get("www-authenticate") ?? "Bearer" }
-      : undefined,
+    headers,
   });
 }
 
@@ -92,8 +119,7 @@ export async function proxyToBackend(
     cache: "no-store",
   });
 
-  const payload = await parseBackendPayload(response);
-  return toResponse(response, payload);
+  return toProxyResponse(response);
 }
 
 export async function postToBackend(path: string, payload: unknown) {
@@ -147,6 +173,5 @@ export async function proxyJsonPayloadAsMultipart(
     cache: "no-store",
   });
 
-  const backendPayload = await parseBackendPayload(response);
-  return toResponse(response, backendPayload);
+  return toProxyResponse(response);
 }

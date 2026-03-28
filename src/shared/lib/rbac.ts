@@ -19,6 +19,8 @@ const INTERNAL_READ_ROLES = new Set<RoleName>([
   "forwarder",
 ]);
 
+const CLIENT_MESSAGES_READ_ROLES = new Set<RoleName>(["administrator", "manager", "logist"]);
+
 const KNOWN_ROLES = new Set<RoleName>([
   "administrator",
   "manager",
@@ -32,6 +34,7 @@ const KNOWN_ROLES = new Set<RoleName>([
 
 export type AppModule =
   | "orders"
+  | "client-messages"
   | "requests"
   | "factories"
   | "trips"
@@ -87,11 +90,19 @@ export function canAccessModule(module: AppModule, roleName: RoleLike, isSuperus
     return normalizedRole === "administrator" || normalizedRole === "manager";
   }
 
+  if (module === "client-messages") {
+    return CLIENT_MESSAGES_READ_ROLES.has(normalizedRole);
+  }
+
   return INTERNAL_READ_ROLES.has(normalizedRole);
 }
 
 export function getVisibleModules(roleName: RoleLike, isSuperuser = false): AppModule[] {
   const modules: AppModule[] = ["orders"];
+
+  if (canAccessModule("client-messages", roleName, isSuperuser)) {
+    modules.push("client-messages");
+  }
 
   if (canAccessModule("requests", roleName, isSuperuser)) {
     modules.push("requests");

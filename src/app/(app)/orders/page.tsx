@@ -3,6 +3,7 @@
 import {
   ApartmentOutlined,
   EditOutlined,
+  MessageOutlined,
   MoreOutlined,
   SwapOutlined,
 } from "@ant-design/icons";
@@ -48,7 +49,7 @@ import { ApiError } from "@/shared/lib/errors";
 import { toOrderWritePayload } from "@/shared/lib/order-dto";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
-import { isBackOfficeRole, normalizeRoleName } from "@/shared/lib/rbac";
+import { normalizeRoleName } from "@/shared/lib/rbac";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
@@ -56,11 +57,13 @@ import type {
   ClientFactoryListItem,
   Factory,
   FactoryLoadingAddress,
-  Order,
+  OrderDetail,
   OrderFilterParams,
+  OrderListItem,
   OrderWritePayload,
   PaginatedResponse,
   Trip,
+  UserAdmin,
 } from "@/shared/types/entities";
 
 type OrderCreateForm = {
@@ -89,42 +92,10 @@ type OrderBulkEndpoint =
   | "archive"
   | "delete"
   | "warehouse-comment"
-  | "forwarder-comment";
-
-const quickStatusTabs: Array<{
-  key: string;
-  label: string;
-  status?: OrderStatus;
-  tone?: "danger";
-}> = [
-  { key: "all", label: "Все" },
-  { key: "new_request", label: "Новые", status: "new_request" },
-  { key: "factory_confirmed", label: "Подтверждены фабрикой", status: "factory_confirmed" },
-  { key: "in_transportation", label: "Транспортировка", status: "in_transportation" },
-  { key: "released_to_client", label: "Выдано клиенту", status: "released_to_client" },
-  { key: "archived", label: "Архив", status: "archived" },
-  { key: "deleted", label: "Удаленные", status: "deleted", tone: "danger" },
-];
-
-const statusTagColors: Partial<Record<OrderStatus, string>> = {
-  new_request: "blue",
-  in_transportation: "cyan",
-  released_to_client: "green",
-  archived: "default",
-  deleted: "red",
-};
-
-function renderOrderStatus(value: OrderStatus | null) {
-  if (!value) {
-    return <Tag className="crm-status-tag">-</Tag>;
-  }
-
-  return (
-    <Tag color={statusTagColors[value] ?? "default"} className="crm-status-tag">
-      {formatEnumCode(value)}
-    </Tag>
-  );
-}
+  | "forwarder-comment"
+  | "pickup-date"
+  | "cancel-pickup"
+  | "special-tariff";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -138,24 +109,39 @@ function parseBool(value: string | null): boolean | undefined {
   return undefined;
 }
 
+function renderOrderStatus(value: OrderStatus | null) {
+  if (!value) {
+    return <Tag className="crm-status-tag">-</Tag>;
+  }
+  return <Tag className="crm-status-tag">{formatEnumCode(value)}</Tag>;
+}
+
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
   return {
     page: parseNumber(searchParams.get("page")) ?? 1,
     page_size: parseNumber(searchParams.get("page_size")) ?? 50,
     sort_by: searchParams.get("sort_by") ?? undefined,
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
+    id: parseNumber(searchParams.get("id")),
     query: searchParams.get("query") ?? undefined,
+    quick_tab: searchParams.get("quick_tab") ?? undefined,
     status_names: parseSearchArray(searchParams, "status_names") as OrderStatus[],
     order_types: parseSearchArray(searchParams, "order_types") as OrderType[],
     quote_statuses: parseSearchArray(searchParams, "quote_statuses") as QuoteStatus[],
+    priority_codes: parseSearchArray(searchParams, "priority_codes"),
+    office_mark_codes: parseSearchArray(searchParams, "office_mark_codes"),
+    document_type: searchParams.get("document_type") ?? undefined,
     country: searchParams.get("country") ?? undefined,
     user_id: parseNumber(searchParams.get("user_id")),
     company_id: parseNumber(searchParams.get("company_id")),
+    personal_manager_id: parseNumber(searchParams.get("personal_manager_id")),
+    assigned_forwarder_user_id: parseNumber(searchParams.get("assigned_forwarder_user_id")),
     factory_id: parseNumber(searchParams.get("factory_id")),
     trip_id: parseNumber(searchParams.get("trip_id")),
     has_mrn: parseBool(searchParams.get("has_mrn")),
     has_certificate: parseBool(searchParams.get("has_certificate")),
     has_documents: parseBool(searchParams.get("has_documents")),
+    is_checked: parseBool(searchParams.get("is_checked")),
     order_date_from: searchParams.get("order_date_from") ?? undefined,
     order_date_to: searchParams.get("order_date_to") ?? undefined,
   };
@@ -172,93 +158,118 @@ function OrdersPageContent() {
   const meQuery = useCurrentUser(true);
   const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
   const isClientRole = normalizedRole === "client" && !meQuery.data?.is_superuser;
-  const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
-  const canCreate = canMutate || isClientRole;
+  const canWriteOrder =
+    meQuery.data?.is_superuser ||
+    ["administrator", "manager", "logist", "accountant", "warehouse"].includes(normalizedRole);
+  const canCreate =
+    isClientRole ||
+    meQuery.data?.is_superuser ||
+    ["administrator", "manager", "logist", "forwarder"].includes(normalizedRole);
+  const canRunOperationalActions =
+    meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [assignForwarderOpen, setAssignForwarderOpen] = useState(false);
+  const [pickupOpen, setPickupOpen] = useState(false);
+  const [specialTariffOpen, setSpecialTariffOpen] = useState(false);
+  const [requestToFactoryOpen, setRequestToFactoryOpen] = useState(false);
   const [quotePriceOpen, setQuotePriceOpen] = useState(false);
   const [quoteDecisionOpen, setQuoteDecisionOpen] = useState(false);
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const [bulkPickupOpen, setBulkPickupOpen] = useState(false);
+  const [bulkSpecialTariffOpen, setBulkSpecialTariffOpen] = useState(false);
   const [bulkCommentOpen, setBulkCommentOpen] = useState(false);
   const [bulkCommentTarget, setBulkCommentTarget] = useState<"warehouse" | "forwarder">("warehouse");
-  const [selected, setSelected] = useState<Order | null>(null);
+  const [selected, setSelected] = useState<OrderListItem | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const [createForm] = Form.useForm<OrderCreateForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
   const [statusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
+  const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
+  const [pickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [specialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
+  const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
   const [quotePriceForm] = Form.useForm<{ amount: number; currency?: string }>();
   const [quoteDecisionForm] = Form.useForm<{ decision: "agree" | "decline" | "request_again" }>();
   const [filterForm] = Form.useForm<{
+    id?: number;
     query?: string;
     country?: string;
     status_names?: OrderStatus[];
     order_types?: OrderType[];
     quote_statuses?: QuoteStatus[];
     user_id?: number;
+    company_id?: number;
+    personal_manager_id?: number;
+    assigned_forwarder_user_id?: number;
     factory_id?: number;
     trip_id?: number;
     order_date_from?: dayjs.Dayjs;
     order_date_to?: dayjs.Dayjs;
     has_certificate?: boolean;
     has_documents?: boolean;
+    is_checked?: boolean;
+    document_type?: string;
+    priority_codes?: string[];
+    office_mark_codes?: string[];
   }>();
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
+  const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [bulkSpecialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
-    params.query ||
+    params.id ||
+      params.query ||
       params.country ||
+      params.document_type ||
       (params.status_names?.length ?? 0) > 0 ||
       (params.order_types?.length ?? 0) > 0 ||
-      (params.quote_statuses?.length ?? 0) > 0,
+      (params.quote_statuses?.length ?? 0) > 0 ||
+      (params.priority_codes?.length ?? 0) > 0 ||
+      (params.office_mark_codes?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
 
   useEffect(() => {
     filterForm.setFieldsValue({
+      id: params.id,
       query: params.query,
       country: params.country,
       status_names: params.status_names?.length ? params.status_names : undefined,
       order_types: params.order_types?.length ? params.order_types : undefined,
       quote_statuses: params.quote_statuses?.length ? params.quote_statuses : undefined,
       user_id: params.user_id,
+      company_id: params.company_id,
+      personal_manager_id: params.personal_manager_id,
+      assigned_forwarder_user_id: params.assigned_forwarder_user_id,
       factory_id: params.factory_id,
       trip_id: params.trip_id,
       order_date_from: params.order_date_from ? dayjs(params.order_date_from) : undefined,
       order_date_to: params.order_date_to ? dayjs(params.order_date_to) : undefined,
       has_certificate: params.has_certificate,
       has_documents: params.has_documents,
+      is_checked: params.is_checked,
+      document_type: params.document_type,
+      priority_codes: params.priority_codes?.length ? params.priority_codes : undefined,
+      office_mark_codes: params.office_mark_codes?.length ? params.office_mark_codes : undefined,
     });
-  }, [
-    filterForm,
-    params.country,
-    params.factory_id,
-    params.has_certificate,
-    params.has_documents,
-    params.order_date_from,
-    params.order_date_to,
-    params.order_types,
-    params.query,
-    params.quote_statuses,
-    params.status_names,
-    params.trip_id,
-    params.user_id,
-  ]);
+  }, [filterForm, params]);
 
   const listQuery = useQuery({
     queryKey: queryKeys.orders.list(params),
     queryFn: () =>
-      apiRequest<PaginatedResponse<Order>>("/api/orders", {
+      apiRequest<PaginatedResponse<OrderListItem>>("/api/orders", {
         query: params,
       }),
   });
@@ -269,6 +280,15 @@ function OrdersPageContent() {
       apiRequest<PaginatedResponse<Trip>>("/api/trips", {
         query: { page: 1, page_size: 200 },
       }),
+  });
+
+  const forwardersQuery = useQuery({
+    queryKey: queryKeys.users.list({ page: 1, page_size: 200, role_name: "forwarder" }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<UserAdmin>>("/api/users", {
+        query: { page: 1, page_size: 200, role_name: "forwarder" },
+      }),
+    enabled: canRunOperationalActions,
   });
 
   const factoryOptionsQuery = useQuery({
@@ -340,12 +360,19 @@ function OrdersPageContent() {
     createForm.setFieldValue("loading_address_id", primaryAddress.id);
   }, [createFactoryId, createForm, createLoadingAddressId, createOpen, loadingAddressesQuery.data]);
 
+  function invalidateOrdersQueries(orderId?: number) {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["orders"] }),
+      orderId ? queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(orderId) }) : Promise.resolve(),
+    ]);
+  }
+
   const createMutation = useMutation({
     mutationFn: async (payload: OrderCreateForm) => {
       const ready_date = payload.ready_date.format("YYYY-MM-DD");
 
       if (isClientRole) {
-        return apiRequest<Order>("/api/client/orders", {
+        return apiRequest<OrderDetail>("/api/client/orders", {
           method: "POST",
           body: {
             order_number: payload.order_number,
@@ -359,7 +386,7 @@ function OrdersPageContent() {
         });
       }
 
-      return apiRequest<Order>("/api/orders", {
+      return apiRequest<OrderDetail>("/api/orders", {
         method: "POST",
         body: {
           order_number: payload.order_number,
@@ -379,8 +406,7 @@ function OrdersPageContent() {
       message.success("Заказ создан");
       setCreateOpen(false);
       createForm.resetFields();
-      setSelected(null);
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await invalidateOrdersQueries();
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка создания заказа");
@@ -389,17 +415,14 @@ function OrdersPageContent() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: OrderEditForm }) =>
-      apiRequest<Order>(`/api/orders/${id}`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}`, {
         method: "PATCH",
         body: toOrderWritePayload(payload as OrderWritePayload),
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, values) => {
       message.success("Заказ обновлен");
       setEditOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
-      if (selected) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
-      }
+      await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка обновления заказа");
@@ -408,58 +431,143 @@ function OrdersPageContent() {
 
   const changeStatusMutation = useMutation({
     mutationFn: ({ id, status_name, status_date }: { id: number; status_name: OrderStatus; status_date?: string }) =>
-      apiRequest<Order>(`/api/orders/${id}/status`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/status`, {
         method: "POST",
         body: {
           status_name,
           status_date,
         },
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, values) => {
       message.success("Статус обновлен");
       setStatusOpen(false);
       statusForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка обновления статуса");
     },
   });
 
-  const assignMutation = useMutation({
+  const assignTripMutation = useMutation({
     mutationFn: ({ id, trip_id }: { id: number; trip_id?: number }) =>
-      apiRequest<Order>(`/api/orders/${id}/assign-trip`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/assign-trip`, {
         method: "POST",
         body: { trip_id: trip_id ?? null },
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, values) => {
       message.success("Рейс назначен");
       setAssignOpen(false);
       assignForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
     },
   });
 
+  const assignForwarderMutation = useMutation({
+    mutationFn: ({ id, assigned_forwarder_user_id }: { id: number; assigned_forwarder_user_id?: number }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/assign-forwarder`, {
+        method: "POST",
+        body: { assigned_forwarder_user_id: assigned_forwarder_user_id ?? null },
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Экспедитор назначен");
+      setAssignForwarderOpen(false);
+      assignForwarderForm.resetFields();
+      await invalidateOrdersQueries(values.id);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения экспедитора");
+    },
+  });
+
+  const pickupDateMutation = useMutation({
+    mutationFn: ({ id, pickup_date }: { id: number; pickup_date: string }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/pickup-date`, {
+        method: "POST",
+        body: { pickup_date },
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Дата вывоза назначена");
+      setPickupOpen(false);
+      pickupForm.resetFields();
+      await invalidateOrdersQueries(values.id);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения даты вывоза");
+    },
+  });
+
+  const cancelPickupMutation = useMutation({
+    mutationFn: ({ id }: { id: number }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/cancel-pickup`, {
+        method: "POST",
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Дата вывоза отменена");
+      await invalidateOrdersQueries(values.id);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка отмены вывоза");
+    },
+  });
+
+  const specialTariffMutation = useMutation({
+    mutationFn: ({ id, amount, currency }: { id: number; amount?: number | null; currency: string }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
+        method: "POST",
+        body: {
+          amount: amount ?? null,
+          currency,
+        },
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Спецтариф обновлен");
+      setSpecialTariffOpen(false);
+      specialTariffForm.resetFields();
+      await invalidateOrdersQueries(values.id);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка спецтарифа");
+    },
+  });
+
+  const requestToFactoryMutation = useMutation({
+    mutationFn: ({ id, comment, template_id }: { id: number; comment?: string; template_id?: number }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/request-to-factory`, {
+        method: "POST",
+        body: {
+          comment: comment ?? null,
+          template_id: template_id ?? null,
+        },
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Запрос на фабрику отправлен");
+      setRequestToFactoryOpen(false);
+      requestToFactoryForm.resetFields();
+      await invalidateOrdersQueries(values.id);
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка отправки запроса");
+    },
+  });
+
   const quotePriceMutation = useMutation({
     mutationFn: ({ id, amount, currency }: { id: number; amount: number; currency?: string }) =>
-      apiRequest<Order>(`/api/orders/${id}/quote-price`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/quote-price`, {
         method: "POST",
         body: {
           amount,
           currency: currency || "EUR",
         },
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, values) => {
       message.success("Цена квоты обновлена");
       setQuotePriceOpen(false);
       quotePriceForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
-      if (selected) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
-      }
+      await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка обновления цены квоты");
@@ -468,18 +576,15 @@ function OrdersPageContent() {
 
   const quoteDecisionMutation = useMutation({
     mutationFn: ({ id, decision }: { id: number; decision: "agree" | "decline" | "request_again" }) =>
-      apiRequest<Order>(`/api/orders/${id}/quote-decision`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/quote-decision`, {
         method: "POST",
         body: { decision },
       }),
-    onSuccess: async () => {
+    onSuccess: async (_, values) => {
       message.success("Решение по квоте отправлено");
       setQuoteDecisionOpen(false);
       quoteDecisionForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
-      if (selected) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
-      }
+      await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка отправки решения по квоте");
@@ -488,7 +593,7 @@ function OrdersPageContent() {
 
   const bulkMutation = useMutation({
     mutationFn: ({ endpoint, body }: { endpoint: OrderBulkEndpoint; body: Record<string, unknown> }) =>
-      apiRequest<BulkMutationResponse<Order>>(`/api/orders/bulk/${endpoint}`, {
+      apiRequest<BulkMutationResponse<OrderListItem>>(`/api/orders/bulk/${endpoint}`, {
         method: "POST",
         body,
       }),
@@ -496,12 +601,16 @@ function OrdersPageContent() {
       message.success(`Операция выполнена. Обновлено: ${payload.updated_count}`);
       setBulkStatusOpen(false);
       setBulkAssignOpen(false);
+      setBulkPickupOpen(false);
+      setBulkSpecialTariffOpen(false);
       setBulkCommentOpen(false);
       bulkStatusForm.resetFields();
       bulkAssignForm.resetFields();
+      bulkPickupForm.resetFields();
+      bulkSpecialTariffForm.resetFields();
       bulkCommentForm.resetFields();
       setSelectedRowKeys([]);
-      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await invalidateOrdersQueries();
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка массовой операции");
@@ -520,7 +629,7 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
-  function openEdit(record: Order) {
+  function openEdit(record: OrderListItem) {
     setSelected(record);
     editForm.setFieldsValue({
       order_number: record.order_number,
@@ -531,7 +640,7 @@ function OrdersPageContent() {
     setEditOpen(true);
   }
 
-  function openStatus(record: Order) {
+  function openStatus(record: OrderListItem) {
     setSelected(record);
     statusForm.setFieldsValue({
       status_name: record.status_name ?? undefined,
@@ -540,13 +649,40 @@ function OrdersPageContent() {
     setStatusOpen(true);
   }
 
-  function openAssign(record: Order) {
+  function openAssign(record: OrderListItem) {
     setSelected(record);
     assignForm.setFieldsValue({ trip_id: record.trip_id ?? undefined });
     setAssignOpen(true);
   }
 
-  function openQuotePrice(record: Order) {
+  function openAssignForwarder(record: OrderListItem) {
+    setSelected(record);
+    assignForwarderForm.setFieldsValue({ assigned_forwarder_user_id: record.assigned_forwarder_user_id ?? undefined });
+    setAssignForwarderOpen(true);
+  }
+
+  function openPickup(record: OrderListItem) {
+    setSelected(record);
+    pickupForm.setFieldsValue({ pickup_date: record.pickup_date ? dayjs(record.pickup_date) : undefined });
+    setPickupOpen(true);
+  }
+
+  function openSpecialTariff(record: OrderListItem) {
+    setSelected(record);
+    specialTariffForm.setFieldsValue({
+      amount: record.special_tariff_amount ? Number(record.special_tariff_amount) : undefined,
+      currency: record.special_tariff_currency ?? "EUR",
+    });
+    setSpecialTariffOpen(true);
+  }
+
+  function openRequestToFactory(record: OrderListItem) {
+    setSelected(record);
+    requestToFactoryForm.resetFields();
+    setRequestToFactoryOpen(true);
+  }
+
+  function openQuotePrice(record: OrderListItem) {
     setSelected(record);
     quotePriceForm.setFieldsValue({
       amount: record.quote_price_amount ? Number(record.quote_price_amount) : undefined,
@@ -555,20 +691,10 @@ function OrdersPageContent() {
     setQuotePriceOpen(true);
   }
 
-  function openQuoteDecision(record: Order) {
+  function openQuoteDecision(record: OrderListItem) {
     setSelected(record);
     quoteDecisionForm.setFieldValue("decision", "agree");
     setQuoteDecisionOpen(true);
-  }
-
-  function toggleRowSelection(id: number, checked: boolean) {
-    setSelectedRowKeys((current) => {
-      if (checked) {
-        return current.includes(id) ? current : [...current, id];
-      }
-
-      return current.filter((currentId) => currentId !== id);
-    });
   }
 
   function runBulkMutation(endpoint: OrderBulkEndpoint, body: Record<string, unknown>) {
@@ -591,10 +717,18 @@ function OrdersPageContent() {
     });
   }
 
-  function orderActions(record: Order) {
-    const actions = [];
+  function runBulkAction(action: () => void) {
+    if (!selectedRowKeys.length) {
+      message.warning("Сначала выберите заказы в таблице");
+      return;
+    }
+    action();
+  }
 
-    if (canMutate) {
+  function orderActions(record: OrderListItem) {
+    const actions = [] as Array<{ key: string; label: string; icon?: React.ReactNode; onClick: () => void }>;
+
+    if (canWriteOrder) {
       actions.push(
         {
           key: "edit",
@@ -615,6 +749,46 @@ function OrdersPageContent() {
           onClick: () => openAssign(record),
         },
       );
+    }
+
+    if (canRunOperationalActions) {
+      actions.push(
+        {
+          key: "assign-forwarder",
+          label: "Назначить экспедитора",
+          icon: <ApartmentOutlined />,
+          onClick: () => openAssignForwarder(record),
+        },
+        {
+          key: "pickup-date",
+          label: "Назначить дату вывоза",
+          icon: <SwapOutlined />,
+          onClick: () => openPickup(record),
+        },
+        {
+          key: "special-tariff",
+          label: "Спецтариф",
+          icon: <SwapOutlined />,
+          onClick: () => openSpecialTariff(record),
+        },
+        {
+          key: "request-to-factory",
+          label: "Запрос на фабрику",
+          icon: <MessageOutlined />,
+          onClick: () => openRequestToFactory(record),
+        },
+      );
+
+      if (record.pickup_date) {
+        actions.push({
+          key: "cancel-pickup",
+          label: "Отменить вывоз",
+          icon: <SwapOutlined />,
+          onClick: () => {
+            cancelPickupMutation.mutate({ id: record.id });
+          },
+        });
+      }
     }
 
     if (
@@ -641,7 +815,7 @@ function OrdersPageContent() {
     return actions;
   }
 
-  const columns: ColumnsType<Order> = [
+  const columns: ColumnsType<OrderListItem> = [
     {
       title: "Id",
       dataIndex: "id",
@@ -656,71 +830,29 @@ function OrdersPageContent() {
       key: "order_number",
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
-      width: 170,
+      width: 180,
       render: (value: string, record) => <Link href={`/orders/${record.id}`}>{value}</Link>,
     },
     {
-      title: "Клиент",
-      dataIndex: "user_id",
-      key: "user_id",
-      width: 120,
-      render: (value: number | null) => value ?? "-",
+      title: "Компания",
+      dataIndex: "company_name",
+      key: "company_name",
+      width: 180,
+      render: (value: string | null | undefined, record) => value || (record.company_id ? `ID ${record.company_id}` : "-"),
     },
     {
-      title: "Название фабрики",
-      dataIndex: "factory_id",
-      key: "factory_id",
+      title: "Фабрика",
+      dataIndex: "factory_name",
+      key: "factory_name",
+      width: 180,
+      render: (value: string | null | undefined, record) => value || `ID ${record.factory_id}`,
+    },
+    {
+      title: "Рейс",
+      dataIndex: "trip_name",
+      key: "trip_name",
       width: 170,
-      render: (value: number | null) => value ?? "-",
-    },
-    {
-      title: "Инвойс / проформа",
-      dataIndex: "invoice_number",
-      key: "invoice_number",
-      width: 170,
-      render: (value: string | null) => value ?? "-",
-    },
-    {
-      title: "Объем",
-      key: "volume",
-      width: 90,
-      render: () => "-",
-    },
-    {
-      title: "Объем из инв.",
-      key: "invoice_volume",
-      width: 120,
-      render: () => "-",
-    },
-    {
-      title: "Акт. объем",
-      key: "actual_volume",
-      width: 110,
-      render: () => "-",
-    },
-    {
-      title: "Объем на складе",
-      key: "warehouse_volume",
-      width: 130,
-      render: () => "-",
-    },
-    {
-      title: "Кол-во",
-      key: "count",
-      width: 90,
-      render: () => "-",
-    },
-    {
-      title: "Акт. кол-во",
-      key: "actual_count",
-      width: 110,
-      render: () => "-",
-    },
-    {
-      title: "Акт. вес",
-      key: "actual_weight",
-      width: 100,
-      render: () => "-",
+      render: (value: string | null | undefined, record) => value || (record.trip_id ? `ID ${record.trip_id}` : "-"),
     },
     {
       title: "Статус",
@@ -729,53 +861,78 @@ function OrdersPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("status_name"),
       render: (value: OrderStatus | null) => renderOrderStatus(value),
-      width: 200,
+      width: 190,
     },
     {
-      title: "Тип заказа",
+      title: "Тип",
       dataIndex: "order_type",
       key: "order_type",
       width: 150,
       render: (value: OrderType | null) => (value ? formatEnumCode(value) : "-"),
     },
     {
-      title: "Статус квоты",
+      title: "Квота",
       dataIndex: "quote_status",
       key: "quote_status",
-      width: 170,
+      width: 160,
       render: (value: QuoteStatus | null) => (value ? formatEnumCode(value) : "-"),
     },
     {
-      title: "Эксп.",
-      dataIndex: "trip_id",
-      key: "trip_id",
-      width: 90,
-      render: (value: number | null) => value ?? "-",
-    },
-    {
-      title: "Дата заказа",
-      dataIndex: "order_date",
-      key: "order_date",
-      sorter: true,
-      sortOrder: sortOrderFor("order_date"),
-      width: 130,
-      render: (value: string | null) => value ?? "-",
-    },
-    {
-      title: "Дата готовности",
+      title: "Готовность",
       dataIndex: "ready_date",
       key: "ready_date",
       sorter: true,
       sortOrder: sortOrderFor("ready_date"),
-      width: 140,
+      width: 130,
       render: (value: string | null) => value ?? "-",
     },
     {
-      title: "Страна",
-      dataIndex: "country",
-      key: "country",
-      width: 140,
-      render: (value: string | null) => value ?? "-",
+      title: "Вывоз",
+      dataIndex: "pickup_date",
+      key: "pickup_date",
+      sorter: true,
+      sortOrder: sortOrderFor("pickup_date"),
+      width: 120,
+      render: (value: string | null | undefined) => value ?? "-",
+    },
+    {
+      title: "Флаги",
+      key: "flags",
+      width: 230,
+      render: (_, record) => (
+        <Space size={4} wrap>
+          {record.has_documents ? <Tag color="blue">Док.</Tag> : null}
+          {record.has_certificate ? <Tag color="green">Серт.</Tag> : null}
+          {record.has_description ? <Tag color="gold">Описание</Tag> : null}
+          {record.is_checked ? <Tag color="purple">Проверен</Tag> : null}
+        </Space>
+      ),
+    },
+    {
+      title: "Теги",
+      key: "tags",
+      width: 260,
+      render: (_, record) => (
+        <Space size={4} wrap>
+          {(record.priority_tags ?? []).slice(0, 2).map((tag) => (
+            <Tag key={`p-${tag.code}`} color="red">
+              {tag.label}
+            </Tag>
+          ))}
+          {(record.office_mark_tags ?? []).slice(0, 2).map((tag) => (
+            <Tag key={`o-${tag.code}`} color="orange">
+              {tag.label}
+            </Tag>
+          ))}
+        </Space>
+      ),
+    },
+    {
+      title: "Коэф. цены",
+      dataIndex: "price_coefficient",
+      key: "price_coefficient",
+      width: 130,
+      render: (value: string | number | null | undefined) => (value ?? "-") as React.ReactNode,
     },
     {
       title: "Действия",
@@ -800,11 +957,11 @@ function OrdersPageContent() {
   function handleTableChange(
     pagination: TablePaginationConfig,
     _: unknown,
-    sorter: SorterResult<Order> | SorterResult<Order>[],
+    sorter: SorterResult<OrderListItem> | SorterResult<OrderListItem>[],
   ) {
     const currentSorter = Array.isArray(sorter)
-      ? (sorter[0] as SorterResult<Order> | undefined)
-      : (sorter as SorterResult<Order>);
+      ? (sorter[0] as SorterResult<OrderListItem> | undefined)
+      : (sorter as SorterResult<OrderListItem>);
 
     applySearchPatch({
       page: pagination.current ?? 1,
@@ -818,30 +975,9 @@ function OrdersPageContent() {
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
-  const activeQuickStatus = params.status_names?.length === 1 ? params.status_names[0] : undefined;
-  const statusCounts = useMemo(() => {
-    return rows.reduce(
-      (acc, order) => {
-        if (order.status_name) {
-          acc[order.status_name] = (acc[order.status_name] ?? 0) + 1;
-        }
-        return acc;
-      },
-      {} as Partial<Record<OrderStatus, number>>,
-    );
-  }, [rows]);
-
-  function runBulkAction(action: () => void) {
-    if (!selectedRowKeys.length) {
-      message.warning("Сначала выберите заказы в таблице");
-      return;
-    }
-    action();
-  }
-
-  function showUnavailableFeature(name: string) {
-    message.info(`${name}: пока недоступно в текущем API-контракте`);
-  }
+  const quickTabs = listQuery.data?.meta.quick_tabs ?? [
+    { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
+  ];
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
@@ -854,7 +990,7 @@ function OrdersPageContent() {
             key={params.query ?? "orders-query"}
             allowClear
             enterButton="Найти"
-            placeholder="search"
+            placeholder="Поиск (номер, инвойс, фабрика, компания, комментарий)"
             defaultValue={params.query}
             onSearch={(value) => {
               applySearchPatch({
@@ -878,30 +1014,41 @@ function OrdersPageContent() {
           form={filterForm}
           onFinish={(values) => {
             applySearchPatch({
+              id: values.id,
               query: values.query,
               country: values.country,
               status_names: values.status_names,
               order_types: values.order_types,
               quote_statuses: values.quote_statuses,
               user_id: values.user_id,
+              company_id: values.company_id,
+              personal_manager_id: values.personal_manager_id,
+              assigned_forwarder_user_id: values.assigned_forwarder_user_id,
               factory_id: values.factory_id,
               trip_id: values.trip_id,
               order_date_from: values.order_date_from?.format("YYYY-MM-DD"),
               order_date_to: values.order_date_to?.format("YYYY-MM-DD"),
               has_certificate: values.has_certificate,
               has_documents: values.has_documents,
+              is_checked: values.is_checked,
+              document_type: values.document_type,
+              priority_codes: values.priority_codes,
+              office_mark_codes: values.office_mark_codes,
               page: 1,
             });
           }}
         >
           <div className="crm-filter-grid">
-            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
-              <Input placeholder="Поиск по номеру заказа" allowClear />
+            <Form.Item name="id" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} style={{ width: "100%" }} placeholder="ID" />
             </Form.Item>
-            <Form.Item name="country" className="crm-col-3" style={{ marginBottom: 0 }}>
+            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Input placeholder="Поиск" allowClear />
+            </Form.Item>
+            <Form.Item name="country" className="crm-col-2" style={{ marginBottom: 0 }}>
               <Input placeholder="Страна" allowClear />
             </Form.Item>
-            <Form.Item name="status_names" className="crm-col-5" style={{ marginBottom: 0 }}>
+            <Form.Item name="status_names" className="crm-col-4" style={{ marginBottom: 0 }}>
               <Select
                 mode="multiple"
                 allowClear
@@ -937,11 +1084,29 @@ function OrdersPageContent() {
             <Form.Item name="user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
               <InputNumber min={1} style={{ width: "100%" }} placeholder="Клиент ID" />
             </Form.Item>
+            <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} style={{ width: "100%" }} placeholder="Компания ID" />
+            </Form.Item>
+            <Form.Item name="personal_manager_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} style={{ width: "100%" }} placeholder="Менеджер ID" />
+            </Form.Item>
+            <Form.Item name="assigned_forwarder_user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <InputNumber min={1} style={{ width: "100%" }} placeholder="Экспедитор ID" />
+            </Form.Item>
             <Form.Item name="factory_id" className="crm-col-2" style={{ marginBottom: 0 }}>
               <InputNumber min={1} style={{ width: "100%" }} placeholder="Фабрика ID" />
             </Form.Item>
             <Form.Item name="trip_id" className="crm-col-2" style={{ marginBottom: 0 }}>
               <InputNumber min={1} style={{ width: "100%" }} placeholder="Рейс ID" />
+            </Form.Item>
+            <Form.Item name="document_type" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Input placeholder="Тип документа" allowClear />
+            </Form.Item>
+            <Form.Item name="priority_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select mode="tags" allowClear placeholder="Приоритеты" />
+            </Form.Item>
+            <Form.Item name="office_mark_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select mode="tags" allowClear placeholder="Отметки офиса" />
             </Form.Item>
             <Form.Item name="order_date_from" className="crm-col-3" style={{ marginBottom: 0 }}>
               <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан от" />
@@ -969,6 +1134,16 @@ function OrdersPageContent() {
                 ]}
               />
             </Form.Item>
+            <Form.Item name="is_checked" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select
+                allowClear
+                placeholder="Проверен"
+                options={[
+                  { label: "Да", value: true },
+                  { label: "Нет", value: false },
+                ]}
+              />
+            </Form.Item>
           </div>
 
           <div className="crm-filter-actions">
@@ -990,40 +1165,28 @@ function OrdersPageContent() {
 
       <Card className="crm-panel crm-status-tabs-bar">
         <div className="crm-status-tabs-wrap">
-          {quickStatusTabs.map((tab) => {
-            const isActive = tab.status ? activeQuickStatus === tab.status : !activeQuickStatus;
-            const count = tab.status ? statusCounts[tab.status] ?? 0 : totalRows;
+          {quickTabs.map((tab) => {
+            const isActive = params.quick_tab ? params.quick_tab === tab.code : tab.code === "all";
             return (
               <Button
-                key={tab.key}
+                key={tab.code}
                 size="small"
                 type={isActive ? "primary" : "default"}
-                className={tab.tone === "danger" && !isActive ? "crm-status-btn-danger" : ""}
                 onClick={() => {
                   applySearchPatch({
-                    status_names: tab.status ? [tab.status] : null,
+                    quick_tab: tab.code === "all" ? null : tab.code,
                     page: 1,
                   });
                 }}
               >
-                {tab.label}
-                {tab.status ? ` (${count})` : ""}
+                {tab.label} ({tab.count})
               </Button>
             );
           })}
-          <Button size="small" className="crm-status-btn-danger" onClick={() => showUnavailableFeature("Не подтверждены фабрикой")}>
-            Не подтверждены фабрикой
-          </Button>
-          <Button size="small" className="crm-status-btn-danger" onClick={() => showUnavailableFeature("Оплата не получена")}>
-            Оплата не получена
-          </Button>
-          <Button size="small" className="crm-status-btn-danger" onClick={() => showUnavailableFeature("Нет ответа от фабрики")}>
-            Нет ответа от фабрики
-          </Button>
         </div>
       </Card>
 
-      {canMutate ? (
+      {canWriteOrder ? (
         <Card className="crm-panel crm-actions-strip-bar">
           <div className="crm-actions-strip">
             <Typography.Text type="secondary">Выбрано: {selectedRowKeys.length}</Typography.Text>
@@ -1032,6 +1195,26 @@ function OrdersPageContent() {
             </Button>
             <Button type="text" onClick={() => runBulkAction(() => setBulkAssignOpen(true))}>
               Назначить рейс
+            </Button>
+            <Button type="text" onClick={() => runBulkAction(() => setBulkPickupOpen(true))}>
+              Назначить дату вывоза
+            </Button>
+            <Button
+              type="text"
+              onClick={() =>
+                runBulkAction(() => {
+                  askBulkConfirm(
+                    "Отменить вывоз у выбранных заказов",
+                    "Дата вывоза будет очищена. Продолжить?",
+                    () => runBulkMutation("cancel-pickup", {}),
+                  );
+                })
+              }
+            >
+              Отменить вывоз
+            </Button>
+            <Button type="text" onClick={() => runBulkAction(() => setBulkSpecialTariffOpen(true))}>
+              Спецтариф
             </Button>
             <Button
               type="text"
@@ -1087,24 +1270,6 @@ function OrdersPageContent() {
             <Button type="text" onClick={() => setSelectedRowKeys([])}>
               Снять выделение
             </Button>
-            <Button type="text" onClick={() => showUnavailableFeature("Спецтариф")}>
-              Спецтариф
-            </Button>
-            <Button type="text" danger onClick={() => showUnavailableFeature("Удалить заказ из рейса")}>
-              Удалить заказ из рейса
-            </Button>
-            <Button type="text" onClick={() => showUnavailableFeature("Назначить дату вывоза")}>
-              Назначить дату вывоза
-            </Button>
-            <Button type="text" onClick={() => showUnavailableFeature("Отменить вывоз")}>
-              Отменить вывоз
-            </Button>
-            <Button type="text" onClick={() => showUnavailableFeature("Отправить e-mail")}>
-              Отправить e-mail
-            </Button>
-            <Button type="text" onClick={() => showUnavailableFeature("Экспорт в Excel")}>
-              В Excel
-            </Button>
           </div>
         </Card>
       ) : null}
@@ -1123,10 +1288,16 @@ function OrdersPageContent() {
                 <article key={record.id} className="crm-row-card">
                   <div className="crm-row-card-head">
                     <div>
-                      {canMutate ? (
+                      {canWriteOrder ? (
                         <Checkbox
                           checked={selectedRowKeys.includes(record.id)}
-                          onChange={(event) => toggleRowSelection(record.id, event.target.checked)}
+                          onChange={(event) => {
+                            if (event.target.checked) {
+                              setSelectedRowKeys((current) => (current.includes(record.id) ? current : [...current, record.id]));
+                            } else {
+                              setSelectedRowKeys((current) => current.filter((item) => item !== record.id));
+                            }
+                          }}
                           style={{ marginBottom: 8 }}
                         >
                           Выбрать
@@ -1142,28 +1313,28 @@ function OrdersPageContent() {
 
                   <div className="crm-row-meta">
                     <div className="crm-row-meta-item">
+                      Компания
+                      <strong>{record.company_name ?? record.company_id ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
                       Фабрика
-                      <strong>{record.factory_id}</strong>
+                      <strong>{record.factory_name ?? record.factory_id}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Рейс
-                      <strong>{record.trip_id ?? "-"}</strong>
-                    </div>
-                    <div className="crm-row-meta-item">
-                      Страна
-                      <strong>{record.country ?? "-"}</strong>
+                      <strong>{record.trip_name ?? record.trip_id ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Готовность
                       <strong>{record.ready_date ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
-                      Тип
-                      <strong>{record.order_type ? formatEnumCode(record.order_type) : "-"}</strong>
+                      Вывоз
+                      <strong>{record.pickup_date ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
-                      Квота
-                      <strong>{record.quote_status ? formatEnumCode(record.quote_status) : "-"}</strong>
+                      Тип
+                      <strong>{record.order_type ? formatEnumCode(record.order_type) : "-"}</strong>
                     </div>
                   </div>
 
@@ -1183,9 +1354,7 @@ function OrdersPageContent() {
               ))}
             </div>
 
-            {!listQuery.isLoading && rows.length === 0 ? (
-              <Typography.Text type="secondary">Нет данных</Typography.Text>
-            ) : null}
+            {!listQuery.isLoading && rows.length === 0 ? <Typography.Text type="secondary">Нет данных</Typography.Text> : null}
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
               <Pagination
@@ -1204,20 +1373,20 @@ function OrdersPageContent() {
             </div>
           </>
         ) : (
-          <Table<Order>
+          <Table<OrderListItem>
             rowKey="id"
             loading={listQuery.isLoading}
             dataSource={rows}
             columns={columns}
             rowSelection={
-              canMutate
+              canWriteOrder
                 ? {
                     selectedRowKeys,
                     onChange: (keys) => setSelectedRowKeys(keys as number[]),
                   }
                 : undefined
             }
-            scroll={{ x: 2560 }}
+            scroll={{ x: 2800 }}
             pagination={{
               current: currentPage,
               pageSize: currentPageSize,
@@ -1318,19 +1487,13 @@ function OrdersPageContent() {
           {loadingAddressesQuery.data?.length ? (
             <Typography.Text type="secondary">
               Доступно адресов загрузки: {loadingAddressesQuery.data.length}
-              {createLoadingAddressId ? `, выбран ID: ${createLoadingAddressId}` : ""}
-            </Typography.Text>
-          ) : null}
-          {!loadingAddressesQuery.isLoading && createFactoryId && !loadingAddressesQuery.data?.length ? (
-            <Typography.Text type="danger">
-              Для выбранной фабрики отсутствуют loading addresses. Создание заказа будет отклонено.
             </Typography.Text>
           ) : null}
         </Form>
       </Modal>
 
       <Modal
-        title={`Редактировать заказ #${selected?.id ?? ""}`}
+        title={selected ? `Редактировать заказ #${selected.id}` : "Редактировать заказ"}
         open={editOpen}
         destroyOnHidden
         onCancel={() => setEditOpen(false)}
@@ -1348,18 +1511,6 @@ function OrdersPageContent() {
           <Form.Item name="order_number" label="Номер заказа">
             <Input />
           </Form.Item>
-          <Form.Item name="status_name" label="Статус">
-            <Select
-              allowClear
-              options={ORDER_STATUS_VALUES.map((status) => ({
-                label: formatEnumCode(status),
-                value: status,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="trip_id" label="ID рейса">
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
           <Form.Item name="comment" label="Комментарий">
             <Input.TextArea rows={3} />
           </Form.Item>
@@ -1367,7 +1518,7 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={`Изменить статус #${selected?.id ?? ""}`}
+        title={selected ? `Изменить статус #${selected.id}` : "Изменить статус"}
         open={statusOpen}
         destroyOnHidden
         onCancel={() => setStatusOpen(false)}
@@ -1401,22 +1552,25 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={`Назначить рейс #${selected?.id ?? ""}`}
+        title={selected ? `Назначить рейс #${selected.id}` : "Назначить рейс"}
         open={assignOpen}
         destroyOnHidden
         onCancel={() => setAssignOpen(false)}
         onOk={() => assignForm.submit()}
-        confirmLoading={assignMutation.isPending}
+        confirmLoading={assignTripMutation.isPending}
       >
         <Form
           form={assignForm}
           layout="vertical"
           onFinish={(values: { trip_id?: number }) => {
             if (!selected) return;
-            assignMutation.mutate({ id: selected.id, trip_id: values.trip_id });
+            assignTripMutation.mutate({
+              id: selected.id,
+              trip_id: values.trip_id,
+            });
           }}
         >
-          <Form.Item name="trip_id" label="Рейс" tooltip="Оставьте пустым, чтобы снять рейс">
+          <Form.Item name="trip_id" label="Рейс">
             <Select
               allowClear
               loading={tripsQuery.isLoading}
@@ -1430,7 +1584,123 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={`Выставить цену по квоте #${selected?.id ?? ""}`}
+        title={selected ? `Назначить экспедитора #${selected.id}` : "Назначить экспедитора"}
+        open={assignForwarderOpen}
+        destroyOnHidden
+        onCancel={() => setAssignForwarderOpen(false)}
+        onOk={() => assignForwarderForm.submit()}
+        confirmLoading={assignForwarderMutation.isPending}
+      >
+        <Form
+          form={assignForwarderForm}
+          layout="vertical"
+          onFinish={(values: { assigned_forwarder_user_id?: number }) => {
+            if (!selected) return;
+            assignForwarderMutation.mutate({
+              id: selected.id,
+              assigned_forwarder_user_id: values.assigned_forwarder_user_id,
+            });
+          }}
+        >
+          <Form.Item name="assigned_forwarder_user_id" label="Экспедитор">
+            <Select
+              allowClear
+              loading={forwardersQuery.isLoading}
+              options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                label: `${user.id} - ${user.full_name || user.login}`,
+                value: user.id,
+              }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={selected ? `Назначить дату вывоза #${selected.id}` : "Назначить дату вывоза"}
+        open={pickupOpen}
+        destroyOnHidden
+        onCancel={() => setPickupOpen(false)}
+        onOk={() => pickupForm.submit()}
+        confirmLoading={pickupDateMutation.isPending}
+      >
+        <Form
+          form={pickupForm}
+          layout="vertical"
+          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
+            if (!selected) return;
+            pickupDateMutation.mutate({
+              id: selected.id,
+              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
+            });
+          }}
+        >
+          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={selected ? `Спецтариф #${selected.id}` : "Спецтариф"}
+        open={specialTariffOpen}
+        destroyOnHidden
+        onCancel={() => setSpecialTariffOpen(false)}
+        onOk={() => specialTariffForm.submit()}
+        confirmLoading={specialTariffMutation.isPending}
+      >
+        <Form
+          form={specialTariffForm}
+          layout="vertical"
+          initialValues={{ currency: "EUR" }}
+          onFinish={(values: { amount?: number | null; currency?: string }) => {
+            if (!selected) return;
+            specialTariffMutation.mutate({
+              id: selected.id,
+              amount: values.amount,
+              currency: values.currency || "EUR",
+            });
+          }}
+        >
+          <Form.Item name="amount" label="Сумма (пусто = очистить)">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={selected ? `Запрос на фабрику #${selected.id}` : "Запрос на фабрику"}
+        open={requestToFactoryOpen}
+        destroyOnHidden
+        onCancel={() => setRequestToFactoryOpen(false)}
+        onOk={() => requestToFactoryForm.submit()}
+        confirmLoading={requestToFactoryMutation.isPending}
+      >
+        <Form
+          form={requestToFactoryForm}
+          layout="vertical"
+          onFinish={(values: { comment?: string; template_id?: number }) => {
+            if (!selected) return;
+            requestToFactoryMutation.mutate({
+              id: selected.id,
+              comment: values.comment,
+              template_id: values.template_id,
+            });
+          }}
+        >
+          <Form.Item name="comment" label="Комментарий">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="template_id" label="ID шаблона (опционально)">
+            <InputNumber min={1} style={{ width: "100%" }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={selected ? `Выставить цену #${selected.id}` : "Выставить цену"}
         open={quotePriceOpen}
         destroyOnHidden
         onCancel={() => setQuotePriceOpen(false)}
@@ -1451,16 +1721,16 @@ function OrdersPageContent() {
           }}
         >
           <Form.Item name="amount" label="Сумма" rules={[{ required: true }]}>
-            <InputNumber min={0} precision={2} style={{ width: "100%" }} />
+            <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="currency" label="Валюта">
-            <Input maxLength={3} />
+          <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
+            <Input />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={`Решение по квоте #${selected?.id ?? ""}`}
+        title={selected ? `Решение по квоте #${selected.id}` : "Решение по квоте"}
         open={quoteDecisionOpen}
         destroyOnHidden
         onCancel={() => setQuoteDecisionOpen(false)}
@@ -1481,8 +1751,8 @@ function OrdersPageContent() {
           <Form.Item name="decision" label="Решение" rules={[{ required: true }]}>
             <Select
               options={[
-                { label: "Согласовать", value: "agree" },
-                { label: "Отклонить", value: "decline" },
+                { label: "Согласиться", value: "agree" },
+                { label: "Отказаться", value: "decline" },
                 { label: "Запросить повторно", value: "request_again" },
               ]}
             />
@@ -1491,7 +1761,7 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title="Массовое изменение статуса"
+        title="Массово: изменить статус"
         open={bulkStatusOpen}
         destroyOnHidden
         onCancel={() => setBulkStatusOpen(false)}
@@ -1523,7 +1793,7 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title="Массовое назначение рейса"
+        title="Массово: назначить рейс"
         open={bulkAssignOpen}
         destroyOnHidden
         onCancel={() => setBulkAssignOpen(false)}
@@ -1534,10 +1804,12 @@ function OrdersPageContent() {
           form={bulkAssignForm}
           layout="vertical"
           onFinish={(values: { trip_id?: number }) => {
-            runBulkMutation("assign-trip", { trip_id: values.trip_id ?? null });
+            runBulkMutation("assign-trip", {
+              trip_id: values.trip_id ?? null,
+            });
           }}
         >
-          <Form.Item name="trip_id" label="Рейс" tooltip="Оставьте пустым, чтобы снять рейсы у заказов">
+          <Form.Item name="trip_id" label="Рейс">
             <Select
               allowClear
               loading={tripsQuery.isLoading}
@@ -1551,7 +1823,58 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={bulkCommentTarget === "warehouse" ? "Массовый комментарий склада" : "Массовый комментарий экспедитора"}
+        title="Массово: назначить дату вывоза"
+        open={bulkPickupOpen}
+        destroyOnHidden
+        onCancel={() => setBulkPickupOpen(false)}
+        onOk={() => bulkPickupForm.submit()}
+        confirmLoading={bulkMutation.isPending}
+      >
+        <Form
+          form={bulkPickupForm}
+          layout="vertical"
+          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
+            runBulkMutation("pickup-date", {
+              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
+            });
+          }}
+        >
+          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Массово: спецтариф"
+        open={bulkSpecialTariffOpen}
+        destroyOnHidden
+        onCancel={() => setBulkSpecialTariffOpen(false)}
+        onOk={() => bulkSpecialTariffForm.submit()}
+        confirmLoading={bulkMutation.isPending}
+      >
+        <Form
+          form={bulkSpecialTariffForm}
+          layout="vertical"
+          initialValues={{ currency: "EUR" }}
+          onFinish={(values: { amount?: number | null; currency?: string }) => {
+            runBulkMutation("special-tariff", {
+              amount: values.amount ?? null,
+              currency: values.currency || "EUR",
+            });
+          }}
+        >
+          <Form.Item name="amount" label="Сумма (пусто = очистить)">
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Массово: ${bulkCommentTarget === "warehouse" ? "комментарий склада" : "комментарий экспедитора"}`}
         open={bulkCommentOpen}
         destroyOnHidden
         onCancel={() => setBulkCommentOpen(false)}
@@ -1562,13 +1885,12 @@ function OrdersPageContent() {
           form={bulkCommentForm}
           layout="vertical"
           onFinish={(values: { comment: string }) => {
-            runBulkMutation(
-              bulkCommentTarget === "warehouse" ? "warehouse-comment" : "forwarder-comment",
-              { comment: values.comment },
-            );
+            runBulkMutation(bulkCommentTarget === "warehouse" ? "warehouse-comment" : "forwarder-comment", {
+              comment: values.comment,
+            });
           }}
         >
-          <Form.Item name="comment" label="Комментарий" rules={[{ required: true }]}> 
+          <Form.Item name="comment" label="Комментарий" rules={[{ required: true }]}>
             <Input.TextArea rows={4} />
           </Form.Item>
         </Form>

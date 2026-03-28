@@ -10,6 +10,11 @@ export const queryKeys = {
   orders: {
     list: (params: unknown) => ["orders", "list", params] as const,
     detail: (id: number) => ["orders", "detail", id] as const,
+    documents: (id: number) => ["orders", "documents", id] as const,
+    statusHistory: (id: number) => ["orders", "status-history", id] as const,
+    chatMessages: (id: number) => ["orders", "chat-messages", id] as const,
+    certificate: (id: number) => ["orders", "certificate", id] as const,
+    clientMessages: (params: unknown) => ["orders", "client-messages", params] as const,
   },
   factories: {
     list: (params: unknown) => ["factories", "list", params] as const,

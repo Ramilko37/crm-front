@@ -30,7 +30,7 @@ import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
-import type { PaginatedResponse, Request, RequestFilterParams } from "@/shared/types/entities";
+import type { PaginatedResponse, Request, RequestDocument, RequestFilterParams } from "@/shared/types/entities";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -51,6 +51,7 @@ function getParams(searchParams: URLSearchParams): RequestFilterParams {
     sort_by: searchParams.get("sort_by") ?? undefined,
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
     status: (searchParams.get("status") as RequestStatus | null) ?? undefined,
+    query: searchParams.get("query") ?? undefined,
   };
 }
 
@@ -77,7 +78,7 @@ function RequestsPageContent() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
   const [createForm] = Form.useForm<RequestCreateForm>();
-  const [filterForm] = Form.useForm<{ status?: RequestStatus }>();
+  const [filterForm] = Form.useForm<{ status?: RequestStatus; query?: string }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
 
@@ -98,11 +99,10 @@ function RequestsPageContent() {
   const documentsQuery = useQuery({
     queryKey: selectedRequestId ? queryKeys.requests.documents(selectedRequestId) : ["requests", "documents", "idle"],
     queryFn: () =>
-      apiRequest<PaginatedResponse<{ id: number; document_type: string; file_path: string | null }>>(
-        `/api/requests/${selectedRequestId}/documents`,
-        { query: { page: 1, page_size: 100 } },
-      ),
-    enabled: detailsOpen && Boolean(selectedRequestId),
+      apiRequest<PaginatedResponse<RequestDocument>>(`/api/requests/${selectedRequestId}/documents`, {
+        query: { page: 1, page_size: 100 },
+      }),
+    enabled: detailsOpen && Boolean(selectedRequestId) && !(detailQuery.data?.documents?.length ?? 0),
   });
 
   const createMutation = useMutation({
@@ -177,11 +177,17 @@ function RequestsPageContent() {
       sortOrder: sortOrderFor("request_number"),
       width: 180,
     },
-    { title: "ID компании", dataIndex: "company_id", key: "company_id", width: 130 },
+    {
+      title: "Компания",
+      key: "company",
+      width: 210,
+      render: (_, record) => record.company_name ?? `ID ${record.company_id}`,
+    },
     {
       title: "Контакт",
       key: "contact",
-      render: (_, record) => record.contact_user_id ?? record.contact_name_snapshot ?? "-",
+      width: 200,
+      render: (_, record) => record.user_full_name ?? record.contact_name_snapshot ?? record.contact_user_id ?? "-",
     },
     {
       title: "Статус",
@@ -189,6 +195,12 @@ function RequestsPageContent() {
       key: "status",
       width: 160,
       render: (status: RequestStatus) => formatEnumCode(status),
+    },
+    {
+      title: "Документы",
+      key: "documents",
+      width: 130,
+      render: (_, record) => `${record.documents_count ?? 0}${record.has_documents ? " (есть)" : ""}`,
     },
     {
       title: "Комментарий",
@@ -225,12 +237,14 @@ function RequestsPageContent() {
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
+  const newCount = listQuery.data?.meta.new_count;
+  const detailDocuments = detailQuery.data?.documents?.length ? detailQuery.data.documents : (documentsQuery.data?.items ?? []);
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
       <PageHeader
         title="Заявки"
-        subtitle="Отдельный runtime-модуль requests"
+        subtitle={`Runtime-модуль requests${typeof newCount === "number" ? ` · Новых: ${newCount}` : ""}`}
         actions={
           canWrite ? (
             <Button type="primary" onClick={() => setCreateOpen(true)}>
@@ -244,14 +258,24 @@ function RequestsPageContent() {
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         toggleLabel="Фильтр"
+        search={
+          <Input.Search
+            key={params.query ?? "requests-query"}
+            allowClear
+            enterButton="Найти"
+            defaultValue={params.query}
+            placeholder="Поиск по номеру/компании/контакту"
+            onSearch={(value) => applySearchPatch({ query: value || null, page: 1 })}
+          />
+        }
       />
 
       <FilterPanel open={filtersOpen}>
         <Form
           form={filterForm}
-          initialValues={{ status: params.status }}
-          onFinish={(values: { status?: RequestStatus }) => {
-            applySearchPatch({ status: values.status, page: 1 });
+          initialValues={{ status: params.status, query: params.query }}
+          onFinish={(values: { status?: RequestStatus; query?: string }) => {
+            applySearchPatch({ status: values.status, query: values.query, page: 1 });
           }}
         >
           <div className="crm-filter-grid">
@@ -261,6 +285,9 @@ function RequestsPageContent() {
                 placeholder="Статус"
                 options={REQUEST_STATUS_VALUES.map((status) => ({ label: formatEnumCode(status), value: status }))}
               />
+            </Form.Item>
+            <Form.Item name="query" className="crm-col-5" style={{ marginBottom: 0 }}>
+              <Input allowClear placeholder="Поиск" />
             </Form.Item>
           </div>
           <div className="crm-filter-actions">
@@ -293,7 +320,7 @@ function RequestsPageContent() {
           dataSource={rows}
           columns={columns}
           pagination={false}
-          scroll={{ x: 1120 }}
+          scroll={{ x: 1360 }}
           onChange={handleTableChange}
           locale={{ emptyText: "Нет данных" }}
         />
@@ -356,7 +383,9 @@ function RequestsPageContent() {
           <Descriptions bordered size="small" column={1} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="ID">{detailQuery.data.id}</Descriptions.Item>
             <Descriptions.Item label="Номер">{detailQuery.data.request_number}</Descriptions.Item>
-            <Descriptions.Item label="ID компании">{detailQuery.data.company_id}</Descriptions.Item>
+            <Descriptions.Item label="Компания">{detailQuery.data.company_name ?? detailQuery.data.company_id}</Descriptions.Item>
+            <Descriptions.Item label="Пользователь">{detailQuery.data.user_full_name ?? detailQuery.data.user_id ?? "-"}</Descriptions.Item>
+            <Descriptions.Item label="Email">{detailQuery.data.user_email ?? "-"}</Descriptions.Item>
             <Descriptions.Item label="Статус">{formatEnumCode(detailQuery.data.status)}</Descriptions.Item>
             <Descriptions.Item label="Комментарий">{detailQuery.data.comment ?? "-"}</Descriptions.Item>
             <Descriptions.Item label="payload_json">
@@ -369,19 +398,35 @@ function RequestsPageContent() {
 
         <Typography.Title level={5}>Документы</Typography.Title>
 
-        <Table<{ id: number; document_type: string; file_path: string | null }>
+        <Table<RequestDocument>
           rowKey="id"
           loading={documentsQuery.isLoading}
-          dataSource={documentsQuery.data?.items ?? []}
+          dataSource={detailDocuments}
           pagination={false}
           columns={[
             { title: "ID", dataIndex: "id", key: "id", width: 90 },
-            { title: "Тип", dataIndex: "document_type", key: "document_type", width: 220 },
+            {
+              title: "Тип",
+              dataIndex: "document_type",
+              key: "document_type",
+              width: 220,
+              render: (value: string | null) => value ?? "-",
+            },
             {
               title: "Файл",
-              dataIndex: "file_path",
-              key: "file_path",
-              render: (value: string | null) => value ?? "-",
+              key: "file_name",
+              render: (_, row) => row.file_name ?? row.file_path ?? "-",
+            },
+            {
+              title: "Действия",
+              key: "actions",
+              width: 130,
+              render: (_, row) =>
+                selectedRequestId ? (
+                  <Button size="small" type="link" href={`/api/requests/${selectedRequestId}/documents/${row.id}/download`}>
+                    Скачать
+                  </Button>
+                ) : null,
             },
           ]}
           locale={{ emptyText: "Нет документов" }}
