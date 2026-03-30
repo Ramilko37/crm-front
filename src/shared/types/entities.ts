@@ -97,6 +97,11 @@ export type OrderTag = {
   label: string;
 };
 
+export type DictionaryOption = {
+  code: string;
+  label: string;
+};
+
 export type MeasurementPayload = {
   status: "not_required" | "required" | "required_in_truck" | "completed";
   comment?: string | null;
@@ -437,6 +442,27 @@ export type FactoryFilterParams = ListParams & {
   has_loading_points?: boolean;
 };
 
+export type Postcode = {
+  id: number;
+  country_id: number | null;
+  postcode: string;
+};
+
+export type PostcodeWritePayload = {
+  country_id?: number;
+  postcode?: string;
+};
+
+export type PostcodeCity = {
+  id: number;
+  postcode_id: number;
+  city: string;
+};
+
+export type PostcodeCityWritePayload = {
+  city?: string;
+};
+
 export type TripFilterParams = ListParams & {
   query?: string;
   ids?: number[];
@@ -626,6 +652,36 @@ export type RequestCreatePayload = {
     file_slot: string;
     display_name?: string;
   }>;
+};
+
+export type OrderClientCompanyLookupContact = {
+  user_id: number;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+};
+
+export type OrderClientCompanyLookupItem = {
+  company_id: number;
+  company_name: string;
+  contacts: OrderClientCompanyLookupContact[];
+};
+
+export type OrderCreateMetadata = {
+  order_type_options: DictionaryOption[];
+  priority_options: DictionaryOption[];
+  office_mark_options: DictionaryOption[];
+  product_characteristic_options: DictionaryOption[];
+  item_type_options: DictionaryOption[];
+  document_type_options: DictionaryOption[];
+  measurement_status_options: DictionaryOption[];
+  weighing_status_options: DictionaryOption[];
+};
+
+export type ClientOrderCreateMetadata = {
+  order_type_options: DictionaryOption[];
+  item_type_options: DictionaryOption[];
+  document_type_options: DictionaryOption[];
 };
 
 export type ClientFactoryListItem = {

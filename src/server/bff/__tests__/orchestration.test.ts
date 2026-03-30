@@ -51,7 +51,6 @@ describe("orchestration payload builders", () => {
         ready_date: "2026-04-02",
         comment: "client",
         additional_description: "client",
-        invoice_on_other_company: false,
       },
       factory_selection: {
         factory_id: 9,
@@ -78,6 +77,38 @@ describe("orchestration payload builders", () => {
         payload_json: { source: "web" },
       },
       documents: [],
+    });
+  });
+
+  it("passes through structured internal payload", () => {
+    const payload = buildInternalOrderMultipartPayload({
+      order: {
+        order_number: "A-100",
+        company_id: 10,
+        ready_date: "2026-04-01",
+        order_type: "delivery",
+      },
+      factory_selection: {
+        factory_id: 7,
+        loading_address_id: 3,
+      },
+      goods_lines: [{ item_type: "chair" }],
+      documents: [{ document_type: "invoice", file_slot: "request_file_1" }],
+    });
+
+    expect(payload).toEqual({
+      order: {
+        order_number: "A-100",
+        company_id: 10,
+        ready_date: "2026-04-01",
+        order_type: "delivery",
+      },
+      factory_selection: {
+        factory_id: 7,
+        loading_address_id: 3,
+      },
+      goods_lines: [{ item_type: "chair" }],
+      documents: [{ document_type: "invoice", file_slot: "request_file_1" }],
     });
   });
 });
