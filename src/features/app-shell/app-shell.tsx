@@ -31,6 +31,7 @@ const MODULE_MENU_CONFIG: ModuleMenuConfig[] = [
   { key: "/orders", module: "orders", label: "Заказы" },
   { key: "/client-messages", module: "client-messages", label: "Сообщения" },
   { key: "/requests", module: "requests", label: "Заявки" },
+  { key: "/companies", module: "companies", label: "Компании" },
   { key: "/path-points", module: "path-points", label: "Путевые точки" },
   { key: "/factories", module: "factories", label: "Фабрики" },
   { key: "/trips", module: "trips", label: "Рейсы" },
@@ -45,6 +46,7 @@ function resolveModule(pathname: string): AppModule {
   if (pathname.startsWith("/orders")) return "orders";
   if (pathname.startsWith("/client-messages")) return "client-messages";
   if (pathname.startsWith("/requests")) return "requests";
+  if (pathname.startsWith("/companies")) return "companies";
   if (pathname.startsWith("/path-points")) return "path-points";
   if (pathname.startsWith("/factories")) return "factories";
   if (pathname.startsWith("/trips")) return "trips";
@@ -96,6 +98,7 @@ export function AppShell({ children }: Props) {
     if (pathname.startsWith("/orders")) return "/orders";
     if (pathname.startsWith("/client-messages")) return "/client-messages";
     if (pathname.startsWith("/requests")) return "/requests";
+    if (pathname.startsWith("/companies")) return "/companies";
     if (pathname.startsWith("/path-points")) return "/path-points";
     if (pathname.startsWith("/factories")) return "/factories";
     if (pathname.startsWith("/trips")) return "/trips";

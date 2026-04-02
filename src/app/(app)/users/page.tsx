@@ -66,7 +66,7 @@ function getParams(searchParams: URLSearchParams): UserFilterParams {
 }
 
 type UserCreateForm = {
-  company_id: number;
+  company_name?: string;
   personal_manager_id?: number;
   full_name: string;
   login: string;
@@ -80,8 +80,7 @@ type UserCreateForm = {
   is_logist: boolean;
 };
 
-type UserEditForm = Omit<UserCreateForm, "password" | "company_id"> & {
-  company_id: number;
+type UserEditForm = Omit<UserCreateForm, "password" | "company_name"> & {
   total_orders?: number;
   last_order_date?: dayjs.Dayjs;
 };
@@ -114,6 +113,7 @@ function UsersPageContent() {
     has_email?: boolean;
     has_orders?: boolean;
   }>();
+  const createRoleName = Form.useWatch("role_name", createForm) as RoleName | string | undefined;
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
 
@@ -222,7 +222,12 @@ function UsersPageContent() {
       sortOrder: sortOrderFor("full_name"),
     },
     { title: "Логин", dataIndex: "login", key: "login" },
-    { title: "Компания", dataIndex: "company_id", key: "company_id", width: 110, render: (value) => value ?? "-" },
+    {
+      title: "Компания",
+      key: "company",
+      width: 180,
+      render: (_, record) => record.company_name ?? (record.company_id ? `ID ${record.company_id}` : "-"),
+    },
     {
       title: "Роль",
       dataIndex: "role_name",
@@ -249,7 +254,6 @@ function UsersPageContent() {
             onClick={() => {
               setSelected(record);
               editForm.setFieldsValue({
-                company_id: record.company_id ?? undefined,
                 personal_manager_id: record.personal_manager_id ?? undefined,
                 full_name: record.full_name,
                 login: record.login,
@@ -459,14 +463,30 @@ function UsersPageContent() {
           layout="vertical"
           initialValues={{ is_active: true, is_logist: false }}
           onFinish={(values) => {
+            const companyName = values.company_name?.trim();
             createMutation.mutate({
               ...values,
+              company_name: companyName || undefined,
               is_active: isManagerActor ? true : values.is_active,
             });
           }}
         >
-          <Form.Item name="company_id" label="Компания ID" rules={[{ required: true }]}> 
-            <InputNumber min={1} style={{ width: "100%" }} />
+          <Form.Item
+            name="company_name"
+            label="Название компании"
+            rules={[
+              {
+                validator: async (_, value) => {
+                  const nextValue = typeof value === "string" ? value.trim() : "";
+                  if (createRoleName === "client" && !nextValue) {
+                    throw new Error("Для роли client укажите название компании");
+                  }
+                },
+              },
+            ]}
+            extra="Для роли client поле обязательно. Для остальных ролей можно оставить пустым."
+          >
+            <Input />
           </Form.Item>
           <Form.Item name="full_name" label="ФИО" rules={[{ required: true }]}> 
             <Input />
@@ -520,7 +540,6 @@ function UsersPageContent() {
             updateMutation.mutate({
               id: selected.id,
               payload: {
-                company_id: values.company_id,
                 personal_manager_id: values.personal_manager_id,
                 full_name: values.full_name,
                 login: values.login,
@@ -537,9 +556,6 @@ function UsersPageContent() {
             });
           }}
         >
-          <Form.Item name="company_id" label="Компания ID" rules={[{ required: true }]}> 
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
           <Form.Item name="full_name" label="ФИО" rules={[{ required: true }]}> 
             <Input />
           </Form.Item>

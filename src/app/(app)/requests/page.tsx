@@ -64,8 +64,7 @@ function getParams(searchParams: URLSearchParams): RequestFilterParams {
 
 type RequestCreateForm = {
   company_id: number;
-  contact_user_id?: number;
-  contact_name_snapshot?: string;
+  company_contact_id?: number;
   comment?: string;
   payload_json?: string;
   document_type?: string;
@@ -126,8 +125,7 @@ function RequestsPageContent() {
       const requestPayload: RequestCreatePayload = {
         request: {
           company_id: payload.company_id,
-          contact_user_id: payload.contact_user_id,
-          contact_name_snapshot: payload.contact_name_snapshot,
+          company_contact_id: payload.company_contact_id,
           comment: payload.comment,
           payload_json: parsedPayloadJson,
         },
@@ -233,7 +231,7 @@ function RequestsPageContent() {
       title: "Контакт",
       key: "contact",
       width: 200,
-      render: (_, record) => record.user_full_name ?? record.contact_name_snapshot ?? record.contact_user_id ?? "-",
+      render: (_, record) => record.user_full_name ?? record.company_contact_id ?? record.contact_user_id ?? "-",
     },
     {
       title: "Статус",
@@ -395,11 +393,8 @@ function RequestsPageContent() {
           <Form.Item name="company_id" label="ID компании" rules={[{ required: true }]}> 
             <InputNumber min={1} style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="contact_user_id" label="ID контактного пользователя">
+          <Form.Item name="company_contact_id" label="ID контакта компании">
             <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="contact_name_snapshot" label="Имя контакта (snapshot)">
-            <Input />
           </Form.Item>
           <Form.Item name="comment" label="Комментарий">
             <Input.TextArea rows={3} />

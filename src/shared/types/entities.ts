@@ -32,6 +32,7 @@ export type AuthUser = {
 export type UserProfile = {
   id: number;
   company_id: number | null;
+  company_name: string | null;
   personal_manager_id: number | null;
   full_name: string;
   login: string;
@@ -477,6 +478,7 @@ export type TripFilterParams = ListParams & {
 export type UserAdmin = {
   id: number;
   company_id: number | null;
+  company_name?: string | null;
   personal_manager_id: number | null;
   full_name: string;
   login: string;
@@ -492,7 +494,7 @@ export type UserAdmin = {
 };
 
 export type UserWritePayload = {
-  company_id?: number;
+  company_name?: string | null;
   full_name?: string;
   login?: string;
   password?: string;
@@ -619,11 +621,12 @@ export type Request = {
   request_number: string;
   company_id: number;
   company_name?: string | null;
+  company_contact_id?: number | null;
   user_id?: number | null;
   user_full_name?: string | null;
   user_email?: string | null;
-  contact_user_id: number | null;
-  contact_name_snapshot: string | null;
+  contact_user_id?: number | null;
+  contact_name_snapshot?: string | null;
   payload_json: Record<string, unknown> | null;
   comment: string | null;
   status: RequestStatus;
@@ -642,8 +645,7 @@ export type RequestFilterParams = ListParams & {
 export type RequestCreatePayload = {
   request: {
     company_id: number;
-    contact_user_id?: number;
-    contact_name_snapshot?: string;
+    company_contact_id?: number;
     payload_json?: Record<string, unknown>;
     comment?: string;
   };
@@ -655,16 +657,55 @@ export type RequestCreatePayload = {
 };
 
 export type OrderClientCompanyLookupContact = {
-  user_id: number;
+  id: number;
   full_name: string | null;
+  job_title: string | null;
   email: string | null;
   phone: string | null;
+  messenger_type: string | null;
+  messenger_value: string | null;
+  is_primary: boolean;
 };
 
 export type OrderClientCompanyLookupItem = {
   company_id: number;
   company_name: string;
   contacts: OrderClientCompanyLookupContact[];
+};
+
+export type Company = {
+  id: number;
+  name: string;
+  owner_user_id: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type CompanyWritePayload = {
+  name?: string;
+};
+
+export type CompanyContact = {
+  id: number;
+  company_id: number;
+  full_name: string | null;
+  job_title: string | null;
+  email: string | null;
+  phone: string | null;
+  messenger_type: string | null;
+  messenger_value: string | null;
+  is_primary: boolean;
+  is_owner_managed?: boolean;
+};
+
+export type CompanyContactWritePayload = {
+  full_name?: string | null;
+  job_title?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  messenger_type?: string | null;
+  messenger_value?: string | null;
+  is_primary?: boolean;
 };
 
 export type OrderCreateMetadata = {

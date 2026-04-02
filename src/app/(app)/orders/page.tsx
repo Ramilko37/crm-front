@@ -96,8 +96,7 @@ type OrderCreateDocumentForm = {
 type OrderCreateForm = {
   order_number: string;
   company_id?: number;
-  contact_user_id?: number;
-  contact_name_snapshot?: string;
+  company_contact_id?: number;
   ready_date?: dayjs.Dayjs;
   order_type?: OrderType;
   factory_mode?: CreateMode;
@@ -692,8 +691,7 @@ function OrdersPageContent() {
         const requestPayload = {
           request: {
             company_id: values.company_id,
-            contact_user_id: values.contact_user_id,
-            contact_name_snapshot: trimOrUndefined(values.contact_name_snapshot),
+            company_contact_id: values.company_contact_id,
             comment: trimOrUndefined(values.comment),
             payload_json: parsedPayloadJson,
           },
@@ -807,7 +805,7 @@ function OrdersPageContent() {
       if (!isClientRole) {
         Object.assign(orderPayload, {
           company_id: values.company_id,
-          contact_user_id: values.contact_user_id,
+          company_contact_id: values.company_contact_id,
           order_type: values.order_type ?? "delivery",
           user_comment: trimOrUndefined(values.user_comment),
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
@@ -1966,19 +1964,23 @@ function OrdersPageContent() {
                   loading={clientCompaniesQuery.isLoading}
                   options={clientCompanyOptions}
                   onSearch={(value) => setClientCompaniesQueryText(value)}
+                  onChange={() => {
+                    createForm.setFieldValue("company_contact_id", undefined);
+                  }}
                   placeholder="Начните вводить название компании"
                 />
               </Form.Item>
 
-              <Form.Item name="contact_user_id" label="Контакт компании (опционально)">
+              <Form.Item name="company_contact_id" label="Контакт компании (опционально)">
                 <Select
                   allowClear
                   disabled={!selectedCompanyContacts.length}
                   options={selectedCompanyContacts.map((contact) => ({
                     label:
-                      [contact.full_name, contact.email, contact.phone].filter(Boolean).join(" · ") ||
-                      `User #${contact.user_id}`,
-                    value: contact.user_id,
+                      [contact.full_name, contact.job_title, contact.email, contact.phone]
+                        .filter(Boolean)
+                        .join(" · ") || `Contact #${contact.id}`,
+                    value: contact.id,
                   }))}
                   placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
                 />
@@ -2272,9 +2274,6 @@ function OrdersPageContent() {
             </>
           ) : (
             <>
-              <Form.Item name="contact_name_snapshot" label="Контакт (snapshot, опционально)">
-                <Input />
-              </Form.Item>
               <Form.Item name="comment" label="Комментарий заявки">
                 <Input.TextArea rows={3} />
               </Form.Item>

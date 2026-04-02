@@ -97,7 +97,7 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
     company_id: pickNumber(body.company_id),
     ready_date: pickString(body.ready_date),
     order_type: pickString(body.order_type),
-    contact_user_id: pickNumber(body.contact_user_id) ?? pickNumber(body.user_id),
+    company_contact_id: pickNumber(body.company_contact_id) ?? pickNumber(body.contact_user_id) ?? pickNumber(body.user_id),
     invoice_on_other_company: pickBoolean(body.invoice_on_other_company),
     invoice_company_name: pickString(body.invoice_company_name),
     comment: pickString(body.comment),
@@ -213,8 +213,7 @@ export function buildRequestMultipartPayload(payload: unknown) {
   return {
     request: compactObject({
       company_id: pickNumber(body.company_id),
-      contact_user_id: pickNumber(body.contact_user_id),
-      contact_name_snapshot: pickString(body.contact_name_snapshot),
+      company_contact_id: pickNumber(body.company_contact_id) ?? pickNumber(body.contact_user_id),
       comment: pickString(body.comment),
       payload_json:
         body.payload_json && typeof body.payload_json === "object" && !Array.isArray(body.payload_json)

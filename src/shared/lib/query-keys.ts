@@ -52,4 +52,9 @@ export const queryKeys = {
     detail: (id: number) => ["requests", "detail", id] as const,
     documents: (id: number) => ["requests", "documents", id] as const,
   },
+  companies: {
+    list: (params: unknown) => ["companies", "list", params] as const,
+    detail: (id: number) => ["companies", "detail", id] as const,
+    contacts: (id: number) => ["companies", "contacts", id] as const,
+  },
 };

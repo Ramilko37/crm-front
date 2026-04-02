@@ -9,7 +9,7 @@ describe("orchestration payload builders", () => {
     const payload = buildInternalOrderMultipartPayload({
       order_number: "A-100",
       company_id: 10,
-      contact_user_id: 55,
+      company_contact_id: 55,
       ready_date: "2026-04-01",
       order_type: "delivery",
       factory_id: 7,
@@ -21,7 +21,7 @@ describe("orchestration payload builders", () => {
       order: {
         order_number: "A-100",
         company_id: 10,
-        contact_user_id: 55,
+        company_contact_id: 55,
         ready_date: "2026-04-01",
         order_type: "delivery",
         comment: "test",
@@ -64,7 +64,7 @@ describe("orchestration payload builders", () => {
   it("builds request payload", () => {
     const payload = buildRequestMultipartPayload({
       company_id: 77,
-      contact_name_snapshot: "Иван",
+      company_contact_id: 17,
       comment: "note",
       payload_json: { source: "web" },
     });
@@ -72,7 +72,7 @@ describe("orchestration payload builders", () => {
     expect(payload).toEqual({
       request: {
         company_id: 77,
-        contact_name_snapshot: "Иван",
+        company_contact_id: 17,
         comment: "note",
         payload_json: { source: "web" },
       },

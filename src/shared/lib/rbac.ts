@@ -36,6 +36,7 @@ export type AppModule =
   | "orders"
   | "client-messages"
   | "requests"
+  | "companies"
   | "factories"
   | "trips"
   | "users"
@@ -86,6 +87,10 @@ export function canAccessModule(module: AppModule, roleName: RoleLike, isSuperus
     return normalizedRole === "administrator" || normalizedRole === "manager";
   }
 
+  if (module === "companies") {
+    return normalizedRole === "administrator" || normalizedRole === "manager";
+  }
+
   if (module === "requests") {
     return normalizedRole === "administrator" || normalizedRole === "manager";
   }
@@ -106,6 +111,10 @@ export function getVisibleModules(roleName: RoleLike, isSuperuser = false): AppM
 
   if (canAccessModule("requests", roleName, isSuperuser)) {
     modules.push("requests");
+  }
+
+  if (canAccessModule("companies", roleName, isSuperuser)) {
+    modules.push("companies");
   }
 
   if (canAccessModule("factories", roleName, isSuperuser)) {

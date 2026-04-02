@@ -24,6 +24,7 @@ describe("rbac helpers", () => {
     expect(canAccessModule("client-messages", "client", false)).toBe(false);
     expect(canAccessModule("requests", "manager", false)).toBe(true);
     expect(canAccessModule("client-messages", "manager", false)).toBe(true);
+    expect(canAccessModule("companies", "manager", false)).toBe(true);
     expect(canAccessModule("client-messages", "logist", false)).toBe(true);
     expect(canAccessModule("factories", "manager", false)).toBe(true);
     expect(canAccessModule("users", "manager", false)).toBe(true);
@@ -36,6 +37,7 @@ describe("rbac helpers", () => {
       "orders",
       "client-messages",
       "requests",
+      "companies",
       "factories",
       "trips",
       "path-points",

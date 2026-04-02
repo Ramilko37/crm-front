@@ -23,6 +23,7 @@ import type { UserPasswordChangePayload, UserProfile, UserProfileUpdatePayload }
 
 type ProfileForm = UserProfileUpdatePayload & {
   login: string;
+  company_name?: string;
 };
 
 type PasswordForm = UserPasswordChangePayload;
@@ -48,6 +49,7 @@ export default function ProfilePage() {
 
     profileForm.setFieldsValue({
       login: profileQuery.data.login,
+      company_name: profileQuery.data.company_name ?? undefined,
       full_name: profileQuery.data.full_name,
       email: profileQuery.data.email ?? undefined,
       phone: profileQuery.data.phone ?? undefined,
@@ -146,6 +148,9 @@ export default function ProfilePage() {
               }}
             >
               <Form.Item name="login" label="Логин">
+                <Input disabled />
+              </Form.Item>
+              <Form.Item name="company_name" label="Компания">
                 <Input disabled />
               </Form.Item>
               <Form.Item name="full_name" label="ФИО">
