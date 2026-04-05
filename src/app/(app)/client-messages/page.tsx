@@ -31,6 +31,10 @@ function getParams(searchParams: URLSearchParams) {
   };
 }
 
+function renderOrderNumber(value: string | null | undefined) {
+  return value && value.trim().length > 0 ? value : "—";
+}
+
 function ClientMessagesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -68,7 +72,7 @@ function ClientMessagesPageContent() {
       title: "Заказ",
       key: "order",
       width: 180,
-      render: (_, row) => <Link href={`/orders/${row.order_id}`}>{row.order_number}</Link>,
+      render: (_, row) => <Link href={`/orders/${row.order_id}`}>{renderOrderNumber(row.order_number)}</Link>,
     },
     {
       title: "Компания",

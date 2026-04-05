@@ -188,7 +188,7 @@ export type OrderGoodsLine = {
 
 export type OrderListItem = {
   id: number;
-  order_number: string;
+  order_number: string | null;
   user_id: number;
   company_id: number | null;
   company_name?: string | null;
@@ -717,6 +717,11 @@ export type OrderCreateMetadata = {
   document_type_options: DictionaryOption[];
   measurement_status_options: DictionaryOption[];
   weighing_status_options: DictionaryOption[];
+  self_delivery_forwarder_options: Array<{
+    id: number;
+    full_name: string | null;
+    email: string | null;
+  }>;
 };
 
 export type ClientOrderCreateMetadata = {
@@ -749,7 +754,7 @@ export type ClientFactoryDetail = {
 
 export type ClientMessageInboxItem = {
   order_id: number;
-  order_number: string;
+  order_number: string | null;
   company_id: number | null;
   company_name: string | null;
   factory_name: string | null;

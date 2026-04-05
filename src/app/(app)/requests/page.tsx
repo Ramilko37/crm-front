@@ -231,7 +231,7 @@ function RequestsPageContent() {
       title: "Контакт",
       key: "contact",
       width: 200,
-      render: (_, record) => record.user_full_name ?? record.company_contact_id ?? record.contact_user_id ?? "-",
+      render: (_, record) => record.user_full_name ?? record.company_contact_id ?? "-",
     },
     {
       title: "Статус",

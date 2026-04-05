@@ -22,11 +22,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
 import { formatEnumCode, ORDER_STATUS_VALUES, type OrderStatus } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
 import { queryKeys } from "@/shared/lib/query-keys";
+import { normalizeRoleName } from "@/shared/lib/rbac";
 import { PageHeader } from "@/shared/ui/page-frame";
 import type {
   OrderCertificate,
@@ -38,6 +40,10 @@ import type {
   Trip,
   UserAdmin,
 } from "@/shared/types/entities";
+
+function renderOrderNumber(value: string | null | undefined) {
+  return value && value.trim().length > 0 ? value : "—";
+}
 
 function renderOrderStatus(value: OrderStatus | null) {
   if (!value) {
@@ -53,6 +59,10 @@ export default function OrderDetailPage() {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
+  const meQuery = useCurrentUser(true);
+  const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
+  const canLoadOperationalLookups =
+    Boolean(meQuery.data?.is_superuser) || ["administrator", "manager", "logist", "accountant", "warehouse"].includes(normalizedRole);
 
   const [patchForm] = Form.useForm<{ comment?: string }>();
   const [statusForm] = Form.useForm<{ status_name: OrderStatus }>();
@@ -84,6 +94,7 @@ export default function OrderDetailPage() {
       apiRequest<PaginatedResponse<Trip>>("/api/trips", {
         query: { page: 1, page_size: 200 },
       }),
+    enabled: canLoadOperationalLookups,
   });
 
   const forwardersQuery = useQuery({
@@ -92,6 +103,7 @@ export default function OrderDetailPage() {
       apiRequest<PaginatedResponse<UserAdmin>>("/api/users", {
         query: { page: 1, page_size: 200, role_name: "forwarder" },
       }),
+    enabled: canLoadOperationalLookups,
   });
 
   const documentsFallbackQuery = useQuery({
@@ -502,7 +514,7 @@ export default function OrderDetailPage() {
 
       <Card className="crm-panel" title="Общие данные">
         <Descriptions bordered size="small" column={screens.lg ? 3 : 1}>
-          <Descriptions.Item label="Номер заказа">{order.order_number}</Descriptions.Item>
+          <Descriptions.Item label="Номер заказа">{renderOrderNumber(order.order_number)}</Descriptions.Item>
           <Descriptions.Item label="Статус">{renderOrderStatus(order.status_name)}</Descriptions.Item>
           <Descriptions.Item label="Тип заказа">{order.order_type ? formatEnumCode(order.order_type) : "-"}</Descriptions.Item>
           <Descriptions.Item label="Компания">{order.client?.company_name ?? order.company_id ?? "-"}</Descriptions.Item>

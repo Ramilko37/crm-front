@@ -80,6 +80,46 @@ describe("orchestration payload builders", () => {
     });
   });
 
+  it("does not map legacy contact fields in internal order payload", () => {
+    const payload = buildInternalOrderMultipartPayload({
+      company_id: 10,
+      ready_date: "2026-04-01",
+      contact_user_id: 501,
+      user_id: 777,
+      factory_id: 7,
+      loading_address_id: 3,
+    });
+
+    expect(payload).toEqual({
+      order: {
+        company_id: 10,
+        ready_date: "2026-04-01",
+      },
+      factory_selection: {
+        factory_id: 7,
+        loading_address_id: 3,
+      },
+      goods_lines: [],
+      documents: [],
+    });
+  });
+
+  it("does not map legacy contact fields in request payload", () => {
+    const payload = buildRequestMultipartPayload({
+      company_id: 77,
+      contact_user_id: 17,
+      comment: "note",
+    });
+
+    expect(payload).toEqual({
+      request: {
+        company_id: 77,
+        comment: "note",
+      },
+      documents: [],
+    });
+  });
+
   it("passes through structured internal payload", () => {
     const payload = buildInternalOrderMultipartPayload({
       order: {

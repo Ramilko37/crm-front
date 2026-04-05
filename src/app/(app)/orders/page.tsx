@@ -94,7 +94,7 @@ type OrderCreateDocumentForm = {
 };
 
 type OrderCreateForm = {
-  order_number: string;
+  order_number?: string;
   company_id?: number;
   company_contact_id?: number;
   ready_date?: dayjs.Dayjs;
@@ -204,10 +204,16 @@ function trimOrUndefined(value: string | null | undefined) {
   return next ? next : undefined;
 }
 
+function renderOrderNumber(value: string | null | undefined) {
+  return value && value.trim().length > 0 ? value : "—";
+}
+
 const QUANTITY_UNIT_FALLBACK_OPTIONS = [
   { label: "Шт", value: "pcs" },
   { label: "Кв. м", value: "sqm" },
 ];
+
+const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
 
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
   return {
@@ -420,6 +426,7 @@ function OrdersPageContent() {
       apiRequest<PaginatedResponse<Trip>>("/api/trips", {
         query: { page: 1, page_size: 200 },
       }),
+    enabled: canWriteOrder,
   });
 
   const forwardersQuery = useQuery({
@@ -653,6 +660,55 @@ function OrdersPageContent() {
     },
   });
 
+  function applyCreate422FieldErrors(detail: string) {
+    const text = detail.toLowerCase();
+    const fieldErrors: Array<{ name: (string | number)[]; errors: string[] }> = [];
+
+    const mark = (name: (string | number)[] | string, messageText: string) => {
+      fieldErrors.push({ name: Array.isArray(name) ? name : [name], errors: [messageText] });
+    };
+
+    if (text.includes("invoice_company_name")) {
+      mark("invoice_company_name", "Укажите название компании для инвойса");
+    }
+
+    if (text.includes("self_delivery_forwarder_user_id")) {
+      mark("self_delivery_forwarder_user_id", "Выберите экспедитора для self-delivery");
+    }
+
+    if (text.includes("assigned_forwarder_user_id") && text.includes("self_delivery")) {
+      mark("assigned_forwarder_user_id", "Экспедитор должен совпадать с self-delivery");
+      mark("self_delivery_forwarder_user_id", "Экспедитор должен совпадать с assigned_forwarder_user_id");
+    }
+
+    if (text.includes("primary_email")) {
+      mark(["create_factory", "primary_email"], "Введите корректный email");
+    }
+
+    if (text.includes("loading_address.phone")) {
+      mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
+    }
+
+    if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
+      mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
+    }
+
+    if (text.includes("loading_address.city_id") || text.includes("create_city")) {
+      mark(["create_factory", "loading_address", "city_id"], "Выберите город");
+    }
+
+    if (text.includes("additional_description")) {
+      mark("additional_description", "Если строки товара пустые, заполните описание груза");
+    }
+
+    if (!fieldErrors.length) {
+      return false;
+    }
+
+    createForm.setFields(fieldErrors as Parameters<typeof createForm.setFields>[0]);
+    return true;
+  }
+
   const createMutation = useMutation({
     mutationFn: async (values: OrderCreateForm) => {
       const docs = values.documents ?? [];
@@ -754,12 +810,15 @@ function OrdersPageContent() {
       let factorySelection: Record<string, unknown>;
       if (values.factory_mode === "create") {
         const loadingAddress = values.create_factory?.loading_address;
+        const createFactoryCountryId = values.create_factory?.country_id;
+        const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
+        const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
         const createFactoryPayload: Record<string, unknown> = {
           factory_name: trimOrUndefined(values.create_factory?.factory_name),
-          country_id: values.create_factory?.country_id,
+          country_id: createFactoryCountryId,
           primary_email: trimOrUndefined(values.create_factory?.primary_email),
           loading_address: {
-            country_id: loadingAddress?.country_id,
+            country_id: createFactoryCountryId,
             postcode_id: loadingAddress?.postcode_id,
             city_id: loadingAddress?.city_id,
             address: trimOrUndefined(loadingAddress?.address),
@@ -767,12 +826,8 @@ function OrdersPageContent() {
             fax: trimOrUndefined(loadingAddress?.fax),
             messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
             messenger_value: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_value) : undefined,
-            create_postcode: canInlineCreatePostcodeCity
-              ? { postcode: trimOrUndefined(loadingAddress?.create_postcode?.postcode) }
-              : undefined,
-            create_city: canInlineCreatePostcodeCity
-              ? { city: trimOrUndefined(loadingAddress?.create_city?.city) }
-              : undefined,
+            create_postcode: canInlineCreatePostcodeCity && inlinePostcode ? { postcode: inlinePostcode } : undefined,
+            create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
           },
         };
         factorySelection = { create_factory: createFactoryPayload };
@@ -803,6 +858,18 @@ function OrdersPageContent() {
       };
 
       if (!isClientRole) {
+        const assignedForwarderUserId = canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined;
+        if (
+          values.self_delivery &&
+          values.self_delivery_forwarder_user_id &&
+          assignedForwarderUserId &&
+          values.self_delivery_forwarder_user_id !== assignedForwarderUserId
+        ) {
+          throw new Error(
+            "Для self-delivery выбранный экспедитор должен совпадать с назначенным экспедитором в заказе",
+          );
+        }
+
         Object.assign(orderPayload, {
           company_id: values.company_id,
           company_contact_id: values.company_contact_id,
@@ -829,7 +896,7 @@ function OrdersPageContent() {
           product_characteristic_codes: canEditRestrictedCreateFields
             ? values.product_characteristic_codes
             : undefined,
-          assigned_forwarder_user_id: canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined,
+          assigned_forwarder_user_id: assignedForwarderUserId,
           factory_payment_via_label: canEditRestrictedCreateFields
             ? trimOrUndefined(values.factory_payment_via_label)
             : undefined,
@@ -872,6 +939,9 @@ function OrdersPageContent() {
         return;
       }
       if (error instanceof ApiError) {
+        if (error.status === 422) {
+          applyCreate422FieldErrors(error.detail);
+        }
         message.error(error.detail);
         return;
       }
@@ -1102,7 +1172,7 @@ function OrdersPageContent() {
   function openEdit(record: OrderListItem) {
     setSelected(record);
     editForm.setFieldsValue({
-      order_number: record.order_number,
+      order_number: record.order_number ?? undefined,
       comment: record.comment ?? undefined,
       status_name: record.status_name ?? undefined,
       trip_id: record.trip_id ?? undefined,
@@ -1301,7 +1371,7 @@ function OrdersPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
       width: 180,
-      render: (value: string, record) => <Link href={`/orders/${record.id}`}>{value}</Link>,
+      render: (value: string | null, record) => <Link href={`/orders/${record.id}`}>{renderOrderNumber(value)}</Link>,
     },
     {
       title: "Компания",
@@ -1448,12 +1518,7 @@ function OrdersPageContent() {
   const quickTabs = listQuery.data?.meta.quick_tabs ?? [
     { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
   ];
-  const orderTypeCreateOptions = (createMetadataQuery.data?.order_type_options?.length
-    ? toSelectOptions(createMetadataQuery.data.order_type_options)
-    : ORDER_TYPE_VALUES.map((value) => ({ label: formatEnumCode(value), value }))) as Array<{
-    label: string;
-    value: string;
-  }>;
+  const orderTypeCreateOptions = toSelectOptions(createMetadataQuery.data?.order_type_options);
   const priorityOptions = toSelectOptions((createMetadataQuery.data as OrderCreateMetadata | undefined)?.priority_options);
   const officeMarkOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.office_mark_options,
@@ -1489,6 +1554,12 @@ function OrdersPageContent() {
   const messengerTypeOptions = (messengerTypesQuery.data ?? []).map((item) => ({
     label: item.label,
     value: item.code,
+  }));
+  const selfDeliveryForwarderOptions = (
+    (createMetadataQuery.data as OrderCreateMetadata | undefined)?.self_delivery_forwarder_options ?? []
+  ).map((forwarder) => ({
+    label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || `ID ${forwarder.id}`,
+    value: forwarder.id,
   }));
   const factoryEmailOptions = (factoryEmailsQuery.data?.items ?? []).map((item) => ({
     label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
@@ -1820,7 +1891,7 @@ function OrdersPageContent() {
                         </Checkbox>
                       ) : null}
                       <Link href={`/orders/${record.id}`} className="crm-row-title">
-                        {record.order_number}
+                        {renderOrderNumber(record.order_number)}
                       </Link>
                       <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
                     </div>
@@ -1951,7 +2022,7 @@ function OrdersPageContent() {
           }}
           onFinish={(values) => createMutation.mutate(values)}
         >
-          <Form.Item name="order_number" label="Номер заказа" rules={[{ required: true }]}>
+          <Form.Item name="order_number" label="Номер заказа (опционально)">
             <Input />
           </Form.Item>
 
@@ -1987,7 +2058,11 @@ function OrdersPageContent() {
               </Form.Item>
 
               <Form.Item name="order_type" label="Тип заказа" rules={[{ required: true }]}>
-                <Select options={orderTypeCreateOptions} />
+                <Select
+                  loading={createMetadataQuery.isLoading}
+                  options={orderTypeCreateOptions}
+                  placeholder={orderTypeCreateOptions.length ? undefined : "Нет доступных типов в metadata"}
+                />
               </Form.Item>
             </>
           ) : null}
@@ -2137,26 +2212,26 @@ function OrdersPageContent() {
                   <Form.Item
                     name={["create_factory", "primary_email"]}
                     label="Primary email фабрики"
-                    rules={[{ required: true, message: "Укажите email" }]}
+                    rules={[
+                      { required: true, message: "Укажите email" },
+                      { type: "email", message: "Введите корректный email" },
+                    ]}
                   >
                     <Input />
                   </Form.Item>
 
                   <Form.Item
-                    name={["create_factory", "loading_address", "country_id"]}
-                    label="Страна адреса загрузки"
-                    rules={[{ required: true, message: "Выберите страну адреса" }]}
+                    name={["create_factory", "loading_address", "postcode_id"]}
+                    label="Индекс"
+                    rules={[{ required: true, message: "Выберите индекс" }]}
                   >
-                    <Select showSearch optionFilterProp="label" loading={countriesQuery.isLoading} options={countryOptions} />
-                  </Form.Item>
-
-                  <Form.Item name={["create_factory", "loading_address", "postcode_id"]} label="Индекс">
                     <Select
                       showSearch
                       filterOption={false}
                       onSearch={(value) => setPostcodeQueryText(value)}
                       loading={postcodesQuery.isLoading}
                       options={postcodeOptions}
+                      onChange={() => createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined)}
                     />
                   </Form.Item>
 
@@ -2187,7 +2262,11 @@ function OrdersPageContent() {
                     </Space.Compact>
                   ) : null}
 
-                  <Form.Item name={["create_factory", "loading_address", "city_id"]} label="Город">
+                  <Form.Item
+                    name={["create_factory", "loading_address", "city_id"]}
+                    label="Город"
+                    rules={[{ required: true, message: "Выберите город" }]}
+                  >
                     <Select
                       showSearch
                       optionFilterProp="label"
@@ -2235,7 +2314,10 @@ function OrdersPageContent() {
                   <Form.Item
                     name={["create_factory", "loading_address", "phone"]}
                     label="Телефон адреса загрузки"
-                    rules={[{ required: true, message: "Укажите телефон" }]}
+                    rules={[
+                      { required: true, message: "Укажите телефон" },
+                      { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                    ]}
                   >
                     <Input />
                   </Form.Item>
@@ -2297,11 +2379,11 @@ function OrdersPageContent() {
                       rules={[{ required: true, message: "Выберите экспедитора" }]}
                     >
                       <Select
-                        loading={forwardersQuery.isLoading}
-                        options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                          label: `${user.id} - ${user.full_name || user.login}`,
-                          value: user.id,
-                        }))}
+                        loading={createMetadataQuery.isLoading}
+                        options={selfDeliveryForwarderOptions}
+                        placeholder={
+                          selfDeliveryForwarderOptions.length ? undefined : "Нет доступных экспедиторов в metadata"
+                        }
                       />
                     </Form.Item>
                   ) : null
