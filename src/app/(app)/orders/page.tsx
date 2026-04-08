@@ -133,6 +133,7 @@ type OrderCreateForm = {
   cargo_places_qty?: number;
   client_goods_value_amount?: string;
   client_goods_value_currency?: string;
+  client_goods_value_currency_other_label?: string;
   comment?: string;
   user_comment?: string;
   forwarder_comment?: string;
@@ -141,7 +142,7 @@ type OrderCreateForm = {
   factory_payment_via_label?: string;
   is_factory_payment_completed?: boolean;
   is_checked?: boolean;
-  priority_codes?: string[];
+  is_priority?: boolean;
   office_mark_codes?: string[];
   product_characteristic_codes?: string[];
   self_delivery?: boolean;
@@ -210,7 +211,7 @@ function renderOrderNumber(value: string | null | undefined) {
 
 const QUANTITY_UNIT_FALLBACK_OPTIONS = [
   { label: "Шт", value: "pcs" },
-  { label: "Кв. м", value: "sqm" },
+  { label: "Кв. м", value: "m2" },
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
@@ -344,7 +345,7 @@ function OrdersPageContent() {
     createForm,
   ) as number | undefined;
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
-  const isRequestCreate = !isClientRole && createOrderType === "request";
+  const isRequestCreate = createOrderType === "request";
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
@@ -478,10 +479,10 @@ function OrdersPageContent() {
     queryFn: () =>
       isClientRole
         ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
-            query: { page: 1, page_size: 300 },
+            query: { page: 1, page_size: 200 },
           })
         : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
-            query: { page: 1, page_size: 300 },
+            query: { page: 1, page_size: 200 },
           }),
     enabled: createOpen && canCreate && createFactoryMode === "create",
   });
@@ -676,11 +677,6 @@ function OrdersPageContent() {
       mark("self_delivery_forwarder_user_id", "Выберите экспедитора для self-delivery");
     }
 
-    if (text.includes("assigned_forwarder_user_id") && text.includes("self_delivery")) {
-      mark("assigned_forwarder_user_id", "Экспедитор должен совпадать с self-delivery");
-      mark("self_delivery_forwarder_user_id", "Экспедитор должен совпадать с assigned_forwarder_user_id");
-    }
-
     if (text.includes("primary_email")) {
       mark(["create_factory", "primary_email"], "Введите корректный email");
     }
@@ -701,12 +697,33 @@ function OrdersPageContent() {
       mark("additional_description", "Если строки товара пустые, заполните описание груза");
     }
 
+    if (text.includes("ready_date")) {
+      mark("ready_date", "Дата готовности не может быть в прошлом");
+    }
+
+    if (text.includes("client_goods_value_currency_other_label")) {
+      mark(
+        "client_goods_value_currency_other_label",
+        "Для валюты OTHER укажите текстовое обозначение валюты",
+      );
+    }
+
     if (!fieldErrors.length) {
       return false;
     }
 
     createForm.setFields(fieldErrors as Parameters<typeof createForm.setFields>[0]);
     return true;
+  }
+
+  function closeAndResetCreateModal() {
+    setCreateOpen(false);
+    createForm.resetFields();
+    setClientCompaniesQueryText("");
+    setPostcodeQueryText("");
+    setNewFactoryEmail("");
+    setInlinePostcodeValue("");
+    setInlineCityValue("");
   }
 
   const createMutation = useMutation({
@@ -724,45 +741,17 @@ function OrdersPageContent() {
         }
         const slot = `create_file_${index + 1}`;
         filesToUpload.push({ slot, file });
+        const resolvedDocumentType =
+          trimOrUndefined(document.document_type) ?? createMetadataQuery.data?.document_type_options?.[0]?.code;
+        if (!resolvedDocumentType) {
+          throw new Error(`Документ #${index + 1}: не найден доступный тип документа`);
+        }
         return {
-          document_type:
-            trimOrUndefined(document.document_type) ??
-            createMetadataQuery.data?.document_type_options?.[0]?.code ??
-            "attachment",
+          document_type: resolvedDocumentType,
           file_slot: slot,
           display_name: trimOrUndefined(document.display_name) ?? file.name,
         };
       });
-
-      if (isRequestCreate) {
-        if (!values.company_id) {
-          throw new Error("Выберите компанию для заявки");
-        }
-
-        let parsedPayloadJson: Record<string, unknown> | undefined;
-        if (trimOrUndefined(values.request_payload_json)) {
-          parsedPayloadJson = JSON.parse(values.request_payload_json as string) as Record<string, unknown>;
-        }
-
-        const requestPayload = {
-          request: {
-            company_id: values.company_id,
-            company_contact_id: values.company_contact_id,
-            comment: trimOrUndefined(values.comment),
-            payload_json: parsedPayloadJson,
-          },
-          documents: documentsPayload,
-        };
-
-        const formData = new FormData();
-        formData.set("payload", JSON.stringify(requestPayload));
-        filesToUpload.forEach(({ slot, file }) => formData.append(slot, file));
-
-        return apiRequest<unknown>("/api/requests", {
-          method: "POST",
-          body: formData,
-        });
-      }
 
       if (!isClientRole && !values.company_id) {
         throw new Error("Выберите клиента");
@@ -770,6 +759,11 @@ function OrdersPageContent() {
 
       if (!values.ready_date) {
         throw new Error("Укажите дату готовности");
+      }
+
+      const today = dayjs().startOf("day");
+      if (values.ready_date.startOf("day").isBefore(today)) {
+        throw new Error("Дата готовности не может быть в прошлом");
       }
 
       if (values.invoice_on_other_company && !trimOrUndefined(values.invoice_company_name)) {
@@ -783,18 +777,27 @@ function OrdersPageContent() {
       const goodsLines = (values.goods_lines ?? [])
         .map((line) => {
           const itemTypeRaw = trimOrUndefined(line.item_type);
-          const itemType = itemTypeRaw === "other" ? trimOrUndefined(line.custom_item_type) : itemTypeRaw;
+          const customItemType = trimOrUndefined(line.custom_item_type);
           const description = trimOrUndefined(line.description);
           const weight_kg = trimOrUndefined(line.weight_kg);
           const quantity_value = trimOrUndefined(line.quantity_value);
           const quantity_unit = trimOrUndefined(line.quantity_unit);
 
-          if (!itemType && !description && !weight_kg && !quantity_value && !quantity_unit) {
+          if (!itemTypeRaw && !customItemType && !description && !weight_kg && !quantity_value && !quantity_unit) {
             return null;
           }
 
+          if (itemTypeRaw === "other" && !customItemType) {
+            throw new Error("Для типа позиции 'other' заполните custom тип");
+          }
+
+          if (quantity_unit && !["pcs", "m2"].includes(quantity_unit)) {
+            throw new Error("Ед. изм. должна быть одной из: pcs, m2");
+          }
+
           return {
-            item_type: itemType,
+            item_type: itemTypeRaw,
+            custom_item_type: itemTypeRaw === "other" ? customItemType : undefined,
             description,
             weight_kg,
             quantity_value,
@@ -805,6 +808,11 @@ function OrdersPageContent() {
 
       if (!goodsLines.length && !trimOrUndefined(values.additional_description)) {
         throw new Error("Если строки товара пустые, заполните описание груза");
+      }
+
+      let requestRawPayload: Record<string, unknown> | undefined;
+      if ((values.order_type ?? "delivery") === "request" && trimOrUndefined(values.request_payload_json)) {
+        requestRawPayload = JSON.parse(values.request_payload_json as string) as Record<string, unknown>;
       }
 
       let factorySelection: Record<string, unknown>;
@@ -842,8 +850,21 @@ function OrdersPageContent() {
         };
       }
 
+      const clientGoodsValueCurrency = trimOrUndefined(values.client_goods_value_currency);
+      if (clientGoodsValueCurrency && !["USD", "EUR", "OTHER"].includes(clientGoodsValueCurrency)) {
+        throw new Error("Валюта стоимости товара должна быть USD, EUR или OTHER");
+      }
+      const clientGoodsValueCurrencyOtherLabel = trimOrUndefined(values.client_goods_value_currency_other_label);
+      if (clientGoodsValueCurrency === "OTHER" && !clientGoodsValueCurrencyOtherLabel) {
+        throw new Error("Для валюты OTHER укажите текстовое обозначение валюты");
+      }
+      if (clientGoodsValueCurrency && clientGoodsValueCurrency !== "OTHER" && clientGoodsValueCurrencyOtherLabel) {
+        throw new Error("Текстовое обозначение валюты допустимо только для OTHER");
+      }
+
       const orderPayload: Record<string, unknown> = {
         order_number: trimOrUndefined(values.order_number),
+        order_type: values.order_type ?? "delivery",
         ready_date: values.ready_date.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
         invoice_company_name: trimOrUndefined(values.invoice_company_name),
@@ -852,28 +873,20 @@ function OrdersPageContent() {
         declared_total_weight_kg: trimOrUndefined(values.declared_total_weight_kg),
         cargo_places_qty: values.cargo_places_qty,
         client_goods_value_amount: trimOrUndefined(values.client_goods_value_amount),
-        client_goods_value_currency: trimOrUndefined(values.client_goods_value_currency),
+        client_goods_value_currency: clientGoodsValueCurrency,
+        client_goods_value_currency_other_label:
+          clientGoodsValueCurrency === "OTHER" ? clientGoodsValueCurrencyOtherLabel : undefined,
+        product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
+        raw_payload: requestRawPayload,
       };
 
       if (!isClientRole) {
         const assignedForwarderUserId = canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined;
-        if (
-          values.self_delivery &&
-          values.self_delivery_forwarder_user_id &&
-          assignedForwarderUserId &&
-          values.self_delivery_forwarder_user_id !== assignedForwarderUserId
-        ) {
-          throw new Error(
-            "Для self-delivery выбранный экспедитор должен совпадать с назначенным экспедитором в заказе",
-          );
-        }
-
         Object.assign(orderPayload, {
           company_id: values.company_id,
           company_contact_id: values.company_contact_id,
-          order_type: values.order_type ?? "delivery",
           user_comment: trimOrUndefined(values.user_comment),
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
@@ -891,7 +904,7 @@ function OrdersPageContent() {
                 comment: trimOrUndefined(values.weighing_comment) ?? null,
               }
             : undefined,
-          priority_codes: canEditRestrictedCreateFields ? values.priority_codes : undefined,
+          is_priority: canEditRestrictedCreateFields ? Boolean(values.is_priority) : undefined,
           office_mark_codes: canEditRestrictedCreateFields ? values.office_mark_codes : undefined,
           product_characteristic_codes: canEditRestrictedCreateFields
             ? values.product_characteristic_codes
@@ -921,15 +934,9 @@ function OrdersPageContent() {
         body: formData,
       });
     },
-    onSuccess: async () => {
-      message.success(isRequestCreate ? "Заявка создана" : "Заказ создан");
-      setCreateOpen(false);
-      createForm.resetFields();
-      setClientCompaniesQueryText("");
-      setPostcodeQueryText("");
-      setNewFactoryEmail("");
-      setInlinePostcodeValue("");
-      setInlineCityValue("");
+    onSuccess: async (_, values) => {
+      message.success(values.order_type === "request" ? "Заявка создана" : "Заказ создан");
+      closeAndResetCreateModal();
       await invalidateOrdersQueries();
       await queryClient.invalidateQueries({ queryKey: ["requests"] });
     },
@@ -1519,7 +1526,6 @@ function OrdersPageContent() {
     { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
   ];
   const orderTypeCreateOptions = toSelectOptions(createMetadataQuery.data?.order_type_options);
-  const priorityOptions = toSelectOptions((createMetadataQuery.data as OrderCreateMetadata | undefined)?.priority_options);
   const officeMarkOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.office_mark_options,
   );
@@ -1527,6 +1533,10 @@ function OrdersPageContent() {
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.product_characteristic_options,
   );
   const itemTypeOptions = toSelectOptions(createMetadataQuery.data?.item_type_options);
+  const quantityUnitOptions =
+    toSelectOptions(createMetadataQuery.data?.quantity_unit_options).length > 0
+      ? toSelectOptions(createMetadataQuery.data?.quantity_unit_options)
+      : QUANTITY_UNIT_FALLBACK_OPTIONS;
   const documentTypeOptions = toSelectOptions(createMetadataQuery.data?.document_type_options);
   const measurementStatusOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.measurement_status_options,
@@ -1997,22 +2007,27 @@ function OrdersPageContent() {
         }
         open={createOpen}
         destroyOnHidden
+        className="crm-order-create-modal"
         onCancel={() => {
-          setCreateOpen(false);
-          createForm.resetFields();
-          setClientCompaniesQueryText("");
-          setPostcodeQueryText("");
-          setNewFactoryEmail("");
-          setInlinePostcodeValue("");
-          setInlineCityValue("");
+          if (!createForm.isFieldsTouched(true)) {
+            closeAndResetCreateModal();
+            return;
+          }
+          Modal.confirm({
+            title: "Вы уверены, что хотите отменить создание заказа?",
+            okText: "Отменить создание",
+            cancelText: "Продолжить заполнение",
+            onOk: () => closeAndResetCreateModal(),
+          });
         }}
         onOk={() => createForm.submit()}
         confirmLoading={createMutation.isPending}
-        width={860}
+        width={1080}
       >
         <Form<OrderCreateForm>
           form={createForm}
           layout="vertical"
+          className="crm-order-create-form"
           initialValues={{
             order_type: "delivery",
             factory_mode: "existing",
@@ -2022,126 +2037,251 @@ function OrdersPageContent() {
           }}
           onFinish={(values) => createMutation.mutate(values)}
         >
-          <Form.Item name="order_number" label="Номер заказа (опционально)">
-            <Input />
-          </Form.Item>
-
-          {!isClientRole ? (
-            <>
-              <Form.Item name="company_id" label="Клиент (компания)" rules={[{ required: true }]}>
-                <Select
-                  showSearch
-                  filterOption={false}
-                  loading={clientCompaniesQuery.isLoading}
-                  options={clientCompanyOptions}
-                  onSearch={(value) => setClientCompaniesQueryText(value)}
-                  onChange={() => {
-                    createForm.setFieldValue("company_contact_id", undefined);
-                  }}
-                  placeholder="Начните вводить название компании"
-                />
+          <div className="crm-order-create-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Основное
+            </Typography.Title>
+            <div className="crm-order-create-grid">
+              <Form.Item name="order_number" label="Номер заказа (опционально)" className="crm-order-create-col">
+                <Input />
               </Form.Item>
 
-              <Form.Item name="company_contact_id" label="Контакт компании (опционально)">
-                <Select
-                  allowClear
-                  disabled={!selectedCompanyContacts.length}
-                  options={selectedCompanyContacts.map((contact) => ({
-                    label:
-                      [contact.full_name, contact.job_title, contact.email, contact.phone]
-                        .filter(Boolean)
-                        .join(" · ") || `Contact #${contact.id}`,
-                    value: contact.id,
-                  }))}
-                  placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
-                />
-              </Form.Item>
+              {!isClientRole ? (
+                <Form.Item
+                  name="company_id"
+                  label="Клиент (компания)"
+                  rules={[{ required: true }]}
+                  className="crm-order-create-col"
+                >
+                  <Select
+                    showSearch
+                    filterOption={false}
+                    loading={clientCompaniesQuery.isLoading}
+                    options={clientCompanyOptions}
+                    onSearch={(value) => setClientCompaniesQueryText(value)}
+                    onChange={() => createForm.setFieldValue("company_contact_id", undefined)}
+                    placeholder="Начните вводить название компании"
+                  />
+                </Form.Item>
+              ) : null}
 
-              <Form.Item name="order_type" label="Тип заказа" rules={[{ required: true }]}>
+              {!isClientRole ? (
+                <Form.Item
+                  name="company_contact_id"
+                  label="Контакт компании (опционально)"
+                  className="crm-order-create-col"
+                >
+                  <Select
+                    allowClear
+                    disabled={!selectedCompanyContacts.length}
+                    options={selectedCompanyContacts.map((contact) => ({
+                      label:
+                        [contact.full_name, contact.job_title, contact.email, contact.phone]
+                          .filter(Boolean)
+                          .join(" · ") || `Contact #${contact.id}`,
+                      value: contact.id,
+                    }))}
+                    placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
+                  />
+                </Form.Item>
+              ) : null}
+
+              <Form.Item
+                name="order_type"
+                label="Тип заказа"
+                rules={[{ required: true }]}
+                className="crm-order-create-col"
+              >
                 <Select
                   loading={createMetadataQuery.isLoading}
                   options={orderTypeCreateOptions}
                   placeholder={orderTypeCreateOptions.length ? undefined : "Нет доступных типов в metadata"}
                 />
               </Form.Item>
-            </>
-          ) : null}
 
-          {!isRequestCreate ? (
-            <Form.Item name="ready_date" label="Дата готовности" rules={[{ required: true }]}>
-              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
-            </Form.Item>
-          ) : null}
-
-          <Form.Item name="invoice_on_other_company" valuePropName="checked">
-            <Checkbox>Инвойс на другую компанию</Checkbox>
-          </Form.Item>
-
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue("invoice_on_other_company") ? (
-                <Form.Item
-                  name="invoice_company_name"
-                  label="Название компании для инвойса"
-                  rules={[{ required: true, message: "Укажите название компании" }]}
-                >
-                  <Input />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
-
-          <Form.Item name="invoice_number" label="Инвойс / проформа">
-            <Input />
-          </Form.Item>
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="factory_mode" label="Фабрика">
-                <Select
-                  options={[
-                    { label: "Выбрать существующую", value: "existing" },
-                    { label: "Создать новую", value: "create" },
-                  ]}
+              <Form.Item
+                name="ready_date"
+                label="Дата готовности"
+                rules={[{ required: true }]}
+                className="crm-order-create-col"
+              >
+                <DatePicker
+                  style={{ width: "100%" }}
+                  format="YYYY-MM-DD"
+                  disabledDate={(current) => Boolean(current && current.startOf("day").isBefore(dayjs().startOf("day")))}
                 />
               </Form.Item>
 
-              {createFactoryMode === "existing" ? (
-                <>
-                  <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]}>
+              <Form.Item name="invoice_on_other_company" valuePropName="checked" className="crm-order-create-col">
+                <Checkbox>Инвойс на другую компанию</Checkbox>
+              </Form.Item>
+
+              <Form.Item name="invoice_number" label="Инвойс / проформа" className="crm-order-create-col">
+                <Input />
+              </Form.Item>
+
+              <Form.Item noStyle shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}>
+                {({ getFieldValue }) =>
+                  getFieldValue("invoice_on_other_company") ? (
+                    <Form.Item
+                      name="invoice_company_name"
+                      label="Название компании для инвойса"
+                      rules={[{ required: true, message: "Укажите название компании" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+                  ) : null
+                }
+              </Form.Item>
+
+              <Form.Item name="comment" label="Комментарий" className="crm-order-create-col">
+                <Input.TextArea rows={2} />
+              </Form.Item>
+
+              {isRequestCreate ? (
+                <Form.Item
+                  name="request_payload_json"
+                  label="raw_payload (JSON, опционально)"
+                  className="crm-order-create-col crm-order-create-col-span-2"
+                >
+                  <Input.TextArea rows={3} placeholder='{"legacy_request_form":{"comment":"From UI"}}' />
+                </Form.Item>
+              ) : null}
+            </div>
+
+            <Form.Item
+              name="additional_description"
+              label="Описание груза"
+              className="crm-order-create-col crm-order-create-col-full"
+            >
+              <Input.TextArea rows={4} />
+            </Form.Item>
+          </div>
+
+          {!isClientRole ? (
+            <div className="crm-order-create-section">
+              <Typography.Title level={5} className="crm-order-create-section-title">
+                Self-delivery и экспедитор
+              </Typography.Title>
+              <div className="crm-order-create-grid">
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item
+                    name="assigned_forwarder_user_id"
+                    label="Назначить экспедитора"
+                    className="crm-order-create-col"
+                  >
                     <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={factoryOptionsQuery.isLoading}
-                      options={(factoryOptionsQuery.data ?? []).map((factory) => ({
-                        label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
-                        value: factory.id,
+                      allowClear
+                      loading={forwardersQuery.isLoading}
+                      options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                        label: `${user.id} - ${user.full_name || user.login}`,
+                        value: user.id,
                       }))}
-                      onChange={() => {
-                        createForm.setFieldValue("loading_address_id", undefined);
-                        createForm.setFieldValue("email_id", undefined);
-                      }}
                     />
                   </Form.Item>
+                ) : null}
 
-                  <Form.Item name="loading_address_id" label="Адрес загрузки" rules={[{ required: true }]}>
-                    <Select
-                      loading={loadingAddressesQuery.isLoading}
-                      disabled={!createFactoryId}
-                      options={(loadingAddressesQuery.data ?? []).map((address) => ({
-                        label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
-                        value: address.id,
-                      }))}
-                      notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
-                    />
+                <Form.Item name="self_delivery" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>Self-delivery</Checkbox>
+                </Form.Item>
+
+                <Form.Item noStyle shouldUpdate={(prev, next) => prev.self_delivery !== next.self_delivery}>
+                  {({ getFieldValue }) =>
+                    getFieldValue("self_delivery") ? (
+                      <Form.Item
+                        name="self_delivery_forwarder_user_id"
+                        label="Экспедитор для self-delivery"
+                        rules={[{ required: true, message: "Выберите экспедитора" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Select
+                          loading={createMetadataQuery.isLoading}
+                          options={selfDeliveryForwarderOptions}
+                          placeholder={selfDeliveryForwarderOptions.length ? undefined : "Нет экспедиторов в metadata"}
+                        />
+                      </Form.Item>
+                    ) : null
+                  }
+                </Form.Item>
+
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item name="is_priority" valuePropName="checked" className="crm-order-create-col">
+                    <Checkbox>Высокий приоритет</Checkbox>
                   </Form.Item>
+                ) : null}
 
-                  {!isClientRole ? (
-                    <>
-                      <Form.Item name="email_id" label="Email фабрики (опционально)">
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item name="office_mark_codes" label="Office mark codes" className="crm-order-create-col">
+                    <Select mode="multiple" allowClear options={officeMarkOptions} />
+                  </Form.Item>
+                ) : null}
+
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item
+                    name="product_characteristic_codes"
+                    label="Product characteristic codes"
+                    className="crm-order-create-col"
+                  >
+                    <Select mode="multiple" allowClear options={productCharacteristicOptions} />
+                  </Form.Item>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="crm-order-create-section crm-order-create-factory-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Фабрика
+            </Typography.Title>
+            <Card size="small" className="crm-order-create-factory-card">
+              <div className="crm-order-create-grid">
+                <Form.Item name="factory_mode" label="Режим фабрики" className="crm-order-create-col">
+                  <Select
+                    options={[
+                      { label: "Выбрать существующую", value: "existing" },
+                      { label: "Создать новую", value: "create" },
+                    ]}
+                  />
+                </Form.Item>
+
+                {createFactoryMode === "existing" ? (
+                  <>
+                    <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]} className="crm-order-create-col">
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={factoryOptionsQuery.isLoading}
+                        options={(factoryOptionsQuery.data ?? []).map((factory) => ({
+                          label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
+                          value: factory.id,
+                        }))}
+                        onChange={() => {
+                          createForm.setFieldValue("loading_address_id", undefined);
+                          createForm.setFieldValue("email_id", undefined);
+                        }}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      name="loading_address_id"
+                      label="Адрес погрузки"
+                      rules={[{ required: true }]}
+                      className="crm-order-create-col crm-order-create-col-full"
+                    >
+                      <Select
+                        loading={loadingAddressesQuery.isLoading}
+                        disabled={!createFactoryId}
+                        options={(loadingAddressesQuery.data ?? []).map((address) => ({
+                          label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
+                          value: address.id,
+                        }))}
+                        notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
+
+                    {!isClientRole ? (
+                      <Form.Item name="email_id" label="Email фабрики (опционально)" className="crm-order-create-col">
                         <Select
                           allowClear
                           loading={factoryEmailsQuery.isLoading}
@@ -2150,425 +2290,428 @@ function OrdersPageContent() {
                           placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
                         />
                       </Form.Item>
-
-                      {canManageFactoryEmails ? (
-                        <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                          <Input
-                            placeholder="Добавить email фабрики"
-                            value={newFactoryEmail}
-                            onChange={(event) => setNewFactoryEmail(event.target.value)}
-                          />
-                          <Button
-                            loading={createFactoryEmailMutation.isPending}
-                            onClick={() => {
-                              if (!createFactoryId) {
-                                message.error("Сначала выберите фабрику");
-                                return;
-                              }
-                              const email = trimOrUndefined(newFactoryEmail);
-                              if (!email) {
-                                message.error("Введите email");
-                                return;
-                              }
-                              createFactoryEmailMutation.mutate({ factoryId: createFactoryId, email });
-                            }}
-                          >
-                            Добавить email
-                          </Button>
-                        </Space.Compact>
-                      ) : null}
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <Typography.Text type="secondary">Новая фабрика (inline create)</Typography.Text>
-
-                  <Form.Item
-                    name={["create_factory", "factory_name"]}
-                    label="Название фабрики"
-                    rules={[{ required: true, message: "Укажите название фабрики" }]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "country_id"]}
-                    label="Страна фабрики"
-                    rules={[{ required: true, message: "Выберите страну" }]}
-                  >
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={countriesQuery.isLoading}
-                      options={countryOptions}
-                      onChange={() => {
-                        createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
-                        createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-                      }}
-                    />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "primary_email"]}
-                    label="Primary email фабрики"
-                    rules={[
-                      { required: true, message: "Укажите email" },
-                      { type: "email", message: "Введите корректный email" },
-                    ]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "loading_address", "postcode_id"]}
-                    label="Индекс"
-                    rules={[{ required: true, message: "Выберите индекс" }]}
-                  >
-                    <Select
-                      showSearch
-                      filterOption={false}
-                      onSearch={(value) => setPostcodeQueryText(value)}
-                      loading={postcodesQuery.isLoading}
-                      options={postcodeOptions}
-                      onChange={() => createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined)}
-                    />
-                  </Form.Item>
-
-                  {canInlineCreatePostcodeCity ? (
-                    <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                      <Input
-                        placeholder="Новый индекс (inline create)"
-                        value={inlinePostcodeValue}
-                        onChange={(event) => setInlinePostcodeValue(event.target.value)}
-                      />
-                      <Button
-                        loading={createPostcodeMutation.isPending}
-                        onClick={() => {
-                          if (!createFactoryCountryId) {
-                            message.error("Сначала выберите страну фабрики");
-                            return;
-                          }
-                          const postcode = trimOrUndefined(inlinePostcodeValue);
-                          if (!postcode) {
-                            message.error("Введите индекс");
-                            return;
-                          }
-                          createPostcodeMutation.mutate({ country_id: createFactoryCountryId, postcode });
-                        }}
-                      >
-                        Создать индекс
-                      </Button>
-                    </Space.Compact>
-                  ) : null}
-
-                  <Form.Item
-                    name={["create_factory", "loading_address", "city_id"]}
-                    label="Город"
-                    rules={[{ required: true, message: "Выберите город" }]}
-                  >
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={postcodeCitiesQuery.isLoading}
-                      options={postcodeCityOptions}
-                      disabled={!createFactoryPostcodeId}
-                    />
-                  </Form.Item>
-
-                  {canInlineCreatePostcodeCity ? (
-                    <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                      <Input
-                        placeholder="Новый город (inline create)"
-                        value={inlineCityValue}
-                        onChange={(event) => setInlineCityValue(event.target.value)}
-                      />
-                      <Button
-                        loading={createPostcodeCityMutation.isPending}
-                        onClick={() => {
-                          if (!createFactoryPostcodeId) {
-                            message.error("Сначала выберите индекс");
-                            return;
-                          }
-                          const city = trimOrUndefined(inlineCityValue);
-                          if (!city) {
-                            message.error("Введите город");
-                            return;
-                          }
-                          createPostcodeCityMutation.mutate({ postcodeId: createFactoryPostcodeId, city });
-                        }}
-                      >
-                        Создать город
-                      </Button>
-                    </Space.Compact>
-                  ) : null}
-
-                  <Form.Item
-                    name={["create_factory", "loading_address", "address"]}
-                    label="Адрес загрузки"
-                    rules={[{ required: true, message: "Укажите адрес" }]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "loading_address", "phone"]}
-                    label="Телефон адреса загрузки"
-                    rules={[
-                      { required: true, message: "Укажите телефон" },
-                      { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
-                    ]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item name={["create_factory", "loading_address", "fax"]} label="Fax (опционально)">
-                    <Input />
-                  </Form.Item>
-
-                  {canUseMessengerFields ? (
-                    <>
-                      <Form.Item name={["create_factory", "loading_address", "messenger_type"]} label="Тип мессенджера">
-                        <Select allowClear loading={messengerTypesQuery.isLoading} options={messengerTypeOptions} />
-                      </Form.Item>
-                      <Form.Item name={["create_factory", "loading_address", "messenger_value"]} label="Контакт мессенджера">
-                        <Input />
-                      </Form.Item>
-                    </>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : (
-            <Typography.Text type="secondary">
-              Для типа заказа `request` используется отдельный backend path `POST /api/requests`.
-            </Typography.Text>
-          )}
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="additional_description" label="Описание груза">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-              <Form.Item name="comment" label="Комментарий">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-            </>
-          ) : (
-            <>
-              <Form.Item name="comment" label="Комментарий заявки">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-              <Form.Item name="request_payload_json" label="payload_json (JSON, опционально)">
-                <Input.TextArea rows={3} placeholder='{"source":"web"}' />
-              </Form.Item>
-            </>
-          )}
-
-          {!isClientRole && !isRequestCreate ? (
-            <>
-              <Form.Item name="self_delivery" valuePropName="checked">
-                <Checkbox>Self-delivery</Checkbox>
-              </Form.Item>
-              <Form.Item noStyle shouldUpdate={(prev, next) => prev.self_delivery !== next.self_delivery}>
-                {({ getFieldValue }) =>
-                  getFieldValue("self_delivery") ? (
+                    ) : null}
+                  </>
+                ) : (
+                  <>
                     <Form.Item
-                      name="self_delivery_forwarder_user_id"
-                      label="Экспедитор для self-delivery"
-                      rules={[{ required: true, message: "Выберите экспедитора" }]}
+                      name={["create_factory", "factory_name"]}
+                      label="Название фабрики"
+                      rules={[{ required: true, message: "Укажите название фабрики" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "country_id"]}
+                      label="Страна фабрики"
+                      rules={[{ required: true, message: "Выберите страну" }]}
+                      className="crm-order-create-col"
                     >
                       <Select
-                        loading={createMetadataQuery.isLoading}
-                        options={selfDeliveryForwarderOptions}
-                        placeholder={
-                          selfDeliveryForwarderOptions.length ? undefined : "Нет доступных экспедиторов в metadata"
-                        }
+                        showSearch
+                        optionFilterProp="label"
+                        loading={countriesQuery.isLoading}
+                        options={countryOptions}
+                        onChange={() => {
+                          createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
+                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                        }}
                       />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "primary_email"]}
+                      label="Primary email фабрики"
+                      rules={[
+                        { required: true, message: "Укажите email" },
+                        { type: "email", message: "Введите корректный email" },
+                      ]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "postcode_id"]}
+                      label="Индекс"
+                      rules={[{ required: true, message: "Выберите индекс" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Select
+                        showSearch
+                        filterOption={false}
+                        onSearch={(value) => setPostcodeQueryText(value)}
+                        loading={postcodesQuery.isLoading}
+                        options={postcodeOptions}
+                        onChange={() => createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined)}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "city_id"]}
+                      label="Город"
+                      rules={[{ required: true, message: "Выберите город" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={postcodeCitiesQuery.isLoading}
+                        options={postcodeCityOptions}
+                        disabled={!createFactoryPostcodeId}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "address"]}
+                      label="Адрес погрузки"
+                      rules={[{ required: true, message: "Укажите адрес" }]}
+                      className="crm-order-create-col crm-order-create-col-span-2"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "phone"]}
+                      label="Телефон адреса погрузки"
+                      rules={[
+                        { required: true, message: "Укажите телефон" },
+                        { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                      ]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "fax"]}
+                      label="Fax (опционально)"
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    {canUseMessengerFields ? (
+                      <Form.Item
+                        name={["create_factory", "loading_address", "messenger_type"]}
+                        label="Тип мессенджера"
+                        className="crm-order-create-col"
+                      >
+                        <Select allowClear loading={messengerTypesQuery.isLoading} options={messengerTypeOptions} />
+                      </Form.Item>
+                    ) : null}
+
+                    {canUseMessengerFields ? (
+                      <Form.Item
+                        name={["create_factory", "loading_address", "messenger_value"]}
+                        label="Контакт мессенджера"
+                        className="crm-order-create-col"
+                      >
+                        <Input />
+                      </Form.Item>
+                    ) : null}
+                  </>
+                )}
+              </div>
+
+              {createFactoryMode === "existing" && !isClientRole && canManageFactoryEmails ? (
+                <Space.Compact style={{ width: "100%" }}>
+                  <Input
+                    placeholder="Добавить email фабрики"
+                    value={newFactoryEmail}
+                    onChange={(event) => setNewFactoryEmail(event.target.value)}
+                  />
+                  <Button
+                    loading={createFactoryEmailMutation.isPending}
+                    onClick={() => {
+                      if (!createFactoryId) {
+                        message.error("Сначала выберите фабрику");
+                        return;
+                      }
+                      const email = trimOrUndefined(newFactoryEmail);
+                      if (!email) {
+                        message.error("Введите email");
+                        return;
+                      }
+                      createFactoryEmailMutation.mutate({ factoryId: createFactoryId, email });
+                    }}
+                  >
+                    Добавить email
+                  </Button>
+                </Space.Compact>
+              ) : null}
+
+              {createFactoryMode === "create" && canInlineCreatePostcodeCity ? (
+                <div className="crm-order-create-inline-actions">
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Input
+                      placeholder="Новый индекс (inline create)"
+                      value={inlinePostcodeValue}
+                      onChange={(event) => setInlinePostcodeValue(event.target.value)}
+                    />
+                    <Button
+                      loading={createPostcodeMutation.isPending}
+                      onClick={() => {
+                        if (!createFactoryCountryId) {
+                          message.error("Сначала выберите страну фабрики");
+                          return;
+                        }
+                        const postcode = trimOrUndefined(inlinePostcodeValue);
+                        if (!postcode) {
+                          message.error("Введите индекс");
+                          return;
+                        }
+                        createPostcodeMutation.mutate({ country_id: createFactoryCountryId, postcode });
+                      }}
+                    >
+                      Создать индекс
+                    </Button>
+                  </Space.Compact>
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Input
+                      placeholder="Новый город (inline create)"
+                      value={inlineCityValue}
+                      onChange={(event) => setInlineCityValue(event.target.value)}
+                    />
+                    <Button
+                      loading={createPostcodeCityMutation.isPending}
+                      onClick={() => {
+                        if (!createFactoryPostcodeId) {
+                          message.error("Сначала выберите индекс");
+                          return;
+                        }
+                        const city = trimOrUndefined(inlineCityValue);
+                        if (!city) {
+                          message.error("Введите город");
+                          return;
+                        }
+                        createPostcodeCityMutation.mutate({ postcodeId: createFactoryPostcodeId, city });
+                      }}
+                    >
+                      Создать город
+                    </Button>
+                  </Space.Compact>
+                </div>
+              ) : null}
+            </Card>
+          </div>
+
+          {!isClientRole && canEditRestrictedCreateFields ? (
+            <div className="crm-order-create-section">
+              <Typography.Title level={5} className="crm-order-create-section-title">
+                Операционные поля
+              </Typography.Title>
+              <div className="crm-order-create-grid">
+                <Form.Item name="measurement_status" label="Статус измерений" className="crm-order-create-col">
+                  <Select allowClear options={measurementStatusOptions} />
+                </Form.Item>
+                <Form.Item name="measurement_comment" label="Комментарий измерений" className="crm-order-create-col">
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+                <Form.Item name="weighing_status" label="Статус взвешивания" className="crm-order-create-col">
+                  <Select allowClear options={weighingStatusOptions} />
+                </Form.Item>
+                <Form.Item name="weighing_comment" label="Комментарий взвешивания" className="crm-order-create-col">
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+                <Form.Item name="user_comment" label="Комментарий клиента (внутр.)" className="crm-order-create-col">
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+                <Form.Item
+                  name="forwarder_comment"
+                  label="Комментарий экспедитора (внутр.)"
+                  className="crm-order-create-col"
+                >
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+                <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)" className="crm-order-create-col">
+                  <Input.TextArea rows={2} />
+                </Form.Item>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="crm-order-create-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Список товаров
+            </Typography.Title>
+            <Form.List name="goods_lines">
+              {(fields, { add, remove }) => (
+                <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                  {fields.map((field) => (
+                    <Card
+                      key={field.key}
+                      size="small"
+                      title={`Строка #${field.name + 1}`}
+                      extra={
+                        <Button danger size="small" onClick={() => remove(field.name)}>
+                          Удалить
+                        </Button>
+                      }
+                    >
+                      <div className="crm-order-create-grid">
+                        <Form.Item name={[field.name, "item_type"]} label="Тип позиции" className="crm-order-create-col">
+                          <Select allowClear options={itemTypeOptions} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "custom_item_type"]}
+                          label="Custom тип (если other)"
+                          className="crm-order-create-col"
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name={[field.name, "description"]} label="Описание" className="crm-order-create-col">
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name={[field.name, "weight_kg"]} label="Вес, кг" className="crm-order-create-col">
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name={[field.name, "quantity_unit"]} label="Ед. изм." className="crm-order-create-col">
+                          <Select allowClear options={quantityUnitOptions} />
+                        </Form.Item>
+                        <Form.Item name={[field.name, "quantity_value"]} label="Количество" className="crm-order-create-col">
+                          <Input />
+                        </Form.Item>
+                      </div>
+                    </Card>
+                  ))}
+                  <Button onClick={() => add()} block>
+                    Добавить строку товара
+                  </Button>
+                </Space>
+              )}
+            </Form.List>
+          </div>
+
+          <div className="crm-order-create-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Declared / Value
+            </Typography.Title>
+            <div className="crm-order-create-grid">
+              <Form.Item name="declared_volume_m3" label="Declared volume (m3)" className="crm-order-create-col">
+                <Input />
+              </Form.Item>
+              <Form.Item
+                name="declared_total_weight_kg"
+                label="Declared total weight (kg)"
+                className="crm-order-create-col"
+              >
+                <Input />
+              </Form.Item>
+              <Form.Item name="cargo_places_qty" label="Cargo places qty" className="crm-order-create-col">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="client_goods_value_amount" label="Goods value amount" className="crm-order-create-col">
+                <Input />
+              </Form.Item>
+              <Form.Item name="client_goods_value_currency" label="Goods value currency" className="crm-order-create-col">
+                <Select
+                  options={[
+                    { label: "USD", value: "USD" },
+                    { label: "EUR", value: "EUR" },
+                    { label: "OTHER", value: "OTHER" },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, next) =>
+                  prev.client_goods_value_currency !== next.client_goods_value_currency
+                }
+              >
+                {({ getFieldValue }) =>
+                  getFieldValue("client_goods_value_currency") === "OTHER" ? (
+                    <Form.Item
+                      name="client_goods_value_currency_other_label"
+                      label="Другая валюта (обязательно для OTHER)"
+                      rules={[{ required: true, message: "Укажите валюту" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
                     </Form.Item>
                   ) : null
                 }
               </Form.Item>
-            </>
-          ) : null}
+            </div>
+          </div>
 
-          {!isClientRole && canEditRestrictedCreateFields && !isRequestCreate ? (
-            <>
-              <Form.Item name="priority_codes" label="Priority codes">
-                <Select mode="multiple" allowClear options={priorityOptions} />
-              </Form.Item>
-              <Form.Item name="office_mark_codes" label="Office mark codes">
-                <Select mode="multiple" allowClear options={officeMarkOptions} />
-              </Form.Item>
-              <Form.Item name="product_characteristic_codes" label="Product characteristic codes">
-                <Select mode="multiple" allowClear options={productCharacteristicOptions} />
-              </Form.Item>
-              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
-                <Select
-                  allowClear
-                  loading={forwardersQuery.isLoading}
-                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                    label: `${user.id} - ${user.full_name || user.login}`,
-                    value: user.id,
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item name="factory_payment_via_label" label="Оплата фабрики через">
-                <Input />
-              </Form.Item>
-              <Form.Item name="is_factory_payment_completed" valuePropName="checked">
-                <Checkbox>Оплата фабрики завершена</Checkbox>
-              </Form.Item>
-              <Form.Item name="is_checked" valuePropName="checked">
-                <Checkbox>Проверено офисом</Checkbox>
-              </Form.Item>
-              <Form.Item name="measurement_status" label="Статус измерений">
-                <Select allowClear options={measurementStatusOptions} />
-              </Form.Item>
-              <Form.Item name="measurement_comment" label="Комментарий измерений">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="weighing_status" label="Статус взвешивания">
-                <Select allowClear options={weighingStatusOptions} />
-              </Form.Item>
-              <Form.Item name="weighing_comment" label="Комментарий взвешивания">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="user_comment" label="Комментарий клиента (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="forwarder_comment" label="Комментарий экспедитора (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-            </>
-          ) : null}
-
-          {!isRequestCreate ? (
-            <>
-              <Typography.Title level={5} style={{ marginTop: 8 }}>
-                Строки товара
+          {!isClientRole && canEditRestrictedCreateFields ? (
+            <div className="crm-order-create-section">
+              <Typography.Title level={5} className="crm-order-create-section-title">
+                Оплата / Проверка
               </Typography.Title>
-              <Form.List name="goods_lines">
-                {(fields, { add, remove }) => (
-                  <Space direction="vertical" style={{ width: "100%" }} size={12}>
-                    {fields.map((field) => (
-                      <Card
-                        key={field.key}
-                        size="small"
-                        title={`Строка #${field.name + 1}`}
-                        extra={
-                          <Button danger size="small" onClick={() => remove(field.name)}>
-                            Удалить
-                          </Button>
-                        }
-                      >
-                        <Form.Item name={[field.name, "item_type"]} label="Тип позиции">
-                          <Select
-                            allowClear
-                            options={[
-                              ...itemTypeOptions,
-                              { label: "Other", value: "other" },
-                            ]}
-                          />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "custom_item_type"]} label="Custom тип (если other)">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "description"]} label="Описание">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "weight_kg"]} label="Вес, кг">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_value"]} label="Количество">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_unit"]} label="Ед. изм.">
-                          <Select allowClear options={QUANTITY_UNIT_FALLBACK_OPTIONS} />
-                        </Form.Item>
-                      </Card>
-                    ))}
-                    <Button onClick={() => add()} block>
-                      Добавить строку товара
-                    </Button>
-                  </Space>
-                )}
-              </Form.List>
-            </>
+              <div className="crm-order-create-grid">
+                <Form.Item name="factory_payment_via_label" label="Оплата фабрики через" className="crm-order-create-col">
+                  <Input />
+                </Form.Item>
+                <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>Оплата фабрики завершена</Checkbox>
+                </Form.Item>
+                <Form.Item name="is_checked" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>Проверено офисом</Checkbox>
+                </Form.Item>
+              </div>
+            </div>
           ) : null}
 
-          <Typography.Title level={5} style={{ marginTop: 12 }}>
-            Документы (до 10 файлов)
-          </Typography.Title>
-          <Form.List name="documents">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: "100%" }} size={12}>
-                {fields.map((field) => (
-                  <Card
-                    key={field.key}
-                    size="small"
-                    title={`Документ #${field.name + 1}`}
-                    extra={
-                      <Button danger size="small" onClick={() => remove(field.name)}>
-                        Удалить
-                      </Button>
-                    }
-                  >
-                    <Form.Item
-                      name={[field.name, "document_type"]}
-                      label="Тип документа"
-                      rules={[{ required: true, message: "Укажите тип документа" }]}
+          <div className="crm-order-create-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Документы (до 10 файлов)
+            </Typography.Title>
+            <Form.List name="documents">
+              {(fields, { add, remove }) => (
+                <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                  {fields.map((field) => (
+                    <Card
+                      key={field.key}
+                      size="small"
+                      title={`Документ #${field.name + 1}`}
+                      extra={
+                        <Button danger size="small" onClick={() => remove(field.name)}>
+                          Удалить
+                        </Button>
+                      }
                     >
-                      <Select
-                        allowClear
-                        options={documentTypeOptions.length ? documentTypeOptions : [{ label: "attachment", value: "attachment" }]}
-                      />
-                    </Form.Item>
-                    <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя (опционально)">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "file_list"]}
-                      label="Файл"
-                      valuePropName="fileList"
-                      getValueFromEvent={(event) => event?.fileList}
-                      rules={[{ required: true, message: "Выберите файл" }]}
-                    >
-                      <Upload beforeUpload={() => false} maxCount={1}>
-                        <Button>Выбрать файл</Button>
-                      </Upload>
-                    </Form.Item>
-                  </Card>
-                ))}
-                <Button onClick={() => add()} block disabled={fields.length >= 10}>
-                  Добавить документ
-                </Button>
-              </Space>
-            )}
-          </Form.List>
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="declared_volume_m3" label="Declared volume (m3)">
-                <Input />
-              </Form.Item>
-              <Form.Item name="declared_total_weight_kg" label="Declared total weight (kg)">
-                <Input />
-              </Form.Item>
-              <Form.Item name="cargo_places_qty" label="Cargo places qty">
-                <InputNumber min={0} style={{ width: "100%" }} />
-              </Form.Item>
-              <Form.Item name="client_goods_value_amount" label="Goods value amount">
-                <Input />
-              </Form.Item>
-              <Form.Item name="client_goods_value_currency" label="Goods value currency">
-                <Input />
-              </Form.Item>
-            </>
-          ) : null}
+                      <div className="crm-order-create-grid">
+                        <Form.Item
+                          name={[field.name, "document_type"]}
+                          label="Тип документа"
+                          rules={[{ required: true, message: "Укажите тип документа" }]}
+                          className="crm-order-create-col"
+                        >
+                          <Select allowClear options={documentTypeOptions} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "display_name"]}
+                          label="Отображаемое имя (опционально)"
+                          className="crm-order-create-col"
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "file_list"]}
+                          label="Файл"
+                          valuePropName="fileList"
+                          getValueFromEvent={(event) => event?.fileList}
+                          rules={[{ required: true, message: "Выберите файл" }]}
+                          className="crm-order-create-col"
+                        >
+                          <Upload beforeUpload={() => false} maxCount={1}>
+                            <Button>Выбрать файл</Button>
+                          </Upload>
+                        </Form.Item>
+                      </div>
+                    </Card>
+                  ))}
+                  <Button onClick={() => add()} block disabled={fields.length >= 10}>
+                    Добавить документ
+                  </Button>
+                </Space>
+              )}
+            </Form.List>
+          </div>
         </Form>
       </Modal>
 

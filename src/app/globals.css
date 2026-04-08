@@ -404,6 +404,64 @@ a {
   max-width: 980px;
 }
 
+.crm-order-create-modal .ant-modal-body {
+  max-height: min(78vh, 900px);
+  overflow-y: auto;
+  padding-right: 18px;
+}
+
+.crm-order-create-form .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.crm-order-create-section {
+  margin-bottom: 14px;
+}
+
+.crm-order-create-section-title {
+  margin: 0 0 8px !important;
+}
+
+.crm-order-create-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 10px;
+}
+
+.crm-order-create-col {
+  margin-bottom: 0 !important;
+}
+
+.crm-order-create-col-full {
+  margin-top: 8px;
+}
+
+.crm-order-create-col-span-2 {
+  grid-column: span 2;
+}
+
+.crm-order-create-factory-section {
+  border-top: 1px dashed #d9dde6;
+  padding-top: 8px;
+}
+
+.crm-order-create-factory-card {
+  border-color: #cdd6ea;
+  background: #f9fbff;
+}
+
+.crm-order-create-factory-card .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.crm-order-create-inline-actions {
+  display: grid;
+  gap: 8px;
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;
@@ -484,6 +542,15 @@ a {
     max-width: 100%;
   }
 
+  .crm-order-create-grid {
+    grid-template-columns: 1fr;
+    gap: 4px 8px;
+  }
+
+  .crm-order-create-col-span-2 {
+    grid-column: span 1;
+  }
+
   .crm-toolbar-search .ant-input-search {
     max-width: 100%;
   }
@@ -498,5 +565,11 @@ a {
 
   .crm-top-nav-right .ant-btn > span:not(.anticon) {
     display: none;
+  }
+}
+
+@media (max-width: 1199px) and (min-width: 900px) {
+  .crm-order-create-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

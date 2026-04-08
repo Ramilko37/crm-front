@@ -714,6 +714,7 @@ export type OrderCreateMetadata = {
   office_mark_options: DictionaryOption[];
   product_characteristic_options: DictionaryOption[];
   item_type_options: DictionaryOption[];
+  quantity_unit_options: DictionaryOption[];
   document_type_options: DictionaryOption[];
   measurement_status_options: DictionaryOption[];
   weighing_status_options: DictionaryOption[];
@@ -726,7 +727,9 @@ export type OrderCreateMetadata = {
 
 export type ClientOrderCreateMetadata = {
   order_type_options: DictionaryOption[];
+  product_characteristic_options: DictionaryOption[];
   item_type_options: DictionaryOption[];
+  quantity_unit_options: DictionaryOption[];
   document_type_options: DictionaryOption[];
 };
 
