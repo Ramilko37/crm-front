@@ -2009,10 +2009,6 @@ function OrdersPageContent() {
         destroyOnHidden
         className="crm-order-create-modal"
         onCancel={() => {
-          if (!createForm.isFieldsTouched(true)) {
-            closeAndResetCreateModal();
-            return;
-          }
           Modal.confirm({
             title: "Вы уверены, что хотите отменить создание заказа?",
             okText: "Отменить создание",
@@ -2304,6 +2300,15 @@ function OrdersPageContent() {
                     </Form.Item>
 
                     <Form.Item
+                      name={["create_factory", "loading_address", "address"]}
+                      label="Адрес погрузки"
+                      rules={[{ required: true, message: "Укажите адрес" }]}
+                      className="crm-order-create-col crm-order-create-col-span-2"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
                       name={["create_factory", "country_id"]}
                       label="Страна фабрики"
                       rules={[{ required: true, message: "Выберите страну" }]}
@@ -2362,15 +2367,6 @@ function OrdersPageContent() {
                         options={postcodeCityOptions}
                         disabled={!createFactoryPostcodeId}
                       />
-                    </Form.Item>
-
-                    <Form.Item
-                      name={["create_factory", "loading_address", "address"]}
-                      label="Адрес погрузки"
-                      rules={[{ required: true, message: "Укажите адрес" }]}
-                      className="crm-order-create-col crm-order-create-col-span-2"
-                    >
-                      <Input />
                     </Form.Item>
 
                     <Form.Item
