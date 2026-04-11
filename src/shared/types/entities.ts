@@ -158,6 +158,12 @@ export type OrderClientBlock = {
   user_full_name: string | null;
   user_email: string | null;
   user_phone: string | null;
+  contact_name?: string | null;
+  contact_job_title?: string | null;
+  contact_phone?: string | null;
+  contact_email?: string | null;
+  contact_messenger_type?: string | null;
+  contact_messenger_value?: string | null;
   invoice_company_name: string | null;
 };
 
@@ -192,13 +198,18 @@ export type OrderListItem = {
   user_id: number;
   company_id: number | null;
   company_name?: string | null;
+  contact_name_snapshot?: string | null;
+  contact_phone_snapshot?: string | null;
+  contact_email_snapshot?: string | null;
   personal_manager_id?: number | null;
   order_type: OrderType | null;
   quote_status: QuoteStatus | null;
   quote_price_amount: string | null;
   quote_price_currency: string | null;
+  quote_price_currency_other_label?: string | null;
   special_tariff_amount: string | null;
   special_tariff_currency: string | null;
+  special_tariff_currency_other_label?: string | null;
   quote_priced_at: string | null;
   quote_client_decision_at: string | null;
   factory_id: number;
@@ -235,6 +246,7 @@ export type OrderListItem = {
   email: string | null;
   raw_payload: Record<string, unknown> | null;
   has_documents?: boolean;
+  documents_count?: number;
   has_certificate?: boolean;
   has_description?: boolean;
   is_checked?: boolean;
@@ -338,6 +350,7 @@ export type FactoryLoadingAddress = {
   postcode: string | null;
   city: string | null;
   address: string | null;
+  contact_name?: string | null;
   phone: string | null;
   fax: string | null;
   messenger_type: string | null;
@@ -352,6 +365,7 @@ export type FactoryLoadingAddressWritePayload = {
   postcode_id?: number | null;
   city_id?: number | null;
   address?: string | null;
+  contact_name?: string | null;
   phone?: string | null;
   fax?: string | null;
   messenger_type?: string | null;
@@ -378,6 +392,7 @@ export type Trip = {
   truck_company_name: string | null;
   status_name: TripStatus | null;
   type_name: TripType | null;
+  created_at?: string | null;
 };
 
 export type TripWritePayload = {
@@ -467,12 +482,15 @@ export type PostcodeCityWritePayload = {
 export type TripFilterParams = ListParams & {
   query?: string;
   ids?: number[];
+  quick_tab?: string;
   status_names?: TripStatus[];
   type_names?: TripType[];
   current_point_id?: number;
   truck_plate?: string;
   truck_company_name?: string;
   has_orders?: boolean;
+  created_at_from?: string;
+  created_at_to?: string;
 };
 
 export type UserAdmin = {

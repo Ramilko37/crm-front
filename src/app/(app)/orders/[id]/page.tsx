@@ -53,6 +53,30 @@ function renderOrderStatus(value: OrderStatus | null) {
   return <Tag className="crm-status-tag">{formatEnumCode(value)}</Tag>;
 }
 
+const ORDER_TRIP_FACTORY_MISMATCH_CODE = "order-trip-factory-mismatch";
+
+function isOrderTripFactoryMismatch(detail: string | undefined) {
+  if (!detail) return false;
+  return detail.toLowerCase().includes(ORDER_TRIP_FACTORY_MISMATCH_CODE);
+}
+
+function normalizeCurrencyPayload(currency: string | undefined, otherLabel: string | undefined) {
+  const normalizedCurrency = (currency || "EUR").toUpperCase();
+  if (!["USD", "EUR", "OTHER"].includes(normalizedCurrency)) {
+    throw new Error("Валюта должна быть USD, EUR или OTHER");
+  }
+  if (normalizedCurrency === "OTHER" && !(otherLabel || "").trim()) {
+    throw new Error("Для валюты OTHER укажите special_tariff_currency_other_label");
+  }
+  if (normalizedCurrency !== "OTHER" && (otherLabel || "").trim()) {
+    throw new Error("special_tariff_currency_other_label допускается только для OTHER");
+  }
+  return {
+    currency: normalizedCurrency,
+    otherLabel: normalizedCurrency === "OTHER" ? (otherLabel || "").trim() : undefined,
+  };
+}
+
 export default function OrderDetailPage() {
   const params = useParams<{ id: string }>();
   const orderId = Number(params.id);
@@ -69,7 +93,11 @@ export default function OrderDetailPage() {
   const [assignTripForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
   const [pickupForm] = Form.useForm<{ pickup_date?: string }>();
-  const [specialTariffForm] = Form.useForm<{ amount?: number; currency?: string }>();
+  const [specialTariffForm] = Form.useForm<{
+    amount?: number;
+    currency?: string;
+    special_tariff_currency_other_label?: string;
+  }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
   const [chatForm] = Form.useForm<{ message: string }>();
   const [documentUploadForm] = Form.useForm<{ document_type?: string; display_name?: string; file?: FileList }>();
@@ -186,6 +214,10 @@ export default function OrderDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
+      if (error instanceof ApiError && isOrderTripFactoryMismatch(error.detail)) {
+        message.error("Выбранный рейс не содержит точку для фабрики заказа");
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
     },
   });
@@ -229,21 +261,26 @@ export default function OrderDetailPage() {
   });
 
   const specialTariffMutation = useMutation({
-    mutationFn: (payload: { amount?: number; currency?: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${orderId}/special-tariff`, {
+    mutationFn: (payload: { amount?: number; currency?: string; special_tariff_currency_other_label?: string }) => {
+      const normalized = normalizeCurrencyPayload(payload.currency, payload.special_tariff_currency_other_label);
+      return apiRequest<OrderDetail>(`/api/orders/${orderId}/special-tariff`, {
         method: "POST",
         body: {
           amount: payload.amount ?? null,
-          currency: payload.currency || "EUR",
+          currency: normalized.currency,
+          special_tariff_currency_other_label: normalized.otherLabel,
         },
-      }),
+      });
+    },
     onSuccess: async () => {
       message.success("Спецтариф обновлен");
       await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(orderId) });
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления спецтарифа");
+      message.error(
+        error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка обновления спецтарифа",
+      );
     },
   });
 
@@ -381,6 +418,7 @@ export default function OrderDetailPage() {
     specialTariffForm.setFieldsValue({
       amount: order.special_tariff_amount ? Number(order.special_tariff_amount) : undefined,
       currency: order.special_tariff_currency ?? "EUR",
+      special_tariff_currency_other_label: order.special_tariff_currency_other_label ?? undefined,
     });
     certificateMetaForm.setFieldsValue({
       number: certificate?.number ?? undefined,
@@ -628,13 +666,34 @@ export default function OrderDetailPage() {
           <Form
             form={specialTariffForm}
             layout="vertical"
-            onFinish={(values: { amount?: number; currency?: string }) => specialTariffMutation.mutate(values)}
+            onFinish={(values: { amount?: number; currency?: string; special_tariff_currency_other_label?: string }) =>
+              specialTariffMutation.mutate(values)
+            }
           >
             <Form.Item name="amount" label="Спецтариф (пусто = очистить)">
               <InputNumber min={0} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}> 
-              <Input />
+              <Select
+                options={[
+                  { label: "USD", value: "USD" },
+                  { label: "EUR", value: "EUR" },
+                  { label: "OTHER", value: "OTHER" },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+              {({ getFieldValue }) =>
+                getFieldValue("currency") === "OTHER" ? (
+                  <Form.Item
+                    name="special_tariff_currency_other_label"
+                    label="Текст валюты для OTHER"
+                    rules={[{ required: true, message: "Укажите текст валюты" }]}
+                  >
+                    <Input />
+                  </Form.Item>
+                ) : null
+              }
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={specialTariffMutation.isPending}>
               Обновить спецтариф

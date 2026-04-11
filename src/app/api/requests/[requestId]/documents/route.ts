@@ -1,11 +1,8 @@
-import { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-import { proxyToBackend } from "@/server/bff/proxy";
-
-export async function GET(
-  request: NextRequest,
-  context: { params: Promise<{ requestId: string }> },
-) {
-  const { requestId } = await context.params;
-  return proxyToBackend(request, `/requests/${requestId}/documents`);
+export async function GET() {
+  return NextResponse.json(
+    { detail: "Requests API removed. Use /api/orders/{id}/documents for request-order files." },
+    { status: 410 },
+  );
 }

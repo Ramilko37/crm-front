@@ -92,7 +92,7 @@ export function canAccessModule(module: AppModule, roleName: RoleLike, isSuperus
   }
 
   if (module === "requests") {
-    return normalizedRole === "administrator" || normalizedRole === "manager";
+    return normalizedRole === "administrator" || normalizedRole === "manager" || normalizedRole === "client";
   }
 
   if (module === "client-messages") {

@@ -100,12 +100,12 @@ type OrderCreateForm = {
   ready_date?: dayjs.Dayjs;
   order_type?: OrderType;
   factory_mode?: CreateMode;
+  factory_country_id?: number;
   factory_id?: number;
   loading_address_id?: number;
   email_id?: number;
   create_factory?: {
     factory_name?: string;
-    country_id?: number;
     primary_email?: string;
     loading_address?: {
       country_id?: number;
@@ -118,6 +118,7 @@ type OrderCreateForm = {
         city?: string;
       };
       address?: string;
+      contact_name?: string;
       phone?: string;
       fax?: string;
       messenger_type?: string;
@@ -215,6 +216,40 @@ const QUANTITY_UNIT_FALLBACK_OPTIONS = [
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
+const ORDER_TRIP_FACTORY_MISMATCH_CODE = "order-trip-factory-mismatch";
+
+function isOrderTripFactoryMismatch(detail: string | undefined) {
+  if (!detail) return false;
+  return detail.toLowerCase().includes(ORDER_TRIP_FACTORY_MISMATCH_CODE);
+}
+
+function getOrderTripFactoryMismatchMessage() {
+  return "Выбранный рейс не содержит точку для фабрики заказа";
+}
+
+function normalizeCurrencyPayload(
+  currency: string | undefined,
+  otherLabel: string | undefined,
+  otherLabelFieldName: string,
+) {
+  const normalizedCurrency = (currency || "EUR").toUpperCase();
+  if (!["USD", "EUR", "OTHER"].includes(normalizedCurrency)) {
+    throw new Error("Валюта должна быть USD, EUR или OTHER");
+  }
+
+  const normalizedOtherLabel = trimOrUndefined(otherLabel);
+  if (normalizedCurrency === "OTHER" && !normalizedOtherLabel) {
+    throw new Error(`Для валюты OTHER укажите ${otherLabelFieldName}`);
+  }
+  if (normalizedCurrency !== "OTHER" && normalizedOtherLabel) {
+    throw new Error(`${otherLabelFieldName} допускается только для валюты OTHER`);
+  }
+
+  return {
+    currency: normalizedCurrency,
+    otherLabel: normalizedCurrency === "OTHER" ? normalizedOtherLabel : undefined,
+  };
+}
 
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
   return {
@@ -303,9 +338,17 @@ function OrdersPageContent() {
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
   const [pickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
-  const [specialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
+  const [specialTariffForm] = Form.useForm<{
+    amount?: number | null;
+    currency?: string;
+    special_tariff_currency_other_label?: string;
+  }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
-  const [quotePriceForm] = Form.useForm<{ amount: number; currency?: string }>();
+  const [quotePriceForm] = Form.useForm<{
+    amount: number;
+    currency?: string;
+    quote_price_currency_other_label?: string;
+  }>();
   const [quoteDecisionForm] = Form.useForm<{ decision: "agree" | "decline" | "request_again" }>();
   const [filterForm] = Form.useForm<{
     id?: number;
@@ -332,14 +375,18 @@ function OrdersPageContent() {
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
   const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
-  const [bulkSpecialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
+  const [bulkSpecialTariffForm] = Form.useForm<{
+    amount?: number | null;
+    currency?: string;
+    special_tariff_currency_other_label?: string;
+  }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
   const createOrderType = Form.useWatch("order_type", createForm);
   const createCompanyId = Form.useWatch("company_id", createForm);
-  const createFactoryCountryId = Form.useWatch(["create_factory", "country_id"], createForm) as number | undefined;
+  const createFactoryCountryId = Form.useWatch("factory_country_id", createForm) as number | undefined;
   const createFactoryPostcodeId = Form.useWatch(
     ["create_factory", "loading_address", "postcode_id"],
     createForm,
@@ -440,11 +487,20 @@ function OrdersPageContent() {
   });
 
   const factoryOptionsQuery = useQuery({
-    queryKey: [isClientRole ? "client-factories" : "factories", "order-create-options", createOpen],
+    queryKey: [
+      isClientRole ? "client-factories" : "factories",
+      "order-create-options",
+      createFactoryMode,
+      createFactoryCountryId,
+    ],
     queryFn: async () => {
+      if (!createFactoryCountryId) {
+        return [] as Array<{ id: number; name: string; subtitle: string }>;
+      }
+
       if (isClientRole) {
         const response = await apiRequest<PaginatedResponse<ClientFactoryListItem>>("/api/client/factories", {
-          query: { page: 1, page_size: 200, sort_desc: false },
+          query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
         });
         return response.items.map((factory) => ({
           id: factory.id,
@@ -454,7 +510,7 @@ function OrdersPageContent() {
       }
 
       const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
-        query: { page: 1, page_size: 200, sort_desc: false },
+        query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
       });
       return response.items.map((factory) => ({
         id: factory.id,
@@ -462,7 +518,7 @@ function OrdersPageContent() {
         subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
       }));
     },
-    enabled: createOpen && canCreate,
+    enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
   });
 
   const factoryEmailsQuery = useQuery({
@@ -484,7 +540,7 @@ function OrdersPageContent() {
         : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
             query: { page: 1, page_size: 200 },
           }),
-    enabled: createOpen && canCreate && createFactoryMode === "create",
+    enabled: createOpen && canCreate,
   });
 
   const postcodesQuery = useQuery({
@@ -582,7 +638,13 @@ function OrdersPageContent() {
   }, [createFactoryMode, createForm, createOpen]);
 
   useEffect(() => {
-    if (!createOpen || createFactoryMode !== "create") {
+    if (!createOpen || !createFactoryCountryId) {
+      return;
+    }
+    if (createFactoryMode === "existing") {
+      createForm.setFieldValue("factory_id", undefined);
+      createForm.setFieldValue("loading_address_id", undefined);
+      createForm.setFieldValue("email_id", undefined);
       return;
     }
     createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
@@ -685,6 +747,16 @@ function OrdersPageContent() {
       mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
     }
 
+    if (text.includes("loading_address.contact_name")) {
+      mark(["create_factory", "loading_address", "contact_name"], "Укажите контактное лицо");
+    }
+    if (text.includes("selected loading address must have contact_name")) {
+      mark("loading_address_id", "Выбранный адрес погрузки должен содержать контактное лицо");
+    }
+    if (text.includes("selected loading address has invalid phone")) {
+      mark("loading_address_id", "Телефон в выбранном адресе погрузки невалиден");
+    }
+
     if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
       mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
     }
@@ -706,6 +778,14 @@ function OrdersPageContent() {
         "client_goods_value_currency_other_label",
         "Для валюты OTHER укажите текстовое обозначение валюты",
       );
+    }
+
+    if (
+      text.includes("factory_id must belong to the selected country_id") ||
+      text.includes("loading_address_id must belong to the selected country_id") ||
+      text.includes("country_id")
+    ) {
+      mark("factory_country_id", "Проверьте страну фабрики и соответствие выбранных данных");
     }
 
     if (!fieldErrors.length) {
@@ -818,18 +898,21 @@ function OrdersPageContent() {
       let factorySelection: Record<string, unknown>;
       if (values.factory_mode === "create") {
         const loadingAddress = values.create_factory?.loading_address;
-        const createFactoryCountryId = values.create_factory?.country_id;
+        if (!values.factory_country_id) {
+          throw new Error("Выберите страну фабрики");
+        }
         const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
         const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
         const createFactoryPayload: Record<string, unknown> = {
           factory_name: trimOrUndefined(values.create_factory?.factory_name),
-          country_id: createFactoryCountryId,
+          country_id: values.factory_country_id,
           primary_email: trimOrUndefined(values.create_factory?.primary_email),
           loading_address: {
-            country_id: createFactoryCountryId,
+            country_id: values.factory_country_id,
             postcode_id: loadingAddress?.postcode_id,
             city_id: loadingAddress?.city_id,
             address: trimOrUndefined(loadingAddress?.address),
+            contact_name: trimOrUndefined(loadingAddress?.contact_name),
             phone: trimOrUndefined(loadingAddress?.phone),
             fax: trimOrUndefined(loadingAddress?.fax),
             messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
@@ -838,12 +921,21 @@ function OrdersPageContent() {
             create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
           },
         };
-        factorySelection = { create_factory: createFactoryPayload };
+        factorySelection = {
+          factory_mode: "create",
+          country_id: values.factory_country_id,
+          create_factory: createFactoryPayload,
+        };
       } else {
+        if (!values.factory_country_id) {
+          throw new Error("Выберите страну фабрики");
+        }
         if (!values.factory_id || !values.loading_address_id) {
           throw new Error("Выберите фабрику и адрес загрузки");
         }
         factorySelection = {
+          factory_mode: "existing",
+          country_id: values.factory_country_id,
           factory_id: values.factory_id,
           loading_address_id: values.loading_address_id,
           email_id: !isClientRole ? values.email_id ?? undefined : undefined,
@@ -906,9 +998,6 @@ function OrdersPageContent() {
             : undefined,
           is_priority: canEditRestrictedCreateFields ? Boolean(values.is_priority) : undefined,
           office_mark_codes: canEditRestrictedCreateFields ? values.office_mark_codes : undefined,
-          product_characteristic_codes: canEditRestrictedCreateFields
-            ? values.product_characteristic_codes
-            : undefined,
           assigned_forwarder_user_id: assignedForwarderUserId,
           factory_payment_via_label: canEditRestrictedCreateFields
             ? trimOrUndefined(values.factory_payment_via_label)
@@ -938,7 +1027,6 @@ function OrdersPageContent() {
       message.success(values.order_type === "request" ? "Заявка создана" : "Заказ создан");
       closeAndResetCreateModal();
       await invalidateOrdersQueries();
-      await queryClient.invalidateQueries({ queryKey: ["requests"] });
     },
     onError: (error) => {
       if (error instanceof SyntaxError) {
@@ -1009,6 +1097,10 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
+      if (error instanceof ApiError && isOrderTripFactoryMismatch(error.detail)) {
+        message.error(getOrderTripFactoryMismatchMessage());
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
     },
   });
@@ -1062,14 +1154,31 @@ function OrdersPageContent() {
   });
 
   const specialTariffMutation = useMutation({
-    mutationFn: ({ id, amount, currency }: { id: number; amount?: number | null; currency: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
+    mutationFn: ({
+      id,
+      amount,
+      currency,
+      special_tariff_currency_other_label,
+    }: {
+      id: number;
+      amount?: number | null;
+      currency?: string;
+      special_tariff_currency_other_label?: string;
+    }) => {
+      const normalized = normalizeCurrencyPayload(
+        currency,
+        special_tariff_currency_other_label,
+        "special_tariff_currency_other_label",
+      );
+      return apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
         method: "POST",
         body: {
           amount: amount ?? null,
-          currency,
+          currency: normalized.currency,
+          special_tariff_currency_other_label: normalized.otherLabel,
         },
-      }),
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Спецтариф обновлен");
       setSpecialTariffOpen(false);
@@ -1077,7 +1186,7 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка спецтарифа");
+      message.error(error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка спецтарифа");
     },
   });
 
@@ -1102,14 +1211,27 @@ function OrdersPageContent() {
   });
 
   const quotePriceMutation = useMutation({
-    mutationFn: ({ id, amount, currency }: { id: number; amount: number; currency?: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/quote-price`, {
+    mutationFn: ({
+      id,
+      amount,
+      currency,
+      quote_price_currency_other_label,
+    }: {
+      id: number;
+      amount: number;
+      currency?: string;
+      quote_price_currency_other_label?: string;
+    }) => {
+      const normalized = normalizeCurrencyPayload(currency, quote_price_currency_other_label, "quote_price_currency_other_label");
+      return apiRequest<OrderDetail>(`/api/orders/${id}/quote-price`, {
         method: "POST",
         body: {
           amount,
-          currency: currency || "EUR",
+          currency: normalized.currency,
+          quote_price_currency_other_label: normalized.otherLabel,
         },
-      }),
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Цена квоты обновлена");
       setQuotePriceOpen(false);
@@ -1117,7 +1239,9 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления цены квоты");
+      message.error(
+        error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка обновления цены квоты",
+      );
     },
   });
 
@@ -1160,6 +1284,10 @@ function OrdersPageContent() {
       await invalidateOrdersQueries();
     },
     onError: (error) => {
+      if (error instanceof ApiError && isOrderTripFactoryMismatch(error.detail)) {
+        message.error(getOrderTripFactoryMismatchMessage());
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка массовой операции");
     },
   });
@@ -1219,6 +1347,7 @@ function OrdersPageContent() {
     specialTariffForm.setFieldsValue({
       amount: record.special_tariff_amount ? Number(record.special_tariff_amount) : undefined,
       currency: record.special_tariff_currency ?? "EUR",
+      special_tariff_currency_other_label: record.special_tariff_currency_other_label ?? undefined,
     });
     setSpecialTariffOpen(true);
   }
@@ -1234,6 +1363,7 @@ function OrdersPageContent() {
     quotePriceForm.setFieldsValue({
       amount: record.quote_price_amount ? Number(record.quote_price_amount) : undefined,
       currency: record.quote_price_currency ?? "EUR",
+      quote_price_currency_other_label: record.quote_price_currency_other_label ?? undefined,
     });
     setQuotePriceOpen(true);
   }
@@ -1549,6 +1679,10 @@ function OrdersPageContent() {
     value: item.company_id,
   }));
   const selectedCompanyContacts = selectedClientCompany?.contacts ?? [];
+  const selectedLoadingAddress = useMemo(
+    () => (loadingAddressesQuery.data ?? []).find((address) => address.id === createLoadingAddressId),
+    [createLoadingAddressId, loadingAddressesQuery.data],
+  );
   const countryOptions = (countriesQuery.data?.items ?? []).map((country) => ({
     label: country.name_ru,
     value: country.id,
@@ -2213,15 +2347,13 @@ function OrdersPageContent() {
                   </Form.Item>
                 ) : null}
 
-                {canEditRestrictedCreateFields ? (
-                  <Form.Item
-                    name="product_characteristic_codes"
-                    label="Product characteristic codes"
-                    className="crm-order-create-col"
-                  >
-                    <Select mode="multiple" allowClear options={productCharacteristicOptions} />
-                  </Form.Item>
-                ) : null}
+                <Form.Item
+                  name="product_characteristic_codes"
+                  label="Product characteristic codes"
+                  className="crm-order-create-col"
+                >
+                  <Select mode="multiple" allowClear options={productCharacteristicOptions} />
+                </Form.Item>
               </div>
             </div>
           ) : null}
@@ -2241,6 +2373,27 @@ function OrdersPageContent() {
                   />
                 </Form.Item>
 
+                <Form.Item
+                  name="factory_country_id"
+                  label="Страна фабрики"
+                  rules={[{ required: true, message: "Выберите страну" }]}
+                  className="crm-order-create-col"
+                >
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    loading={countriesQuery.isLoading}
+                    options={countryOptions}
+                    onChange={() => {
+                      createForm.setFieldValue("factory_id", undefined);
+                      createForm.setFieldValue("loading_address_id", undefined);
+                      createForm.setFieldValue("email_id", undefined);
+                      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
+                      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                    }}
+                  />
+                </Form.Item>
+
                 {createFactoryMode === "existing" ? (
                   <>
                     <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]} className="crm-order-create-col">
@@ -2248,6 +2401,7 @@ function OrdersPageContent() {
                         showSearch
                         optionFilterProp="label"
                         loading={factoryOptionsQuery.isLoading}
+                        disabled={!createFactoryCountryId}
                         options={(factoryOptionsQuery.data ?? []).map((factory) => ({
                           label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
                           value: factory.id,
@@ -2256,6 +2410,7 @@ function OrdersPageContent() {
                           createForm.setFieldValue("loading_address_id", undefined);
                           createForm.setFieldValue("email_id", undefined);
                         }}
+                        notFoundContent={createFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
                       />
                     </Form.Item>
 
@@ -2274,6 +2429,14 @@ function OrdersPageContent() {
                         }))}
                         notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
                       />
+                    </Form.Item>
+
+                    <Form.Item label="Контакт (из адреса погрузки)" className="crm-order-create-col">
+                      <Input readOnly value={selectedLoadingAddress?.contact_name ?? ""} placeholder="Будет заполнено автоматически" />
+                    </Form.Item>
+
+                    <Form.Item label="Телефон (из адреса погрузки)" className="crm-order-create-col">
+                      <Input readOnly value={selectedLoadingAddress?.phone ?? ""} placeholder="Будет заполнено автоматически" />
                     </Form.Item>
 
                     {!isClientRole ? (
@@ -2306,24 +2469,6 @@ function OrdersPageContent() {
                       className="crm-order-create-col crm-order-create-col-span-2"
                     >
                       <Input />
-                    </Form.Item>
-
-                    <Form.Item
-                      name={["create_factory", "country_id"]}
-                      label="Страна фабрики"
-                      rules={[{ required: true, message: "Выберите страну" }]}
-                      className="crm-order-create-col"
-                    >
-                      <Select
-                        showSearch
-                        optionFilterProp="label"
-                        loading={countriesQuery.isLoading}
-                        options={countryOptions}
-                        onChange={() => {
-                          createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
-                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-                        }}
-                      />
                     </Form.Item>
 
                     <Form.Item
@@ -2376,6 +2521,15 @@ function OrdersPageContent() {
                         { required: true, message: "Укажите телефон" },
                         { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
                       ]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory", "loading_address", "contact_name"]}
+                      label="Контактное лицо"
+                      rules={[{ required: true, message: "Укажите контактное лицо" }]}
                       className="crm-order-create-col"
                     >
                       <Input />
@@ -2494,7 +2648,7 @@ function OrdersPageContent() {
             </Card>
           </div>
 
-          {!isClientRole && canEditRestrictedCreateFields ? (
+          {!isClientRole ? (
             <div className="crm-order-create-section">
               <Typography.Title level={5} className="crm-order-create-section-title">
                 Операционные поля
@@ -2512,19 +2666,25 @@ function OrdersPageContent() {
                 <Form.Item name="weighing_comment" label="Комментарий взвешивания" className="crm-order-create-col">
                   <Input.TextArea rows={2} />
                 </Form.Item>
-                <Form.Item name="user_comment" label="Комментарий клиента (внутр.)" className="crm-order-create-col">
-                  <Input.TextArea rows={2} />
-                </Form.Item>
-                <Form.Item
-                  name="forwarder_comment"
-                  label="Комментарий экспедитора (внутр.)"
-                  className="crm-order-create-col"
-                >
-                  <Input.TextArea rows={2} />
-                </Form.Item>
-                <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)" className="crm-order-create-col">
-                  <Input.TextArea rows={2} />
-                </Form.Item>
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item name="user_comment" label="Комментарий клиента (внутр.)" className="crm-order-create-col">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                ) : null}
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item
+                    name="forwarder_comment"
+                    label="Комментарий экспедитора (внутр.)"
+                    className="crm-order-create-col"
+                  >
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                ) : null}
+                {canEditRestrictedCreateFields ? (
+                  <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)" className="crm-order-create-col">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -2871,12 +3031,17 @@ function OrdersPageContent() {
           form={specialTariffForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount?: number | null; currency?: string }) => {
+          onFinish={(values: {
+            amount?: number | null;
+            currency?: string;
+            special_tariff_currency_other_label?: string;
+          }) => {
             if (!selected) return;
             specialTariffMutation.mutate({
               id: selected.id,
               amount: values.amount,
               currency: values.currency || "EUR",
+              special_tariff_currency_other_label: values.special_tariff_currency_other_label,
             });
           }}
         >
@@ -2884,7 +3049,26 @@ function OrdersPageContent() {
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="special_tariff_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>
@@ -2930,12 +3114,13 @@ function OrdersPageContent() {
           form={quotePriceForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount: number; currency?: string }) => {
+          onFinish={(values: { amount: number; currency?: string; quote_price_currency_other_label?: string }) => {
             if (!selected) return;
             quotePriceMutation.mutate({
               id: selected.id,
               amount: values.amount,
               currency: values.currency,
+              quote_price_currency_other_label: values.quote_price_currency_other_label,
             });
           }}
         >
@@ -2943,7 +3128,26 @@ function OrdersPageContent() {
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="quote_price_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>
@@ -3076,18 +3280,51 @@ function OrdersPageContent() {
           form={bulkSpecialTariffForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount?: number | null; currency?: string }) => {
-            runBulkMutation("special-tariff", {
-              amount: values.amount ?? null,
-              currency: values.currency || "EUR",
-            });
+          onFinish={(values: {
+            amount?: number | null;
+            currency?: string;
+            special_tariff_currency_other_label?: string;
+          }) => {
+            try {
+              const normalized = normalizeCurrencyPayload(
+                values.currency,
+                values.special_tariff_currency_other_label,
+                "special_tariff_currency_other_label",
+              );
+              runBulkMutation("special-tariff", {
+                amount: values.amount ?? null,
+                currency: normalized.currency,
+                special_tariff_currency_other_label: normalized.otherLabel,
+              });
+            } catch (error) {
+              message.error(error instanceof Error ? error.message : "Ошибка в валюте спецтарифа");
+            }
           }}
         >
           <Form.Item name="amount" label="Сумма (пусто = очистить)">
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="special_tariff_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>

@@ -20,7 +20,7 @@ describe("rbac helpers", () => {
     expect(canAccessModule("profile", "client", false)).toBe(true);
     expect(canAccessModule("factories", "client", false)).toBe(false);
     expect(canAccessModule("trips", "client", false)).toBe(false);
-    expect(canAccessModule("requests", "client", false)).toBe(false);
+    expect(canAccessModule("requests", "client", false)).toBe(true);
     expect(canAccessModule("client-messages", "client", false)).toBe(false);
     expect(canAccessModule("requests", "manager", false)).toBe(true);
     expect(canAccessModule("client-messages", "manager", false)).toBe(true);
@@ -32,7 +32,7 @@ describe("rbac helpers", () => {
   });
 
   it("builds visible modules from role", () => {
-    expect(getVisibleModules("client", false)).toEqual(["orders", "profile"]);
+    expect(getVisibleModules("client", false)).toEqual(["orders", "requests", "profile"]);
     expect(getVisibleModules("manager", false)).toEqual([
       "orders",
       "client-messages",

@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   Checkbox,
+  DatePicker,
   Form,
   Grid,
   Input,
@@ -21,6 +22,7 @@ import {
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
+import dayjs from "dayjs";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -59,9 +61,13 @@ function getParams(searchParams: URLSearchParams): TripFilterParams {
     sort_by: searchParams.get("sort_by") ?? undefined,
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
     query: searchParams.get("query") ?? undefined,
+    quick_tab: searchParams.get("quick_tab") ?? undefined,
     status_names: parseSearchArray(searchParams, "status_names") as TripStatus[],
     type_names: parseSearchArray(searchParams, "type_names") as TripType[],
     truck_plate: searchParams.get("truck_plate") ?? undefined,
+    truck_company_name: searchParams.get("truck_company_name") ?? undefined,
+    created_at_from: searchParams.get("created_at_from") ?? undefined,
+    created_at_to: searchParams.get("created_at_to") ?? undefined,
     current_point_id: parseNumber(searchParams.get("current_point_id")),
   };
 }
@@ -131,11 +137,24 @@ function TripsPageContent() {
     status_names?: TripStatus[];
     type_names?: TripType[];
     truck_plate?: string;
+    truck_company_name?: string;
+    created_at_from?: dayjs.Dayjs;
+    created_at_to?: dayjs.Dayjs;
   }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const effectiveParams = useMemo(
+    () => (params.quick_tab ? { ...params, status_names: undefined } : params),
+    [params],
+  );
   const hasActiveFilters = Boolean(
-    params.query || params.truck_plate || (params.status_names?.length ?? 0) > 0 || (params.type_names?.length ?? 0) > 0,
+    params.query ||
+      params.truck_plate ||
+      params.truck_company_name ||
+      params.created_at_from ||
+      params.created_at_to ||
+      (params.status_names?.length ?? 0) > 0 ||
+      (params.type_names?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
 
@@ -145,14 +164,26 @@ function TripsPageContent() {
       status_names: params.status_names?.length ? params.status_names : undefined,
       type_names: params.type_names?.length ? params.type_names : undefined,
       truck_plate: params.truck_plate,
+      truck_company_name: params.truck_company_name,
+      created_at_from: params.created_at_from ? dayjs(params.created_at_from) : undefined,
+      created_at_to: params.created_at_to ? dayjs(params.created_at_to) : undefined,
     });
-  }, [filterForm, params.query, params.status_names, params.truck_plate, params.type_names]);
+  }, [
+    filterForm,
+    params.created_at_from,
+    params.created_at_to,
+    params.query,
+    params.status_names,
+    params.truck_company_name,
+    params.truck_plate,
+    params.type_names,
+  ]);
 
   const listQuery = useQuery({
-    queryKey: queryKeys.trips.list(params),
+    queryKey: queryKeys.trips.list(effectiveParams),
     queryFn: () =>
       apiRequest<PaginatedResponse<Trip>>("/api/trips", {
-        query: params,
+        query: effectiveParams,
       }),
   });
 
@@ -273,6 +304,15 @@ function TripsPageContent() {
       width: 160,
     },
     {
+      title: "Создан",
+      dataIndex: "created_at",
+      key: "created_at",
+      sorter: true,
+      sortOrder: sortOrderFor("created_at"),
+      render: (v: string | null | undefined) => v ?? "—",
+      width: 190,
+    },
+    {
       title: "Действия",
       key: "actions",
       width: 150,
@@ -315,6 +355,9 @@ function TripsPageContent() {
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
+  const quickTabs = listQuery.data?.meta.quick_tabs ?? [
+    { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
+  ];
 
   function toggleRowSelection(id: number, checked: boolean) {
     setSelectedRowKeys((current) => {
@@ -384,12 +427,25 @@ function TripsPageContent() {
             status_names?: TripStatus[];
             type_names?: TripType[];
             truck_plate?: string;
+            truck_company_name?: string;
+            created_at_from?: dayjs.Dayjs;
+            created_at_to?: dayjs.Dayjs;
           }) => {
+            const createdFrom = values.created_at_from?.startOf("day");
+            const createdTo = values.created_at_to?.startOf("day");
+            if (createdFrom && createdTo && createdFrom.isAfter(createdTo)) {
+              message.error("Период создания указан некорректно: дата \"от\" позже даты \"до\".");
+              return;
+            }
             applySearchPatch({
+              quick_tab: null,
               query: values.query,
               status_names: values.status_names,
               type_names: values.type_names,
               truck_plate: values.truck_plate,
+              truck_company_name: values.truck_company_name,
+              created_at_from: values.created_at_from?.format("YYYY-MM-DD"),
+              created_at_to: values.created_at_to?.format("YYYY-MM-DD"),
               page: 1,
             });
           }}
@@ -400,6 +456,9 @@ function TripsPageContent() {
             </Form.Item>
             <Form.Item name="truck_plate" className="crm-col-3" style={{ marginBottom: 0 }}>
               <Input placeholder="Номер тягача" allowClear />
+            </Form.Item>
+            <Form.Item name="truck_company_name" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Input placeholder="Транспортная компания" allowClear />
             </Form.Item>
             <Form.Item name="status_names" className="crm-col-3" style={{ marginBottom: 0 }}>
               <Select
@@ -423,6 +482,12 @@ function TripsPageContent() {
                 }))}
               />
             </Form.Item>
+            <Form.Item name="created_at_from" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан от" />
+            </Form.Item>
+            <Form.Item name="created_at_to" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан до" />
+            </Form.Item>
           </div>
 
           <div className="crm-filter-actions">
@@ -442,6 +507,30 @@ function TripsPageContent() {
         </Form>
       </FilterPanel>
 
+      <Card className="crm-panel crm-status-tabs-bar">
+        <div className="crm-status-tabs-wrap">
+          {quickTabs.map((tab) => {
+            const isActive = params.quick_tab ? params.quick_tab === tab.code : tab.code === "all";
+            return (
+              <Button
+                key={tab.code}
+                size="small"
+                type={isActive ? "primary" : "default"}
+                onClick={() => {
+                  applySearchPatch({
+                    quick_tab: tab.code === "all" ? null : tab.code,
+                    status_names: null,
+                    page: 1,
+                  });
+                }}
+              >
+                {tab.label} ({tab.count})
+              </Button>
+            );
+          })}
+        </div>
+      </Card>
+
       {canMutate && selectedRowKeys.length > 0 ? (
         <Card className="crm-panel crm-bulk-card">
           <Space wrap>
@@ -459,7 +548,12 @@ function TripsPageContent() {
       <Card className="crm-panel crm-table-card">
         {listQuery.error ? (
           <Typography.Text type="danger">
-            {listQuery.error instanceof ApiError ? listQuery.error.detail : "Ошибка загрузки рейсов"}
+            {listQuery.error instanceof ApiError
+              ? listQuery.error.detail.toLowerCase().includes("created_at_from") &&
+                listQuery.error.detail.toLowerCase().includes("created_at_to")
+                ? "Период создания указан некорректно: дата \"от\" позже даты \"до\"."
+                : listQuery.error.detail
+              : "Ошибка загрузки рейсов"}
           </Typography.Text>
         ) : null}
 
@@ -501,6 +595,10 @@ function TripsPageContent() {
                     <div className="crm-row-meta-item">
                       Компания
                       <strong>{record.truck_company_name ?? "-"}</strong>
+                    </div>
+                    <div className="crm-row-meta-item">
+                      Создан
+                      <strong>{record.created_at ?? "—"}</strong>
                     </div>
                   </div>
 
