@@ -28,13 +28,13 @@ import {
   Typography,
   Upload,
 } from "antd";
-import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
+import type { ColumnType, ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
@@ -208,6 +208,34 @@ function trimOrUndefined(value: string | null | undefined) {
 
 function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
+}
+
+const ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY = "crm-orders-column-widths-v1";
+const ORDER_TABLE_MIN_COLUMN_WIDTH = 72;
+
+type ResizableHeaderCellProps = React.ThHTMLAttributes<HTMLTableCellElement> & {
+  onResizeStart?: (event: React.MouseEvent<HTMLSpanElement>) => void;
+  resizable?: boolean;
+};
+
+function ResizableHeaderCell({ onResizeStart, resizable, className, children, ...rest }: ResizableHeaderCellProps) {
+  const nextClassName = `${className ?? ""}${resizable ? " crm-resizable-th" : ""}`.trim();
+
+  return (
+    <th {...rest} className={nextClassName}>
+      {children}
+      {resizable ? (
+        <span
+          className="crm-column-resize-handle"
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+            onResizeStart?.(event);
+          }}
+        />
+      ) : null}
+    </th>
+  );
 }
 
 const QUANTITY_UNIT_FALLBACK_OPTIONS = [
@@ -407,6 +435,59 @@ function OrdersPageContent() {
       (params.office_mark_codes?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return Object.entries(parsed).reduce<Record<string, number>>((acc, [key, value]) => {
+        if (typeof value === "number" && Number.isFinite(value) && value >= ORDER_TABLE_MIN_COLUMN_WIDTH) {
+          acc[key] = Math.round(value);
+        }
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // no-op: ignore storage write issues
+    }
+  }, [columnWidths]);
+
+  const startColumnResize = useCallback(
+    (columnKey: string, initialWidth: number, event: React.MouseEvent<HTMLSpanElement>) => {
+      if (typeof window === "undefined") return;
+
+      const startX = event.clientX;
+      document.body.classList.add("crm-column-resizing");
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const nextWidth = Math.max(ORDER_TABLE_MIN_COLUMN_WIDTH, Math.round(initialWidth + delta));
+        setColumnWidths((prev) => {
+          if (prev[columnKey] === nextWidth) return prev;
+          return { ...prev, [columnKey]: nextWidth };
+        });
+      };
+
+      const handleMouseUp = () => {
+        document.body.classList.remove("crm-column-resizing");
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    },
+    [],
+  );
 
   useEffect(() => {
     filterForm.setFieldsValue({
@@ -1728,6 +1809,47 @@ function OrdersPageContent() {
     },
   ];
 
+  const columnsWithResize: ColumnsType<OrderListItem> = columns.map((column) => {
+    const dataIndexKey =
+      "dataIndex" in column && typeof column.dataIndex === "string" ? column.dataIndex : undefined;
+    const columnKey = String(column.key ?? dataIndexKey ?? "");
+    const defaultWidth = typeof column.width === "number" ? column.width : ORDER_TABLE_MIN_COLUMN_WIDTH;
+    const width = columnWidths[columnKey] ?? defaultWidth;
+    const shouldResize = columnKey.length > 0 && columnKey !== "actions";
+
+    const nextColumn: ColumnType<OrderListItem> = {
+      ...column,
+      width,
+    };
+
+    if (!shouldResize) {
+      return nextColumn;
+    }
+
+    return {
+      ...nextColumn,
+      onHeaderCell: () =>
+        ({
+          resizable: true,
+          onResizeStart: (event: React.MouseEvent<HTMLSpanElement>) => {
+            if (columnWidths[columnKey] === undefined) {
+              setColumnWidths((prev) => ({ ...prev, [columnKey]: defaultWidth }));
+            }
+            startColumnResize(columnKey, width, event);
+          },
+        }) as React.HTMLAttributes<HTMLTableCellElement> & ResizableHeaderCellProps,
+    };
+  });
+
+  const tableScrollX = useMemo(
+    () =>
+      columnsWithResize.reduce((total, column) => {
+        const width = typeof column.width === "number" ? column.width : ORDER_TABLE_MIN_COLUMN_WIDTH;
+        return total + width;
+      }, 0) + 120,
+    [columnsWithResize],
+  );
+
   function handleTableChange(
     pagination: TablePaginationConfig,
     _: unknown,
@@ -2205,16 +2327,29 @@ function OrdersPageContent() {
             rowKey="id"
             loading={listQuery.isLoading}
             dataSource={rows}
-            columns={columns}
+            columns={columnsWithResize}
+            components={{
+              header: {
+                cell: ResizableHeaderCell,
+              },
+            }}
             rowSelection={
               canWriteOrder
                 ? {
+                    fixed: true,
+                    columnWidth: 56,
+                    columnTitle: (checkboxNode) => (
+                      <span className="crm-selection-column-title">
+                        <span aria-hidden="true">..</span>
+                        {checkboxNode}
+                      </span>
+                    ),
                     selectedRowKeys,
                     onChange: (keys) => setSelectedRowKeys(keys as number[]),
                   }
                 : undefined
             }
-            scroll={{ x: 2800 }}
+            scroll={{ x: tableScrollX }}
             pagination={{
               current: currentPage,
               pageSize: currentPageSize,

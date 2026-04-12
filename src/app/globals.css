@@ -338,6 +338,51 @@ a {
   border-color: #cfd5df !important;
 }
 
+.crm-table-card .ant-table-thead > tr > th.crm-resizable-th {
+  position: relative;
+}
+
+.crm-column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.crm-column-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 24%;
+  bottom: 24%;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: #97a3b5;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.crm-table-card .ant-table-thead > tr > th.crm-resizable-th:hover .crm-column-resize-handle::after {
+  opacity: 1;
+}
+
+.crm-selection-column-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: #4b5563;
+}
+
+body.crm-column-resizing,
+body.crm-column-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .crm-table-card .ant-table-tbody > tr > td {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
