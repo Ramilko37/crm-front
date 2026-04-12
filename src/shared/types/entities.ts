@@ -218,6 +218,7 @@ export type OrderListItem = {
   trip_id: number | null;
   trip_name?: string | null;
   invoice_number: string | null;
+  declared_volume_m3?: string | null;
   country: string | null;
   volume_m3: string | null;
   actual_volume_m3: string | null;
@@ -240,6 +241,7 @@ export type OrderListItem = {
   days_active?: number | null;
   days_in_current_status?: number | null;
   comment: string | null;
+  additional_description?: string | null;
   user_comment: string | null;
   forwarder_comment: string | null;
   warehouse_comment: string | null;

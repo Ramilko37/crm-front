@@ -1494,6 +1494,19 @@ function OrdersPageContent() {
 
   const columns: ColumnsType<OrderListItem> = [
     {
+      title: "Док.",
+      key: "documents",
+      width: 90,
+      render: (_, record) => (record.has_documents || (record.documents_count ?? 0) > 0 ? record.documents_count ?? 0 : "—"),
+    },
+    {
+      title: "Оплачено TARGET MOB",
+      dataIndex: "is_checked",
+      key: "is_checked",
+      width: 165,
+      render: (value: boolean | undefined) => (value ? <Tag color="green">Да</Tag> : "—"),
+    },
+    {
       title: "Id",
       dataIndex: "id",
       key: "id",
@@ -1511,25 +1524,81 @@ function OrdersPageContent() {
       render: (value: string | null, record) => <Link href={`/orders/${record.id}`}>{renderOrderNumber(value)}</Link>,
     },
     {
-      title: "Компания",
+      title: "Клиент",
       dataIndex: "company_name",
       key: "company_name",
       width: 180,
-      render: (value: string | null | undefined, record) => value || (record.company_id ? `ID ${record.company_id}` : "-"),
+      render: (value: string | null | undefined, record) => value || (record.company_id ? `ID ${record.company_id}` : "—"),
     },
     {
-      title: "Фабрика",
+      title: "Название фабрики",
       dataIndex: "factory_name",
       key: "factory_name",
       width: 180,
       render: (value: string | null | undefined, record) => value || `ID ${record.factory_id}`,
     },
     {
-      title: "Рейс",
-      dataIndex: "trip_name",
-      key: "trip_name",
-      width: 170,
-      render: (value: string | null | undefined, record) => value || (record.trip_id ? `ID ${record.trip_id}` : "-"),
+      title: "Инвойс/проформа",
+      dataIndex: "invoice_number",
+      key: "invoice_number",
+      width: 160,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Объем из инв.",
+      dataIndex: "declared_volume_m3",
+      key: "declared_volume_m3",
+      width: 130,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Объем",
+      dataIndex: "volume_m3",
+      key: "volume_m3",
+      width: 100,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Акт. объем",
+      dataIndex: "actual_volume_m3",
+      key: "actual_volume_m3",
+      width: 110,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Объем на складе",
+      dataIndex: "shipped_m3",
+      key: "shipped_m3",
+      width: 140,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Кол-во",
+      dataIndex: "box_qty",
+      key: "box_qty",
+      width: 95,
+      render: (value: number | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Акт. кол-во",
+      dataIndex: "actual_qty",
+      key: "actual_qty",
+      width: 120,
+      render: (value: number | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Акт. вес",
+      dataIndex: "actual_weight_kg",
+      key: "actual_weight_kg",
+      width: 100,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "На складе",
+      dataIndex: "quantity_whs",
+      key: "quantity_whs",
+      width: 100,
+      render: (value: number | null | undefined) => value ?? "—",
     },
     {
       title: "Статус",
@@ -1541,75 +1610,103 @@ function OrdersPageContent() {
       width: 190,
     },
     {
-      title: "Тип",
-      dataIndex: "order_type",
-      key: "order_type",
-      width: 150,
-      render: (value: OrderType | null) => (value ? formatEnumCode(value) : "-"),
+      title: "Эксп.",
+      dataIndex: "forwarder_name",
+      key: "forwarder_name",
+      width: 130,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Квота",
-      dataIndex: "quote_status",
-      key: "quote_status",
-      width: 160,
-      render: (value: QuoteStatus | null) => (value ? formatEnumCode(value) : "-"),
+      title: "Дни стат.",
+      dataIndex: "days_same_status",
+      key: "days_same_status",
+      sorter: true,
+      sortOrder: sortOrderFor("days_same_status"),
+      width: 100,
+      render: (value: number | null | undefined) => value ?? "—",
     },
     {
-      title: "Готовность",
+      title: "Дата заказа",
+      dataIndex: "order_date",
+      key: "order_date",
+      sorter: true,
+      sortOrder: sortOrderFor("order_date"),
+      width: 130,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Дата готовности",
       dataIndex: "ready_date",
       key: "ready_date",
       sorter: true,
       sortOrder: sortOrderFor("ready_date"),
       width: 130,
-      render: (value: string | null) => value ?? "-",
+      render: (value: string | null) => value ?? "—",
     },
     {
       title: "Вывоз",
-      dataIndex: "pickup_date",
-      key: "pickup_date",
-      sorter: true,
-      sortOrder: sortOrderFor("pickup_date"),
+      dataIndex: "trip_name",
+      key: "trip_name",
       width: 120,
-      render: (value: string | null | undefined) => value ?? "-",
+      render: (value: string | null | undefined, record) => value || (record.trip_id ? `ID ${record.trip_id}` : "—"),
     },
     {
-      title: "Флаги",
-      key: "flags",
-      width: 230,
-      render: (_, record) => (
-        <Space size={4} wrap>
-          {record.has_documents ? <Tag color="blue">Док.</Tag> : null}
-          {record.has_certificate ? <Tag color="green">Серт.</Tag> : null}
-          {record.has_description ? <Tag color="gold">Описание</Tag> : null}
-          {record.is_checked ? <Tag color="purple">Проверен</Tag> : null}
-        </Space>
-      ),
+      title: "Опис.",
+      dataIndex: "additional_description",
+      key: "additional_description",
+      width: 180,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Теги",
-      key: "tags",
-      width: 260,
-      render: (_, record) => (
-        <Space size={4} wrap>
-          {(record.priority_tags ?? []).slice(0, 2).map((tag) => (
-            <Tag key={`p-${tag.code}`} color="red">
-              {tag.label}
-            </Tag>
-          ))}
-          {(record.office_mark_tags ?? []).slice(0, 2).map((tag) => (
-            <Tag key={`o-${tag.code}`} color="orange">
-              {tag.label}
-            </Tag>
-          ))}
-        </Space>
-      ),
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      width: 120,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Коэф. цены",
+      title: "Комм. клиента",
+      dataIndex: "user_comment",
+      key: "user_comment",
+      width: 190,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Комм. экспед.",
+      dataIndex: "forwarder_comment",
+      key: "forwarder_comment",
+      width: 190,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Спецтар.",
+      key: "special_tariff",
+      width: 130,
+      render: (_, record) =>
+        record.special_tariff_amount
+          ? `${record.special_tariff_amount}${record.special_tariff_currency ? ` ${record.special_tariff_currency}` : ""}`
+          : "—",
+    },
+    {
+      title: "Комм. склада",
+      dataIndex: "warehouse_comment",
+      key: "warehouse_comment",
+      width: 190,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Ценовой коэффициент",
       dataIndex: "price_coefficient",
       key: "price_coefficient",
       width: 130,
-      render: (value: string | number | null | undefined) => (value ?? "-") as React.ReactNode,
+      render: (value: string | number | null | undefined) => (value ?? "—") as React.ReactNode,
+    },
+    {
+      title: "Сертификаты",
+      dataIndex: "has_certificate",
+      key: "has_certificate",
+      width: 110,
+      render: (value: boolean | undefined) => (value ? <Tag color="green">Да</Tag> : "—"),
     },
     {
       title: "Действия",
