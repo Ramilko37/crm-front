@@ -314,13 +314,104 @@ export type OrderWritePayload = {
   raw_payload?: Record<string, unknown>;
   client_goods_value_amount?: string | null;
   client_goods_value_currency?: string | null;
+  client_goods_value_currency_other_label?: string | null;
+  pickup_date_from?: string | null;
+  pickup_date_to?: string | null;
   assigned_forwarder_user_id?: number | null;
-  factory_payment_via_label?: string | null;
+  is_factory_payment_via_company?: boolean;
   is_factory_payment_completed?: boolean;
   is_checked?: boolean;
+  is_1c?: boolean;
   priority_codes?: string[];
   office_mark_codes?: string[];
   product_characteristic_codes?: string[];
+};
+
+export type FactoryContactCreatePayload = {
+  full_name: string;
+  phone: string;
+  email?: string | null;
+};
+
+export type FactorySelectionCreatePayload = {
+  factory_mode: "existing" | "create";
+  country_id: number;
+  factory_id?: number;
+  loading_address_id?: number;
+  email_id?: number;
+  factory_contact_id?: number;
+  create_factory_contact?: FactoryContactCreatePayload;
+  create_factory?: {
+    factory_name: string;
+    country_id?: number;
+    primary_email: string;
+    loading_address: {
+      country_id: number;
+      postcode_id?: number;
+      city_id?: number;
+      create_postcode?: { postcode: string };
+      create_city?: { city: string };
+      address: string;
+      contact_name: string;
+      phone: string;
+      fax?: string | null;
+      messenger_type?: string | null;
+      messenger_value?: string | null;
+    };
+  };
+};
+
+export type OrderCreatePayload = {
+  order: {
+    order_number?: string;
+    company_id?: number;
+    company_contact_id?: number;
+    order_type?: OrderType;
+    ready_date?: string;
+    pickup_date_from?: string;
+    pickup_date_to?: string;
+    invoice_on_other_company?: boolean;
+    invoice_company_name?: string;
+    invoice_number?: string;
+    declared_volume_m3?: string;
+    declared_total_weight_kg?: string;
+    cargo_places_qty?: number;
+    client_goods_value_amount?: string;
+    client_goods_value_currency?: string;
+    client_goods_value_currency_other_label?: string;
+    product_characteristic_codes?: string[];
+    additional_description?: string;
+    comment?: string;
+    user_comment?: string;
+    forwarder_comment?: string;
+    warehouse_comment?: string;
+    assigned_forwarder_user_id?: number;
+    self_delivery?: boolean;
+    self_delivery_forwarder_user_id?: number;
+    measurement_payload?: MeasurementPayload;
+    weighing_payload?: MeasurementPayload;
+    is_priority?: boolean;
+    office_mark_codes?: string[];
+    is_factory_payment_via_company?: boolean;
+    is_factory_payment_completed?: boolean;
+    is_checked?: boolean;
+    is_1c?: boolean;
+    raw_payload?: Record<string, unknown>;
+  };
+  factory_selection: FactorySelectionCreatePayload;
+  goods_lines: Array<{
+    item_type?: string;
+    custom_item_type?: string;
+    description?: string;
+    weight_kg?: string;
+    quantity_value?: string;
+    quantity_unit?: string;
+  }>;
+  documents: Array<{
+    document_type: string;
+    file_slot: string;
+    display_name?: string;
+  }>;
 };
 
 export type Factory = {

@@ -77,6 +77,7 @@ import type {
 } from "@/shared/types/entities";
 
 type CreateMode = "existing" | "create";
+type FactoryContactMode = "existing" | "create";
 
 type OrderCreateGoodsLineForm = {
   item_type?: string;
@@ -98,12 +99,21 @@ type OrderCreateForm = {
   company_id?: number;
   company_contact_id?: number;
   ready_date?: dayjs.Dayjs;
+  pickup_date_from?: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs;
   order_type?: OrderType;
   factory_mode?: CreateMode;
   factory_country_id?: number;
   factory_id?: number;
   loading_address_id?: number;
   email_id?: number;
+  factory_contact_mode?: FactoryContactMode;
+  factory_contact_id?: number;
+  create_factory_contact?: {
+    full_name?: string;
+    phone?: string;
+    email?: string;
+  };
   create_factory?: {
     factory_name?: string;
     primary_email?: string;
@@ -140,9 +150,10 @@ type OrderCreateForm = {
   forwarder_comment?: string;
   warehouse_comment?: string;
   assigned_forwarder_user_id?: number;
-  factory_payment_via_label?: string;
+  is_factory_payment_via_company?: boolean;
   is_factory_payment_completed?: boolean;
   is_checked?: boolean;
+  is_1c?: boolean;
   is_priority?: boolean;
   office_mark_codes?: string[];
   product_characteristic_codes?: string[];
@@ -412,6 +423,9 @@ function OrdersPageContent() {
   const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
+  const createFactoryContactMode =
+    (Form.useWatch("factory_contact_mode", createForm) as FactoryContactMode | undefined) ?? "existing";
+  const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
   const createOrderType = Form.useWatch("order_type", createForm);
   const createCompanyId = Form.useWatch("company_id", createForm);
   const createFactoryCountryId = Form.useWatch("factory_country_id", createForm) as number | undefined;
@@ -742,6 +756,22 @@ function OrdersPageContent() {
     }
   }, [createFactoryMode, createForm, createOpen, postcodeCitiesQuery.data?.items]);
 
+  useEffect(() => {
+    if (!createOpen) return;
+    if (createFactoryContactMode === "existing") {
+      createForm.setFieldValue(["create_factory_contact"], undefined);
+      return;
+    }
+    createForm.setFieldValue("factory_contact_id", undefined);
+  }, [createFactoryContactMode, createForm, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    if (createClientGoodsValueCurrency !== "OTHER") {
+      createForm.setFieldValue("client_goods_value_currency_other_label", undefined);
+    }
+  }, [createClientGoodsValueCurrency, createForm, createOpen]);
+
   function invalidateOrdersQueries(orderId?: number) {
     return Promise.all([
       queryClient.invalidateQueries({ queryKey: ["orders"] }),
@@ -816,8 +846,30 @@ function OrdersPageContent() {
       mark("invoice_company_name", "Укажите название компании для инвойса");
     }
 
+    if (text.includes("company_contact_id")) {
+      mark("company_contact_id", "Выберите контакт компании");
+    }
+
+    if (text.includes("email_id")) {
+      mark("email_id", "Выберите email фабрики");
+    }
+
     if (text.includes("self_delivery_forwarder_user_id")) {
       mark("self_delivery_forwarder_user_id", "Выберите экспедитора для self-delivery");
+    }
+
+    if (text.includes("pickup_date_from") || text.includes("pickup_date_to")) {
+      mark("pickup_date_from", "Проверьте диапазон дат вывоза");
+      mark("pickup_date_to", "Проверьте диапазон дат вывоза");
+    }
+
+    if (
+      text.includes("factory_contact_id") ||
+      text.includes("create_factory_contact") ||
+      text.includes("xor") ||
+      text.includes("contact mode")
+    ) {
+      mark("factory_contact_mode", "Выберите режим контакта фабрики и заполните один вариант");
     }
 
     if (text.includes("primary_email")) {
@@ -859,6 +911,10 @@ function OrdersPageContent() {
         "client_goods_value_currency_other_label",
         "Для валюты OTHER укажите текстовое обозначение валюты",
       );
+    }
+
+    if (text.includes("maximum of 10 documents")) {
+      mark("documents", "Можно загрузить максимум 10 документов");
     }
 
     if (
@@ -918,6 +974,14 @@ function OrdersPageContent() {
         throw new Error("Выберите клиента");
       }
 
+      if (!isClientRole && !values.company_contact_id) {
+        throw new Error("Выберите контакт компании");
+      }
+
+      if (!values.factory_mode) {
+        throw new Error("Выберите режим фабрики");
+      }
+
       if (!values.ready_date) {
         throw new Error("Укажите дату готовности");
       }
@@ -933,6 +997,10 @@ function OrdersPageContent() {
 
       if (values.self_delivery && !values.self_delivery_forwarder_user_id) {
         throw new Error("Для self-delivery выберите экспедитора");
+      }
+
+      if (values.pickup_date_from && values.pickup_date_to && values.pickup_date_from.isAfter(values.pickup_date_to, "day")) {
+        throw new Error("Дата вывоза 'От' не может быть позже даты 'До'");
       }
 
       const goodsLines = (values.goods_lines ?? [])
@@ -977,6 +1045,25 @@ function OrdersPageContent() {
       }
 
       let factorySelection: Record<string, unknown>;
+      const createFactoryContact = values.create_factory_contact;
+      const createFactoryContactPayload = {
+        full_name: trimOrUndefined(createFactoryContact?.full_name),
+        phone: trimOrUndefined(createFactoryContact?.phone),
+        email: trimOrUndefined(createFactoryContact?.email),
+      };
+
+      if (values.factory_contact_mode === "existing") {
+        if (!values.factory_contact_id) {
+          throw new Error("Выберите контакт фабрики");
+        }
+      } else if (values.factory_contact_mode === "create") {
+        if (!createFactoryContactPayload.full_name || !createFactoryContactPayload.phone) {
+          throw new Error("Для нового контакта фабрики заполните имя и телефон");
+        }
+      } else {
+        throw new Error("Выберите режим контакта фабрики");
+      }
+
       if (values.factory_mode === "create") {
         const loadingAddress = values.create_factory?.loading_address;
         if (!values.factory_country_id) {
@@ -1006,20 +1093,38 @@ function OrdersPageContent() {
           factory_mode: "create",
           country_id: values.factory_country_id,
           create_factory: createFactoryPayload,
+          factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
+          create_factory_contact:
+            values.factory_contact_mode === "create"
+              ? {
+                  full_name: createFactoryContactPayload.full_name,
+                  phone: createFactoryContactPayload.phone,
+                  email: createFactoryContactPayload.email ?? undefined,
+                }
+              : undefined,
         };
       } else {
         if (!values.factory_country_id) {
           throw new Error("Выберите страну фабрики");
         }
-        if (!values.factory_id || !values.loading_address_id) {
-          throw new Error("Выберите фабрику и адрес загрузки");
+        if (!values.factory_id || !values.loading_address_id || (!isClientRole && !values.email_id)) {
+          throw new Error("Выберите фабрику, адрес загрузки и email фабрики");
         }
         factorySelection = {
           factory_mode: "existing",
           country_id: values.factory_country_id,
           factory_id: values.factory_id,
           loading_address_id: values.loading_address_id,
-          email_id: !isClientRole ? values.email_id ?? undefined : undefined,
+          email_id: values.email_id ?? undefined,
+          factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
+          create_factory_contact:
+            values.factory_contact_mode === "create"
+              ? {
+                  full_name: createFactoryContactPayload.full_name,
+                  phone: createFactoryContactPayload.phone,
+                  email: createFactoryContactPayload.email ?? undefined,
+                }
+              : undefined,
         };
       }
 
@@ -1039,6 +1144,8 @@ function OrdersPageContent() {
         order_number: trimOrUndefined(values.order_number),
         order_type: values.order_type ?? "delivery",
         ready_date: values.ready_date.format("YYYY-MM-DD"),
+        pickup_date_from: values.pickup_date_from?.format("YYYY-MM-DD"),
+        pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
         invoice_company_name: trimOrUndefined(values.invoice_company_name),
         invoice_number: trimOrUndefined(values.invoice_number),
@@ -1052,6 +1159,7 @@ function OrdersPageContent() {
         product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
+        is_1c: values.is_1c,
         raw_payload: requestRawPayload,
       };
 
@@ -1080,9 +1188,7 @@ function OrdersPageContent() {
           is_priority: canEditRestrictedCreateFields ? Boolean(values.is_priority) : undefined,
           office_mark_codes: canEditRestrictedCreateFields ? values.office_mark_codes : undefined,
           assigned_forwarder_user_id: assignedForwarderUserId,
-          factory_payment_via_label: canEditRestrictedCreateFields
-            ? trimOrUndefined(values.factory_payment_via_label)
-            : undefined,
+          is_factory_payment_via_company: canEditRestrictedCreateFields ? values.is_factory_payment_via_company : undefined,
           is_factory_payment_completed: canEditRestrictedCreateFields ? values.is_factory_payment_completed : undefined,
           is_checked: canEditRestrictedCreateFields ? values.is_checked : undefined,
         });
@@ -2393,6 +2499,7 @@ function OrdersPageContent() {
           initialValues={{
             order_type: "delivery",
             factory_mode: "existing",
+            factory_contact_mode: "existing",
             client_goods_value_currency: "EUR",
             documents: [],
             goods_lines: [],
@@ -2430,7 +2537,8 @@ function OrdersPageContent() {
               {!isClientRole ? (
                 <Form.Item
                   name="company_contact_id"
-                  label="Контакт компании (опционально)"
+                  label="Имя клиента"
+                  rules={[{ required: true, message: "Выберите контакт компании" }]}
                   className="crm-order-create-col"
                 >
                   <Select
@@ -2474,6 +2582,30 @@ function OrdersPageContent() {
                 />
               </Form.Item>
 
+              <Form.Item name="pickup_date_from" label="Вывоз: От" className="crm-order-create-col">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+
+              <Form.Item
+                name="pickup_date_to"
+                label="Вывоз: До"
+                dependencies={["pickup_date_from"]}
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator(_, value: dayjs.Dayjs | undefined) {
+                      const from = getFieldValue("pickup_date_from") as dayjs.Dayjs | undefined;
+                      if (!from || !value || !from.isAfter(value, "day")) {
+                        return Promise.resolve();
+                      }
+                      return Promise.reject(new Error("Дата 'До' должна быть не раньше даты 'От'"));
+                    },
+                  }),
+                ]}
+                className="crm-order-create-col"
+              >
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+
               <Form.Item name="invoice_on_other_company" valuePropName="checked" className="crm-order-create-col">
                 <Checkbox>Инвойс на другую компанию</Checkbox>
               </Form.Item>
@@ -2514,7 +2646,7 @@ function OrdersPageContent() {
 
             <Form.Item
               name="additional_description"
-              label="Описание груза"
+              label="Описание заказа"
               className="crm-order-create-col crm-order-create-col-full"
             >
               <Input.TextArea rows={4} />
@@ -2596,7 +2728,12 @@ function OrdersPageContent() {
             </Typography.Title>
             <Card size="small" className="crm-order-create-factory-card">
               <div className="crm-order-create-grid">
-                <Form.Item name="factory_mode" label="Режим фабрики" className="crm-order-create-col">
+                <Form.Item
+                  name="factory_mode"
+                  label="Режим выбора фабрики"
+                  rules={[{ required: true, message: "Выберите режим фабрики" }]}
+                  className="crm-order-create-col"
+                >
                   <Select
                     options={[
                       { label: "Выбрать существующую", value: "existing" },
@@ -2624,6 +2761,65 @@ function OrdersPageContent() {
                       createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
                     }}
                   />
+                </Form.Item>
+
+                <Form.Item
+                  name="factory_contact_mode"
+                  label="Контакт фабрики"
+                  rules={[{ required: true, message: "Выберите режим контакта фабрики" }]}
+                  className="crm-order-create-col"
+                >
+                  <Select
+                    options={[
+                      { label: "Выбрать существующий контакт", value: "existing" },
+                      { label: "Создать контакт", value: "create" },
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item noStyle shouldUpdate={(prev, next) => prev.factory_contact_mode !== next.factory_contact_mode}>
+                  {({ getFieldValue }) =>
+                    getFieldValue("factory_contact_mode") === "existing" ? (
+                      <Form.Item
+                        name="factory_contact_id"
+                        label="Контакт фабрики (ID)"
+                        rules={[{ required: true, message: "Укажите ID контакта фабрики" }]}
+                        className="crm-order-create-col"
+                      >
+                        <InputNumber min={1} style={{ width: "100%" }} />
+                      </Form.Item>
+                    ) : (
+                      <>
+                        <Form.Item
+                          name={["create_factory_contact", "full_name"]}
+                          label="Контакт фабрики: ФИО"
+                          rules={[{ required: true, message: "Укажите ФИО контакта" }]}
+                          className="crm-order-create-col"
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name={["create_factory_contact", "phone"]}
+                          label="Контакт фабрики: Телефон"
+                          rules={[
+                            { required: true, message: "Укажите телефон контакта" },
+                            { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                          ]}
+                          className="crm-order-create-col"
+                        >
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name={["create_factory_contact", "email"]}
+                          label="Контакт фабрики: Email"
+                          rules={[{ type: "email", message: "Введите корректный email" }]}
+                          className="crm-order-create-col"
+                        >
+                          <Input />
+                        </Form.Item>
+                      </>
+                    )
+                  }
                 </Form.Item>
 
                 {createFactoryMode === "existing" ? (
@@ -2672,7 +2868,12 @@ function OrdersPageContent() {
                     </Form.Item>
 
                     {!isClientRole ? (
-                      <Form.Item name="email_id" label="Email фабрики (опционально)" className="crm-order-create-col">
+                      <Form.Item
+                        name="email_id"
+                        label="Email фабрики"
+                        rules={[{ required: true, message: "Выберите email фабрики" }]}
+                        className="crm-order-create-col"
+                      >
                         <Select
                           allowClear
                           loading={factoryEmailsQuery.isLoading}
@@ -2975,26 +3176,26 @@ function OrdersPageContent() {
 
           <div className="crm-order-create-section">
             <Typography.Title level={5} className="crm-order-create-section-title">
-              Declared / Value
+              Данные заказа
             </Typography.Title>
             <div className="crm-order-create-grid">
-              <Form.Item name="declared_volume_m3" label="Declared volume (m3)" className="crm-order-create-col">
+              <Form.Item name="declared_volume_m3" label="Заявленный объем, м3" className="crm-order-create-col">
                 <Input />
               </Form.Item>
               <Form.Item
                 name="declared_total_weight_kg"
-                label="Declared total weight (kg)"
+                label="Вес, кг"
                 className="crm-order-create-col"
               >
                 <Input />
               </Form.Item>
-              <Form.Item name="cargo_places_qty" label="Cargo places qty" className="crm-order-create-col">
+              <Form.Item name="cargo_places_qty" label="Кол-во мест" className="crm-order-create-col">
                 <InputNumber min={0} style={{ width: "100%" }} />
               </Form.Item>
-              <Form.Item name="client_goods_value_amount" label="Goods value amount" className="crm-order-create-col">
+              <Form.Item name="client_goods_value_amount" label="Сумма" className="crm-order-create-col">
                 <Input />
               </Form.Item>
-              <Form.Item name="client_goods_value_currency" label="Goods value currency" className="crm-order-create-col">
+              <Form.Item name="client_goods_value_currency" label="Валюта" className="crm-order-create-col">
                 <Select
                   options={[
                     { label: "USD", value: "USD" },
@@ -3013,7 +3214,7 @@ function OrdersPageContent() {
                   getFieldValue("client_goods_value_currency") === "OTHER" ? (
                     <Form.Item
                       name="client_goods_value_currency_other_label"
-                      label="Другая валюта (обязательно для OTHER)"
+                      label="Другая валюта"
                       rules={[{ required: true, message: "Укажите валюту" }]}
                       className="crm-order-create-col"
                     >
@@ -3022,6 +3223,11 @@ function OrdersPageContent() {
                   ) : null
                 }
               </Form.Item>
+              {!isClientRole ? (
+                <Form.Item name="is_1c" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>1С</Checkbox>
+                </Form.Item>
+              ) : null}
             </div>
           </div>
 
@@ -3031,14 +3237,14 @@ function OrdersPageContent() {
                 Оплата / Проверка
               </Typography.Title>
               <div className="crm-order-create-grid">
-                <Form.Item name="factory_payment_via_label" label="Оплата фабрики через" className="crm-order-create-col">
-                  <Input />
+                <Form.Item name="is_factory_payment_via_company" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>Оплата через компанию</Checkbox>
                 </Form.Item>
                 <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-create-col">
-                  <Checkbox>Оплата фабрики завершена</Checkbox>
+                  <Checkbox>Оплачено компанией</Checkbox>
                 </Form.Item>
                 <Form.Item name="is_checked" valuePropName="checked" className="crm-order-create-col">
-                  <Checkbox>Проверено офисом</Checkbox>
+                  <Checkbox>Проверен</Checkbox>
                 </Form.Item>
               </div>
             </div>
