@@ -459,6 +459,30 @@ body.crm-column-resizing * {
   margin-bottom: 10px;
 }
 
+.crm-create-wizard-head {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e4e8f1;
+}
+
+.crm-create-wizard-step-counter {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #3a4a63;
+}
+
+.crm-create-wizard-steps {
+  margin-bottom: 2px;
+}
+
+.crm-create-wizard-footer {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .crm-order-create-section {
   margin-bottom: 14px;
 }
@@ -594,6 +618,25 @@ body.crm-column-resizing * {
 
   .crm-order-create-col-span-2 {
     grid-column: span 1;
+  }
+
+  .crm-create-wizard-head {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+  }
+
+  .crm-create-wizard-steps {
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .crm-create-wizard-footer {
+    flex-direction: column-reverse;
+  }
+
+  .crm-create-wizard-footer .ant-btn {
+    width: 100%;
   }
 
   .crm-toolbar-search .ant-input-search {
