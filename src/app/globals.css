@@ -459,6 +459,11 @@ body.crm-column-resizing * {
   margin-bottom: 10px;
 }
 
+.crm-order-create-form .ant-form-item-extra {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .crm-create-wizard-head {
   margin-bottom: 12px;
   padding-bottom: 10px;
@@ -614,6 +619,10 @@ body.crm-column-resizing * {
   .crm-order-create-grid {
     grid-template-columns: 1fr;
     gap: 4px 8px;
+  }
+
+  .crm-order-create-form .ant-form-item-extra {
+    font-size: 10px;
   }
 
   .crm-order-create-col-span-2 {

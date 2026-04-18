@@ -169,6 +169,9 @@ type OrderCreateForm = {
   certificate_intent?: boolean;
   new_factory_email_contact_name?: string;
   new_factory_email_contact_phone?: string;
+  client_factory_email_ui?: string;
+  client_measurement_ui?: string;
+  client_weighing_ui?: string;
 };
 
 type OrderEditForm = {
@@ -900,20 +903,18 @@ function OrdersPageContent() {
     const values = createForm.getFieldsValue(true) as OrderCreateForm;
 
     if (step === 0) {
-      const names: NamePath[] = [
-        "order_number",
-        "order_type",
-        "invoice_on_other_company",
-        "invoice_company_name",
-        "request_payload_json",
-      ];
-      if (!isClientRole) {
-        names.push("company_id", "company_contact_id");
+      if (isClientRole) {
+        return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json"];
       }
-      return names;
+
+      return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json", "company_id", "company_contact_id"];
     }
 
     if (step === 1) {
+      if (isClientRole) {
+        return ["factory_mode", "factory_country_id", "factory_id", "loading_address_id", "ready_date", "pickup_date_from", "pickup_date_to"];
+      }
+
       const names: NamePath[] = [
         "self_delivery",
         "ready_date",
@@ -954,10 +955,7 @@ function OrdersPageContent() {
           ["create_factory", "loading_address", "messenger_value"],
         );
       } else {
-        names.push("factory_id", "loading_address_id");
-        if (!isClientRole) {
-          names.push("email_id");
-        }
+        names.push("factory_id", "loading_address_id", "email_id");
       }
 
       return names;
@@ -972,9 +970,9 @@ function OrdersPageContent() {
         "declared_volume_m3",
         "declared_total_weight_kg",
         "cargo_places_qty",
-        "certificate_intent",
       ];
       if (!isClientRole) {
+        names.push("certificate_intent");
         names.push("measurement_status", "measurement_comment", "weighing_status", "weighing_comment");
       }
       return names;
@@ -1098,7 +1096,7 @@ function OrdersPageContent() {
         throw new Error("Для инвойса на другую компанию заполните название компании");
       }
 
-      if (values.self_delivery && !values.self_delivery_forwarder_user_id) {
+      if (!isClientRole && values.self_delivery && !values.self_delivery_forwarder_user_id) {
         throw new Error("Для self-delivery выберите экспедитора");
       }
 
@@ -1148,87 +1146,99 @@ function OrdersPageContent() {
       }
 
       let factorySelection: Record<string, unknown>;
-      const createFactoryContact = values.create_factory_contact;
-      const createFactoryContactPayload = {
-        full_name: trimOrUndefined(createFactoryContact?.full_name),
-        phone: trimOrUndefined(createFactoryContact?.phone),
-        email: trimOrUndefined(createFactoryContact?.email),
-      };
-
-      if (values.factory_contact_mode === "existing") {
-        if (!values.factory_contact_id) {
-          throw new Error("Выберите контакт фабрики");
+      if (isClientRole) {
+        if (values.factory_mode === "create") {
+          throw new Error("Для client create в этой версии доступен только existing сценарий фабрики");
         }
-      } else if (values.factory_contact_mode === "create") {
-        if (!createFactoryContactPayload.full_name || !createFactoryContactPayload.phone) {
-          throw new Error("Для нового контакта фабрики заполните имя и телефон");
-        }
-      } else {
-        throw new Error("Выберите режим контакта фабрики");
-      }
-
-      if (values.factory_mode === "create") {
-        const loadingAddress = values.create_factory?.loading_address;
-        if (!values.factory_country_id) {
-          throw new Error("Выберите страну фабрики");
-        }
-        const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
-        const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
-        const createFactoryPayload: Record<string, unknown> = {
-          factory_name: trimOrUndefined(values.create_factory?.factory_name),
-          country_id: values.factory_country_id,
-          primary_email: trimOrUndefined(values.create_factory?.primary_email),
-          loading_address: {
-            country_id: values.factory_country_id,
-            postcode_id: loadingAddress?.postcode_id,
-            city_id: loadingAddress?.city_id,
-            address: trimOrUndefined(loadingAddress?.address),
-            contact_name: trimOrUndefined(loadingAddress?.contact_name),
-            phone: trimOrUndefined(loadingAddress?.phone),
-            fax: trimOrUndefined(loadingAddress?.fax),
-            messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
-            messenger_value: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_value) : undefined,
-            create_postcode: canInlineCreatePostcodeCity && inlinePostcode ? { postcode: inlinePostcode } : undefined,
-            create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
-          },
-        };
-        factorySelection = {
-          factory_mode: "create",
-          country_id: values.factory_country_id,
-          create_factory: createFactoryPayload,
-          factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
-          create_factory_contact:
-            values.factory_contact_mode === "create"
-              ? {
-                  full_name: createFactoryContactPayload.full_name,
-                  phone: createFactoryContactPayload.phone,
-                  email: createFactoryContactPayload.email ?? undefined,
-                }
-              : undefined,
-        };
-      } else {
-        if (!values.factory_country_id) {
-          throw new Error("Выберите страну фабрики");
-        }
-        if (!values.factory_id || !values.loading_address_id || (!isClientRole && !values.email_id)) {
-          throw new Error("Выберите фабрику, адрес загрузки и email фабрики");
+        if (!values.factory_country_id || !values.factory_id || !values.loading_address_id) {
+          throw new Error("Выберите страну, фабрику и адрес загрузки");
         }
         factorySelection = {
           factory_mode: "existing",
           country_id: values.factory_country_id,
           factory_id: values.factory_id,
           loading_address_id: values.loading_address_id,
-          email_id: values.email_id ?? undefined,
-          factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
-          create_factory_contact:
-            values.factory_contact_mode === "create"
-              ? {
-                  full_name: createFactoryContactPayload.full_name,
-                  phone: createFactoryContactPayload.phone,
-                  email: createFactoryContactPayload.email ?? undefined,
-                }
-              : undefined,
         };
+      } else {
+        const createFactoryContact = values.create_factory_contact;
+        const createFactoryContactPayload = {
+          full_name: trimOrUndefined(createFactoryContact?.full_name),
+          phone: trimOrUndefined(createFactoryContact?.phone),
+          email: trimOrUndefined(createFactoryContact?.email),
+        };
+
+        if (values.factory_contact_mode === "existing") {
+          if (!values.factory_contact_id) {
+            throw new Error("Выберите контакт фабрики");
+          }
+        } else if (values.factory_contact_mode === "create") {
+          if (!createFactoryContactPayload.full_name || !createFactoryContactPayload.phone) {
+            throw new Error("Для нового контакта фабрики заполните имя и телефон");
+          }
+        } else {
+          throw new Error("Выберите режим контакта фабрики");
+        }
+
+        if (values.factory_mode === "create") {
+          const loadingAddress = values.create_factory?.loading_address;
+          if (!values.factory_country_id) {
+            throw new Error("Выберите страну фабрики");
+          }
+          const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
+          const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
+          const createFactoryPayload: Record<string, unknown> = {
+            factory_name: trimOrUndefined(values.create_factory?.factory_name),
+            country_id: values.factory_country_id,
+            primary_email: trimOrUndefined(values.create_factory?.primary_email),
+            loading_address: {
+              country_id: values.factory_country_id,
+              postcode_id: loadingAddress?.postcode_id,
+              city_id: loadingAddress?.city_id,
+              address: trimOrUndefined(loadingAddress?.address),
+              contact_name: trimOrUndefined(loadingAddress?.contact_name),
+              phone: trimOrUndefined(loadingAddress?.phone),
+              fax: trimOrUndefined(loadingAddress?.fax),
+              messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
+              messenger_value: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_value) : undefined,
+              create_postcode: canInlineCreatePostcodeCity && inlinePostcode ? { postcode: inlinePostcode } : undefined,
+              create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
+            },
+          };
+          factorySelection = {
+            factory_mode: "create",
+            country_id: values.factory_country_id,
+            create_factory: createFactoryPayload,
+            factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
+            create_factory_contact:
+              values.factory_contact_mode === "create"
+                ? {
+                    full_name: createFactoryContactPayload.full_name,
+                    phone: createFactoryContactPayload.phone,
+                    email: createFactoryContactPayload.email ?? undefined,
+                  }
+                : undefined,
+          };
+        } else {
+          if (!values.factory_country_id || !values.factory_id || !values.loading_address_id || !values.email_id) {
+            throw new Error("Выберите фабрику, адрес загрузки и email фабрики");
+          }
+          factorySelection = {
+            factory_mode: "existing",
+            country_id: values.factory_country_id,
+            factory_id: values.factory_id,
+            loading_address_id: values.loading_address_id,
+            email_id: values.email_id,
+            factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
+            create_factory_contact:
+              values.factory_contact_mode === "create"
+                ? {
+                    full_name: createFactoryContactPayload.full_name,
+                    phone: createFactoryContactPayload.phone,
+                    email: createFactoryContactPayload.email ?? undefined,
+                  }
+                : undefined,
+          };
+        }
       }
 
       const clientGoodsValueCurrency = trimOrUndefined(values.client_goods_value_currency);
@@ -1262,7 +1272,6 @@ function OrdersPageContent() {
         product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
-        is_1c: values.is_1c,
         raw_payload: requestRawPayload,
       };
 
@@ -1276,6 +1285,7 @@ function OrdersPageContent() {
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
           self_delivery: Boolean(values.self_delivery),
           self_delivery_forwarder_user_id: values.self_delivery_forwarder_user_id,
+          is_1c: values.is_1c,
           measurement_payload: values.measurement_status
             ? {
                 status: values.measurement_status,
@@ -2107,6 +2117,15 @@ function OrdersPageContent() {
     value: item.company_id,
   }));
   const selectedCompanyContacts = selectedClientCompany?.contacts ?? [];
+  const clientCompanyLabel = meQuery.data?.company_id ? `Компания ID ${meQuery.data.company_id}` : "Компания из токена";
+  const clientContactUiOptions = meQuery.data?.id
+    ? [
+        {
+          label: [meQuery.data.full_name, meQuery.data.login].filter(Boolean).join(" · ") || `Пользователь #${meQuery.data.id}`,
+          value: meQuery.data.id,
+        },
+      ]
+    : [];
   const selectedLoadingAddress = useMemo(
     () => (loadingAddressesQuery.data ?? []).find((address) => address.id === createLoadingAddressId),
     [createLoadingAddressId, loadingAddressesQuery.data],
@@ -2123,6 +2142,15 @@ function OrdersPageContent() {
     label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || `ID ${forwarder.id}`,
     value: forwarder.id,
   }));
+  const clientForwarderUiOptions =
+    selfDeliveryForwarderOptions.length > 0
+      ? selfDeliveryForwarderOptions
+      : [
+          {
+            label: "UI-only (до backend parity)",
+            value: -1,
+          },
+        ];
   const factoryEmailOptions = (factoryEmailsQuery.data?.items ?? []).map((item) => ({
     label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
     value: item.id,
@@ -2659,7 +2687,11 @@ function OrdersPageContent() {
                       placeholder="Начните вводить название компании"
                     />
                   </Form.Item>
-                ) : null}
+                ) : (
+                  <Form.Item label="Компания" className="crm-order-create-col" extra="UI-only: определяется из профиля клиента">
+                    <Input readOnly value={clientCompanyLabel} />
+                  </Form.Item>
+                )}
 
                 {!isClientRole ? (
                   <Form.Item
@@ -2681,7 +2713,16 @@ function OrdersPageContent() {
                       placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
                     />
                   </Form.Item>
-                ) : null}
+                ) : (
+                  <Form.Item
+                    name="company_contact_id"
+                    label="Имя клиента"
+                    className="crm-order-create-col"
+                    extra="UI-only: в текущем client API поле не отправляется"
+                  >
+                    <Select allowClear options={clientContactUiOptions} placeholder="Опционально" />
+                  </Form.Item>
+                )}
 
                 <Form.Item name="invoice_on_other_company" valuePropName="checked" className="crm-order-create-col">
                   <Checkbox>Инвойс на другую компанию</Checkbox>
@@ -2747,14 +2788,21 @@ function OrdersPageContent() {
                     <Form.Item
                       name="self_delivery_forwarder_user_id"
                       label="Назначить экспедитора"
-                      rules={[{ required: true, message: "Выберите экспедитора" }]}
+                      rules={!isClientRole ? [{ required: true, message: "Выберите экспедитора" }] : undefined}
                       className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
                     >
                       <Select
                         allowClear
-                        loading={createMetadataQuery.isLoading}
-                        options={selfDeliveryForwarderOptions}
-                        placeholder={selfDeliveryForwarderOptions.length ? undefined : "Нет экспедиторов в metadata"}
+                        loading={!isClientRole && createMetadataQuery.isLoading}
+                        options={isClientRole ? clientForwarderUiOptions : selfDeliveryForwarderOptions}
+                        placeholder={
+                          isClientRole
+                            ? "UI-only поле"
+                            : selfDeliveryForwarderOptions.length
+                              ? undefined
+                              : "Нет экспедиторов в metadata"
+                        }
                       />
                     </Form.Item>
                   ) : (
@@ -2762,14 +2810,20 @@ function OrdersPageContent() {
                       name="assigned_forwarder_user_id"
                       label="Назначить экспедитора"
                       className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
                     >
                       <Select
                         allowClear
-                        loading={forwardersQuery.isLoading}
-                        options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                          label: `${user.id} - ${user.full_name || user.login}`,
-                          value: user.id,
-                        }))}
+                        loading={!isClientRole && forwardersQuery.isLoading}
+                        options={
+                          isClientRole
+                            ? clientForwarderUiOptions
+                            : (forwardersQuery.data?.items ?? []).map((user) => ({
+                                label: `${user.id} - ${user.full_name || user.login}`,
+                                value: user.id,
+                              }))
+                        }
+                        placeholder={isClientRole ? "UI-only поле" : undefined}
                       />
                     </Form.Item>
                   )}
@@ -2846,48 +2900,67 @@ function OrdersPageContent() {
 
                   <Form.Item
                     name={["create_factory_contact", "full_name"]}
-                    label="Контакты: Имя"
-                    rules={[{ required: true, message: "Укажите имя контакта фабрики" }]}
+                    label={isClientRole ? "Контакты" : "Контакты: Имя"}
+                    rules={!isClientRole ? [{ required: true, message: "Укажите имя контакта фабрики" }] : undefined}
                     className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only до backend parity" : undefined}
                   >
                     <Input />
                   </Form.Item>
 
                   <Form.Item
                     name={["create_factory_contact", "phone"]}
-                    label="Контакты: Телефон"
-                    rules={[
-                      { required: true, message: "Укажите телефон контакта фабрики" },
-                      { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
-                    ]}
+                    label={isClientRole ? "Контакт" : "Контакты: Телефон"}
+                    rules={
+                      !isClientRole
+                        ? [
+                            { required: true, message: "Укажите телефон контакта фабрики" },
+                            { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                          ]
+                        : undefined
+                    }
                     className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only до backend parity" : undefined}
                   >
                     <Input />
                   </Form.Item>
 
-                  <Form.Item
-                    name={["create_factory_contact", "email"]}
-                    label="Контакты: Email"
-                    rules={[{ type: "email", message: "Введите корректный email" }]}
-                    className="crm-order-create-col"
-                  >
-                    <Input />
-                  </Form.Item>
+                  {!isClientRole ? (
+                    <Form.Item
+                      name={["create_factory_contact", "email"]}
+                      label="Контакты: Email"
+                      rules={[{ type: "email", message: "Введите корректный email" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Input />
+                    </Form.Item>
+                  ) : null}
 
-                  <Form.Item
-                    name="email_id"
-                    label="Email"
-                    rules={[{ required: true, message: "Выберите email фабрики" }]}
-                    className="crm-order-create-col"
-                  >
-                    <Select
-                      allowClear
-                      loading={factoryEmailsQuery.isLoading}
-                      disabled={!createFactoryId}
-                      options={factoryEmailOptions}
-                      placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
-                    />
-                  </Form.Item>
+                  {!isClientRole ? (
+                    <Form.Item
+                      name="email_id"
+                      label="Email"
+                      rules={[{ required: true, message: "Выберите email фабрики" }]}
+                      className="crm-order-create-col"
+                    >
+                      <Select
+                        allowClear
+                        loading={factoryEmailsQuery.isLoading}
+                        disabled={!createFactoryId}
+                        options={factoryEmailOptions}
+                        placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item
+                      name="client_factory_email_ui"
+                      label="Email"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Input />
+                    </Form.Item>
+                  )}
 
                   {!isClientRole && canManageFactoryEmails ? (
                     <Form.Item label="Добавить Email" className="crm-order-create-col">
@@ -2918,15 +2991,37 @@ function OrdersPageContent() {
                     </Form.Item>
                   ) : null}
 
-                  {!isClientRole && canManageFactoryEmails ? (
-                    <Form.Item name="new_factory_email_contact_name" label="Имя (UI-only)" className="crm-order-create-col">
-                      <Input placeholder="Имя для будущего backend-поля" />
+                  {isClientRole ? (
+                    <Form.Item label="Создать" className="crm-order-create-col" extra="UI-only до backend parity">
+                      <Button
+                        onClick={() => {
+                          message.info("Поле 'создать' пока доступно только как UI-only");
+                        }}
+                      >
+                        создать
+                      </Button>
                     </Form.Item>
                   ) : null}
 
-                  {!isClientRole && canManageFactoryEmails ? (
-                    <Form.Item name="new_factory_email_contact_phone" label="Телефон (UI-only)" className="crm-order-create-col">
-                      <Input placeholder="Телефон для будущего backend-поля" />
+                  {isClientRole || canManageFactoryEmails ? (
+                    <Form.Item
+                      name="new_factory_email_contact_name"
+                      label={isClientRole ? "Имя" : "Имя (UI-only)"}
+                      className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only до backend parity" : undefined}
+                    >
+                      <Input placeholder={isClientRole ? "Имя" : "Имя для будущего backend-поля"} />
+                    </Form.Item>
+                  ) : null}
+
+                  {isClientRole || canManageFactoryEmails ? (
+                    <Form.Item
+                      name="new_factory_email_contact_phone"
+                      label={isClientRole ? "Телефон" : "Телефон (UI-only)"}
+                      className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only до backend parity" : undefined}
+                    >
+                      <Input placeholder={isClientRole ? "Телефон" : "Телефон для будущего backend-поля"} />
                     </Form.Item>
                   ) : null}
 
@@ -3042,36 +3137,59 @@ function OrdersPageContent() {
                 </div>
               </div>
 
-              {!isClientRole ? (
-                <div className="crm-order-create-section">
-                  <Typography.Title level={5} className="crm-order-create-section-title">
-                    Перемер / взвешивание
-                  </Typography.Title>
-                  <div className="crm-order-create-grid">
-                    <Form.Item name="measurement_status" label="Статус измерений" className="crm-order-create-col">
-                      <Select allowClear options={measurementStatusOptions} />
-                    </Form.Item>
-                    <Form.Item name="measurement_comment" label="Комментарий измерений" className="crm-order-create-col">
-                      <Input.TextArea rows={2} />
-                    </Form.Item>
-                    <Form.Item name="weighing_status" label="Статус взвешивания" className="crm-order-create-col">
-                      <Select allowClear options={weighingStatusOptions} />
-                    </Form.Item>
-                    <Form.Item name="weighing_comment" label="Комментарий взвешивания" className="crm-order-create-col">
-                      <Input.TextArea rows={2} />
-                    </Form.Item>
-                    <Form.Item label="Ценовой коэффициент" className="crm-order-create-col">
-                      <Input readOnly value={priceCoefficient} />
-                    </Form.Item>
-                    <Form.Item label="Весовой коэффициент" className="crm-order-create-col">
-                      <Input readOnly value={weightCoefficient} />
-                    </Form.Item>
+              <div className="crm-order-create-section">
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Перемер / взвешивание
+                </Typography.Title>
+                <div className="crm-order-create-grid">
+                  {!isClientRole ? (
+                    <>
+                      <Form.Item name="measurement_status" label="Статус измерений" className="crm-order-create-col">
+                        <Select allowClear options={measurementStatusOptions} />
+                      </Form.Item>
+                      <Form.Item name="measurement_comment" label="Комментарий измерений" className="crm-order-create-col">
+                        <Input.TextArea rows={2} />
+                      </Form.Item>
+                      <Form.Item name="weighing_status" label="Статус взвешивания" className="crm-order-create-col">
+                        <Select allowClear options={weighingStatusOptions} />
+                      </Form.Item>
+                      <Form.Item name="weighing_comment" label="Комментарий взвешивания" className="crm-order-create-col">
+                        <Input.TextArea rows={2} />
+                      </Form.Item>
+                    </>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name="client_measurement_ui"
+                        label="Перемер"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        name="client_weighing_ui"
+                        label="Взвешивание"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
+                        <Input />
+                      </Form.Item>
+                    </>
+                  )}
+                  <Form.Item label="Ценовой коэффициент" className="crm-order-create-col">
+                    <Input readOnly value={priceCoefficient} />
+                  </Form.Item>
+                  <Form.Item label="Весовой коэффициент" className="crm-order-create-col">
+                    <Input readOnly value={weightCoefficient} />
+                  </Form.Item>
+                  {!isClientRole ? (
                     <Form.Item name="certificate_intent" valuePropName="checked" className="crm-order-create-col">
                       <Checkbox>Сертификат (UI-only)</Checkbox>
                     </Form.Item>
-                  </div>
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
             </>
           ) : null}
 
@@ -3144,18 +3262,41 @@ function OrdersPageContent() {
                   <Form.Item name="product_characteristic_codes" label="Характеристики" className="crm-order-create-col">
                     <Select mode="multiple" allowClear options={productCharacteristicOptions} />
                   </Form.Item>
-                  {canEditRestrictedCreateFields ? (
+                  {!isClientRole && canEditRestrictedCreateFields ? (
                     <Form.Item name="office_mark_codes" label="Отметки офиса" className="crm-order-create-col">
                       <Select mode="multiple" allowClear options={officeMarkOptions} />
                     </Form.Item>
                   ) : null}
-                  {!isClientRole ? (
-                    <Form.Item name="is_1c" valuePropName="checked" className="crm-order-create-col">
-                      <Checkbox>1С</Checkbox>
+                  {isClientRole ? (
+                    <Form.Item
+                      name="office_mark_codes"
+                      label="Отметки офиса"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Select mode="tags" allowClear tokenSeparators={[","]} />
                     </Form.Item>
                   ) : null}
+                  <Form.Item
+                    name="is_1c"
+                    valuePropName="checked"
+                    className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only до backend parity" : undefined}
+                  >
+                    <Checkbox>1С</Checkbox>
+                  </Form.Item>
                   {!isClientRole && canEditRestrictedCreateFields ? (
                     <Form.Item name="is_factory_payment_via_company" valuePropName="checked" className="crm-order-create-col">
+                      <Checkbox>Оплата через компанию</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_factory_payment_via_company"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
                       <Checkbox>Оплата через компанию</Checkbox>
                     </Form.Item>
                   ) : null}
@@ -3164,8 +3305,28 @@ function OrdersPageContent() {
                       <Checkbox>Проверен</Checkbox>
                     </Form.Item>
                   ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_checked"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Checkbox>Проверен</Checkbox>
+                    </Form.Item>
+                  ) : null}
                   {!isClientRole && canEditRestrictedCreateFields ? (
                     <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-create-col">
+                      <Checkbox>Оплачено компанией</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_factory_payment_completed"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
                       <Checkbox>Оплачено компанией</Checkbox>
                     </Form.Item>
                   ) : null}
