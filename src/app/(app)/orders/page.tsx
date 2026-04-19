@@ -37,6 +37,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { calculateCoefficient, renderGoodsLineSummary } from "@/features/orders/create-order-wizard-utils";
 import { apiRequest } from "@/shared/lib/api";
 import {
   formatEnumCode,
@@ -146,6 +147,9 @@ type OrderCreateForm = {
   product_characteristic_codes?: string[];
   self_delivery?: boolean;
   self_delivery_forwarder_user_id?: number;
+  forwarder_name?: string;
+  pickup_date_from?: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs;
   measurement_status?: MeasurementPayload["status"];
   measurement_comment?: string;
   weighing_status?: MeasurementPayload["status"];
@@ -153,6 +157,12 @@ type OrderCreateForm = {
   request_payload_json?: string;
   goods_lines?: OrderCreateGoodsLineForm[];
   documents?: OrderCreateDocumentForm[];
+};
+
+type FactoryContactDraft = {
+  email: string;
+  name?: string;
+  phone?: string;
 };
 
 type OrderEditForm = {
@@ -214,6 +224,13 @@ const QUANTITY_UNIT_FALLBACK_OPTIONS = [
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
+const CREATE_WIZARD_STEPS = [
+  "Новый заказ",
+  "Фабрика",
+  "Данные заказа",
+  "Товары",
+  "Документы",
+] as const;
 
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
   return {
@@ -271,8 +288,10 @@ function OrdersPageContent() {
   const canManageFactoryEmails = canEditRestrictedCreateFields;
   const canInlineCreatePostcodeCity = canEditRestrictedCreateFields && !isClientRole;
   const canUseMessengerFields = canEditRestrictedCreateFields && !isClientRole;
+  const useAdminManagerWizard = ["administrator", "manager"].includes(normalizedRole) && !isClientRole;
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createWizardStep, setCreateWizardStep] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -292,11 +311,15 @@ function OrdersPageContent() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
   const [postcodeQueryText, setPostcodeQueryText] = useState("");
-  const [newFactoryEmail, setNewFactoryEmail] = useState("");
   const [inlinePostcodeValue, setInlinePostcodeValue] = useState("");
   const [inlineCityValue, setInlineCityValue] = useState("");
+  const [createContactOpen, setCreateContactOpen] = useState(false);
+  const [createGoodsLineOpen, setCreateGoodsLineOpen] = useState(false);
+  const [factoryContactDrafts, setFactoryContactDrafts] = useState<Record<string, FactoryContactDraft>>({});
 
   const [createForm] = Form.useForm<OrderCreateForm>();
+  const [createContactForm] = Form.useForm<FactoryContactDraft>();
+  const [createGoodsLineForm] = Form.useForm<OrderCreateGoodsLineForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
   const [statusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
@@ -333,7 +356,6 @@ function OrdersPageContent() {
   const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
   const [bulkSpecialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
-  const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
   const createOrderType = Form.useWatch("order_type", createForm);
@@ -344,7 +366,22 @@ function OrdersPageContent() {
     createForm,
   ) as number | undefined;
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
+  const createEmailId = Form.useWatch("email_id", createForm) as number | undefined;
   const isRequestCreate = !isClientRole && createOrderType === "request";
+  const goodsLinesWatch = (Form.useWatch("goods_lines", createForm) as OrderCreateGoodsLineForm[] | undefined) ?? [];
+  const coefficientValues = Form.useWatch(
+    ["client_goods_value_amount", "declared_volume_m3", "declared_total_weight_kg"],
+    createForm,
+  ) as [string | undefined, string | undefined, string | undefined] | undefined;
+  const [clientGoodsValueAmount, declaredVolumeM3, declaredTotalWeightKg] = coefficientValues ?? [];
+  const priceCoefficient = useMemo(
+    () => calculateCoefficient(clientGoodsValueAmount, declaredVolumeM3),
+    [clientGoodsValueAmount, declaredVolumeM3],
+  );
+  const weightCoefficient = useMemo(
+    () => calculateCoefficient(declaredVolumeM3, declaredTotalWeightKg),
+    [declaredVolumeM3, declaredTotalWeightKg],
+  );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
@@ -613,8 +650,6 @@ function OrdersPageContent() {
       }),
     onSuccess: async (result) => {
       message.success("Email фабрики добавлен");
-      setNewFactoryEmail("");
-      createFactoryEmailForm.resetFields();
       await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-emails", createFactoryId] });
       if (result?.id) {
         createForm.setFieldValue("email_id", result.id);
@@ -676,11 +711,6 @@ function OrdersPageContent() {
       mark("self_delivery_forwarder_user_id", "Выберите экспедитора для self-delivery");
     }
 
-    if (text.includes("assigned_forwarder_user_id") && text.includes("self_delivery")) {
-      mark("assigned_forwarder_user_id", "Экспедитор должен совпадать с self-delivery");
-      mark("self_delivery_forwarder_user_id", "Экспедитор должен совпадать с assigned_forwarder_user_id");
-    }
-
     if (text.includes("primary_email")) {
       mark(["create_factory", "primary_email"], "Введите корректный email");
     }
@@ -707,6 +737,70 @@ function OrdersPageContent() {
 
     createForm.setFields(fieldErrors as Parameters<typeof createForm.setFields>[0]);
     return true;
+  }
+
+  async function validateCreateWizardStep(step: number) {
+    if (!useAdminManagerWizard) {
+      return true;
+    }
+    if (step === 0) {
+      await createForm.validateFields(["company_id", "order_type", "invoice_on_other_company", "invoice_company_name"]);
+      return true;
+    }
+    if (step === 1) {
+      const fields: Array<string | (string | number)[]> = [
+        "factory_id",
+        "loading_address_id",
+        "ready_date",
+        "forwarder_name",
+        "pickup_date_from",
+        "pickup_date_to",
+      ];
+      if (createForm.getFieldValue("self_delivery")) {
+        fields.push("self_delivery_forwarder_user_id");
+      }
+      await createForm.validateFields(fields as Parameters<typeof createForm.validateFields>[0]);
+      return true;
+    }
+    if (step === 2) {
+      await createForm.validateFields([
+        "invoice_number",
+        "client_goods_value_currency",
+        "client_goods_value_amount",
+        "declared_volume_m3",
+        "declared_total_weight_kg",
+      ]);
+      return true;
+    }
+    return true;
+  }
+
+  async function goCreateWizardNext() {
+    try {
+      await validateCreateWizardStep(createWizardStep);
+      setCreateWizardStep((prev) => Math.min(prev + 1, CREATE_WIZARD_STEPS.length - 1));
+    } catch {
+      // Ant form already shows inline validation.
+    }
+  }
+
+  function goCreateWizardBack() {
+    setCreateWizardStep((prev) => Math.max(0, prev - 1));
+  }
+
+  function closeCreateModal() {
+    setCreateOpen(false);
+    setCreateWizardStep(0);
+    createForm.resetFields();
+    createContactForm.resetFields();
+    createGoodsLineForm.resetFields();
+    setClientCompaniesQueryText("");
+    setPostcodeQueryText("");
+    setInlinePostcodeValue("");
+    setInlineCityValue("");
+    setCreateContactOpen(false);
+    setCreateGoodsLineOpen(false);
+    setFactoryContactDrafts({});
   }
 
   const createMutation = useMutation({
@@ -845,6 +939,8 @@ function OrdersPageContent() {
       const orderPayload: Record<string, unknown> = {
         order_number: trimOrUndefined(values.order_number),
         ready_date: values.ready_date.format("YYYY-MM-DD"),
+        pickup_date_from: values.pickup_date_from?.format("YYYY-MM-DD"),
+        pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
         invoice_company_name: trimOrUndefined(values.invoice_company_name),
         invoice_number: trimOrUndefined(values.invoice_number),
@@ -859,26 +955,17 @@ function OrdersPageContent() {
 
       if (!isClientRole) {
         const assignedForwarderUserId = canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined;
-        if (
-          values.self_delivery &&
-          values.self_delivery_forwarder_user_id &&
-          assignedForwarderUserId &&
-          values.self_delivery_forwarder_user_id !== assignedForwarderUserId
-        ) {
-          throw new Error(
-            "Для self-delivery выбранный экспедитор должен совпадать с назначенным экспедитором в заказе",
-          );
-        }
 
         Object.assign(orderPayload, {
           company_id: values.company_id,
           company_contact_id: values.company_contact_id,
           order_type: values.order_type ?? "delivery",
+          forwarder_name: trimOrUndefined(values.forwarder_name),
           user_comment: trimOrUndefined(values.user_comment),
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
           self_delivery: Boolean(values.self_delivery),
-          self_delivery_forwarder_user_id: values.self_delivery_forwarder_user_id,
+          self_delivery_forwarder_user_id: values.self_delivery ? values.self_delivery_forwarder_user_id : undefined,
           measurement_payload: values.measurement_status
             ? {
                 status: values.measurement_status,
@@ -923,13 +1010,7 @@ function OrdersPageContent() {
     },
     onSuccess: async () => {
       message.success(isRequestCreate ? "Заявка создана" : "Заказ создан");
-      setCreateOpen(false);
-      createForm.resetFields();
-      setClientCompaniesQueryText("");
-      setPostcodeQueryText("");
-      setNewFactoryEmail("");
-      setInlinePostcodeValue("");
-      setInlineCityValue("");
+      closeCreateModal();
       await invalidateOrdersQueries();
       await queryClient.invalidateQueries({ queryKey: ["requests"] });
     },
@@ -1565,6 +1646,59 @@ function OrdersPageContent() {
     label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
     value: item.id,
   }));
+  const selectedFactoryOption = (factoryOptionsQuery.data ?? []).find((factory) => factory.id === createFactoryId);
+  const selectedLoadingAddress = (loadingAddressesQuery.data ?? []).find((address) => address.id === createLoadingAddressId);
+  const selectedFactoryContactMeta = useMemo(() => {
+    if (!createEmailId) return null;
+    const selectedEmail = (factoryEmailsQuery.data?.items ?? []).find((item) => item.id === createEmailId)?.email;
+    if (!selectedEmail) return null;
+    return factoryContactDrafts[selectedEmail] ?? { email: selectedEmail };
+  }, [createEmailId, factoryContactDrafts, factoryEmailsQuery.data?.items]);
+  const wizardStepTitle = `${createWizardStep + 1}/${CREATE_WIZARD_STEPS.length} · ${CREATE_WIZARD_STEPS[createWizardStep]}`;
+  const isWizardCreateFlow = useAdminManagerWizard && !isRequestCreate;
+
+  async function handleCreateContactSubmit() {
+    try {
+      const values = await createContactForm.validateFields();
+      if (!createFactoryId) {
+        message.error("Сначала выберите фабрику");
+        return;
+      }
+      const email = trimOrUndefined(values.email);
+      if (!email) {
+        message.error("Введите email");
+        return;
+      }
+      const result = await createFactoryEmailMutation.mutateAsync({ factoryId: createFactoryId, email });
+      setFactoryContactDrafts((current) => ({
+        ...current,
+        [email]: {
+          email,
+          name: trimOrUndefined(values.name),
+          phone: trimOrUndefined(values.phone),
+        },
+      }));
+      if (result?.id) {
+        createForm.setFieldValue("email_id", result.id);
+      }
+      setCreateContactOpen(false);
+      createContactForm.resetFields();
+    } catch {
+      // handled by form validation/mutation
+    }
+  }
+
+  async function handleCreateGoodsLineSubmit() {
+    try {
+      const values = await createGoodsLineForm.validateFields();
+      const nextLines = [...goodsLinesWatch, values];
+      createForm.setFieldValue("goods_lines", nextLines);
+      setCreateGoodsLineOpen(false);
+      createGoodsLineForm.resetFields();
+    } catch {
+      // handled by form validation
+    }
+  }
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
@@ -1589,7 +1723,13 @@ function OrdersPageContent() {
         }
         actions={
           canCreate ? (
-            <Button type="primary" onClick={() => setCreateOpen(true)}>
+            <Button
+              type="primary"
+              onClick={() => {
+                setCreateWizardStep(0);
+                setCreateOpen(true);
+              }}
+            >
               + Новый заказ
             </Button>
           ) : null
@@ -1993,20 +2133,37 @@ function OrdersPageContent() {
             ? "Создать заказ (клиентский контур)"
             : isRequestCreate
               ? "Создать заявку (request)"
-              : "Создать заказ"
+              : useAdminManagerWizard
+                ? `Создать заказ · ${wizardStepTitle}`
+                : "Создать заказ"
         }
         open={createOpen}
         destroyOnHidden
-        onCancel={() => {
-          setCreateOpen(false);
-          createForm.resetFields();
-          setClientCompaniesQueryText("");
-          setPostcodeQueryText("");
-          setNewFactoryEmail("");
-          setInlinePostcodeValue("");
-          setInlineCityValue("");
-        }}
-        onOk={() => createForm.submit()}
+        onCancel={closeCreateModal}
+        onOk={() => (useAdminManagerWizard ? (createWizardStep === CREATE_WIZARD_STEPS.length - 1 ? createForm.submit() : goCreateWizardNext()) : createForm.submit())}
+        footer={
+          useAdminManagerWizard ? (
+            <Space style={{ width: "100%", justifyContent: "space-between" }}>
+              <Button onClick={closeCreateModal}>Отмена</Button>
+              <Space>
+                {createWizardStep > 0 ? (
+                  <Button onClick={goCreateWizardBack} disabled={createMutation.isPending}>
+                    Назад
+                  </Button>
+                ) : null}
+                {createWizardStep < CREATE_WIZARD_STEPS.length - 1 ? (
+                  <Button type="primary" onClick={goCreateWizardNext} disabled={createMutation.isPending}>
+                    Дальше
+                  </Button>
+                ) : (
+                  <Button type="primary" onClick={() => createForm.submit()} loading={createMutation.isPending}>
+                    Готово
+                  </Button>
+                )}
+              </Space>
+            </Space>
+          ) : undefined
+        }
         confirmLoading={createMutation.isPending}
         width={860}
       >
@@ -2022,11 +2179,13 @@ function OrdersPageContent() {
           }}
           onFinish={(values) => createMutation.mutate(values)}
         >
-          <Form.Item name="order_number" label="Номер заказа (опционально)">
-            <Input />
-          </Form.Item>
+          {!isWizardCreateFlow || createWizardStep === 0 ? (
+            <Form.Item name="order_number" label="Номер заказа (опционально)">
+              <Input />
+            </Form.Item>
+          ) : null}
 
-          {!isClientRole ? (
+          {!isClientRole && (!isWizardCreateFlow || createWizardStep === 0) ? (
             <>
               <Form.Item name="company_id" label="Клиент (компания)" rules={[{ required: true }]}>
                 <Select
@@ -2067,38 +2226,52 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          {!isRequestCreate ? (
-            <Form.Item name="ready_date" label="Дата готовности" rules={[{ required: true }]}>
-              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          {!isRequestCreate && (!isWizardCreateFlow || createWizardStep === 1) ? (
+            <>
+              <Form.Item name="ready_date" label="Дата готовности" rules={[{ required: true }]}>
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item name="pickup_date_from" label="Вывоз с (pickup_date_from)">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item name="pickup_date_to" label="Вывоз до (pickup_date_to)">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </>
+          ) : null}
+
+          {!isWizardCreateFlow || createWizardStep === 0 ? (
+            <Form.Item name="invoice_on_other_company" valuePropName="checked">
+              <Checkbox>Инвойс на другую компанию</Checkbox>
             </Form.Item>
           ) : null}
 
-          <Form.Item name="invoice_on_other_company" valuePropName="checked">
-            <Checkbox>Инвойс на другую компанию</Checkbox>
-          </Form.Item>
+          {!isWizardCreateFlow || createWizardStep === 0 ? (
+            <Form.Item
+              noStyle
+              shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}
+            >
+              {({ getFieldValue }) =>
+                getFieldValue("invoice_on_other_company") ? (
+                  <Form.Item
+                    name="invoice_company_name"
+                    label="Название компании для инвойса"
+                    rules={[{ required: true, message: "Укажите название компании" }]}
+                  >
+                    <Input />
+                  </Form.Item>
+                ) : null
+              }
+            </Form.Item>
+          ) : null}
 
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue("invoice_on_other_company") ? (
-                <Form.Item
-                  name="invoice_company_name"
-                  label="Название компании для инвойса"
-                  rules={[{ required: true, message: "Укажите название компании" }]}
-                >
-                  <Input />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
+          {!isWizardCreateFlow || createWizardStep === 2 ? (
+            <Form.Item name="invoice_number" label="Инвойс / проформа">
+              <Input />
+            </Form.Item>
+          ) : null}
 
-          <Form.Item name="invoice_number" label="Инвойс / проформа">
-            <Input />
-          </Form.Item>
-
-          {!isRequestCreate ? (
+          {!isRequestCreate && (!isWizardCreateFlow || createWizardStep === 1) ? (
             <>
               <Form.Item name="factory_mode" label="Фабрика">
                 <Select
@@ -2138,6 +2311,19 @@ function OrdersPageContent() {
                       notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
                     />
                   </Form.Item>
+                  {isWizardCreateFlow ? (
+                    <>
+                      <Form.Item label="Страна">
+                        <Input value={selectedFactoryOption?.subtitle?.split(",")[0] ?? ""} readOnly />
+                      </Form.Item>
+                      <Form.Item label="Индекс">
+                        <Input value={selectedLoadingAddress?.postcode ?? ""} readOnly />
+                      </Form.Item>
+                      <Form.Item label="Город">
+                        <Input value={selectedLoadingAddress?.city ?? ""} readOnly />
+                      </Form.Item>
+                    </>
+                  ) : null}
 
                   {!isClientRole ? (
                     <>
@@ -2147,35 +2333,26 @@ function OrdersPageContent() {
                           loading={factoryEmailsQuery.isLoading}
                           disabled={!createFactoryId}
                           options={factoryEmailOptions}
+                          showSearch
+                          optionFilterProp="label"
                           placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
                         />
                       </Form.Item>
 
                       {canManageFactoryEmails ? (
-                        <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                          <Input
-                            placeholder="Добавить email фабрики"
-                            value={newFactoryEmail}
-                            onChange={(event) => setNewFactoryEmail(event.target.value)}
-                          />
-                          <Button
-                            loading={createFactoryEmailMutation.isPending}
-                            onClick={() => {
-                              if (!createFactoryId) {
-                                message.error("Сначала выберите фабрику");
-                                return;
-                              }
-                              const email = trimOrUndefined(newFactoryEmail);
-                              if (!email) {
-                                message.error("Введите email");
-                                return;
-                              }
-                              createFactoryEmailMutation.mutate({ factoryId: createFactoryId, email });
-                            }}
-                          >
-                            Добавить email
+                        <>
+                          <Button style={{ marginBottom: 12 }} onClick={() => setCreateContactOpen(true)} disabled={!createFactoryId}>
+                            Добавить контакт фабрики
                           </Button>
-                        </Space.Compact>
+                          {selectedFactoryContactMeta ? (
+                            <Card size="small" style={{ marginBottom: 16 }}>
+                              <Typography.Text strong>Контакт фабрики</Typography.Text>
+                              <div style={{ marginTop: 6 }}>Email: {selectedFactoryContactMeta.email}</div>
+                              <div>Имя: {selectedFactoryContactMeta.name || "— (временно не сохраняется)"}</div>
+                              <div>Телефон: {selectedFactoryContactMeta.phone || "— (временно не сохраняется)"}</div>
+                            </Card>
+                          ) : null}
+                        </>
                       ) : null}
                     </>
                   ) : null}
@@ -2345,7 +2522,7 @@ function OrdersPageContent() {
             </Typography.Text>
           )}
 
-          {!isRequestCreate ? (
+          {!isRequestCreate && (!isWizardCreateFlow || createWizardStep === 3) ? (
             <>
               <Form.Item name="additional_description" label="Описание груза">
                 <Input.TextArea rows={3} />
@@ -2365,8 +2542,11 @@ function OrdersPageContent() {
             </>
           )}
 
-          {!isClientRole && !isRequestCreate ? (
+          {!isClientRole && !isRequestCreate && (!isWizardCreateFlow || createWizardStep === 1) ? (
             <>
+              <Form.Item name="forwarder_name" label="Экспедитор (имя, опционально)">
+                <Input placeholder="Например: Ivan Ivanov" />
+              </Form.Item>
               <Form.Item name="self_delivery" valuePropName="checked">
                 <Checkbox>Self-delivery</Checkbox>
               </Form.Item>
@@ -2392,67 +2572,78 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          {!isClientRole && canEditRestrictedCreateFields && !isRequestCreate ? (
+          {!isClientRole &&
+          canEditRestrictedCreateFields &&
+          !isRequestCreate &&
+          (!isWizardCreateFlow || createWizardStep === 2 || createWizardStep === 3) ? (
             <>
-              <Form.Item name="priority_codes" label="Priority codes">
-                <Select mode="multiple" allowClear options={priorityOptions} />
-              </Form.Item>
-              <Form.Item name="office_mark_codes" label="Office mark codes">
-                <Select mode="multiple" allowClear options={officeMarkOptions} />
-              </Form.Item>
-              <Form.Item name="product_characteristic_codes" label="Product characteristic codes">
-                <Select mode="multiple" allowClear options={productCharacteristicOptions} />
-              </Form.Item>
-              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
-                <Select
-                  allowClear
-                  loading={forwardersQuery.isLoading}
-                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                    label: `${user.id} - ${user.full_name || user.login}`,
-                    value: user.id,
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item name="factory_payment_via_label" label="Оплата фабрики через">
-                <Input />
-              </Form.Item>
-              <Form.Item name="is_factory_payment_completed" valuePropName="checked">
-                <Checkbox>Оплата фабрики завершена</Checkbox>
-              </Form.Item>
-              <Form.Item name="is_checked" valuePropName="checked">
-                <Checkbox>Проверено офисом</Checkbox>
-              </Form.Item>
-              <Form.Item name="measurement_status" label="Статус измерений">
-                <Select allowClear options={measurementStatusOptions} />
-              </Form.Item>
-              <Form.Item name="measurement_comment" label="Комментарий измерений">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="weighing_status" label="Статус взвешивания">
-                <Select allowClear options={weighingStatusOptions} />
-              </Form.Item>
-              <Form.Item name="weighing_comment" label="Комментарий взвешивания">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="user_comment" label="Комментарий клиента (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="forwarder_comment" label="Комментарий экспедитора (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
+              {!isWizardCreateFlow || createWizardStep === 2 ? (
+                <>
+                  <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора (опционально)">
+                    <Select
+                      allowClear
+                      loading={forwardersQuery.isLoading}
+                      options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                        label: `${user.id} - ${user.full_name || user.login}`,
+                        value: user.id,
+                      }))}
+                    />
+                  </Form.Item>
+                  <Form.Item name="measurement_status" label="Статус измерений">
+                    <Select allowClear options={measurementStatusOptions} />
+                  </Form.Item>
+                  <Form.Item name="measurement_comment" label="Комментарий измерений">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  <Form.Item name="weighing_status" label="Статус взвешивания">
+                    <Select allowClear options={weighingStatusOptions} />
+                  </Form.Item>
+                  <Form.Item name="weighing_comment" label="Комментарий взвешивания">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                </>
+              ) : null}
+              {!isWizardCreateFlow || createWizardStep === 3 ? (
+                <>
+                  <Form.Item name="priority_codes" label="Priority codes">
+                    <Select mode="multiple" allowClear options={priorityOptions} />
+                  </Form.Item>
+                  <Form.Item name="office_mark_codes" label="Office mark codes">
+                    <Select mode="multiple" allowClear options={officeMarkOptions} />
+                  </Form.Item>
+                  <Form.Item name="product_characteristic_codes" label="Product characteristic codes">
+                    <Select mode="multiple" allowClear options={productCharacteristicOptions} />
+                  </Form.Item>
+                  <Form.Item name="factory_payment_via_label" label="Оплата фабрики через">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="is_factory_payment_completed" valuePropName="checked">
+                    <Checkbox>Оплата фабрики завершена</Checkbox>
+                  </Form.Item>
+                  <Form.Item name="is_checked" valuePropName="checked">
+                    <Checkbox>Проверено офисом</Checkbox>
+                  </Form.Item>
+                  <Form.Item name="user_comment" label="Комментарий клиента (внутр.)">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  <Form.Item name="forwarder_comment" label="Комментарий экспедитора (внутр.)">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                </>
+              ) : null}
             </>
           ) : null}
 
-          {!isRequestCreate ? (
+          {!isRequestCreate && (!isWizardCreateFlow || createWizardStep === 3) ? (
             <>
               <Typography.Title level={5} style={{ marginTop: 8 }}>
                 Строки товара
               </Typography.Title>
               <Form.List name="goods_lines">
-                {(fields, { add, remove }) => (
+                {(fields, { remove }) => (
                   <Space direction="vertical" style={{ width: "100%" }} size={12}>
                     {fields.map((field) => (
                       <Card
@@ -2465,33 +2656,10 @@ function OrdersPageContent() {
                           </Button>
                         }
                       >
-                        <Form.Item name={[field.name, "item_type"]} label="Тип позиции">
-                          <Select
-                            allowClear
-                            options={[
-                              ...itemTypeOptions,
-                              { label: "Other", value: "other" },
-                            ]}
-                          />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "custom_item_type"]} label="Custom тип (если other)">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "description"]} label="Описание">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "weight_kg"]} label="Вес, кг">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_value"]} label="Количество">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_unit"]} label="Ед. изм.">
-                          <Select allowClear options={QUANTITY_UNIT_FALLBACK_OPTIONS} />
-                        </Form.Item>
+                        <Typography.Text>{renderGoodsLineSummary(goodsLinesWatch[field.name] ?? {})}</Typography.Text>
                       </Card>
                     ))}
-                    <Button onClick={() => add()} block>
+                    <Button onClick={() => setCreateGoodsLineOpen(true)} block>
                       Добавить строку товара
                     </Button>
                   </Space>
@@ -2500,57 +2668,61 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          <Typography.Title level={5} style={{ marginTop: 12 }}>
-            Документы (до 10 файлов)
-          </Typography.Title>
-          <Form.List name="documents">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: "100%" }} size={12}>
-                {fields.map((field) => (
-                  <Card
-                    key={field.key}
-                    size="small"
-                    title={`Документ #${field.name + 1}`}
-                    extra={
-                      <Button danger size="small" onClick={() => remove(field.name)}>
-                        Удалить
-                      </Button>
-                    }
-                  >
-                    <Form.Item
-                      name={[field.name, "document_type"]}
-                      label="Тип документа"
-                      rules={[{ required: true, message: "Укажите тип документа" }]}
-                    >
-                      <Select
-                        allowClear
-                        options={documentTypeOptions.length ? documentTypeOptions : [{ label: "attachment", value: "attachment" }]}
-                      />
-                    </Form.Item>
-                    <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя (опционально)">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "file_list"]}
-                      label="Файл"
-                      valuePropName="fileList"
-                      getValueFromEvent={(event) => event?.fileList}
-                      rules={[{ required: true, message: "Выберите файл" }]}
-                    >
-                      <Upload beforeUpload={() => false} maxCount={1}>
-                        <Button>Выбрать файл</Button>
-                      </Upload>
-                    </Form.Item>
-                  </Card>
-                ))}
-                <Button onClick={() => add()} block disabled={fields.length >= 10}>
-                  Добавить документ
-                </Button>
-              </Space>
-            )}
-          </Form.List>
+          {!isWizardCreateFlow || createWizardStep === 4 ? (
+            <>
+              <Typography.Title level={5} style={{ marginTop: 12 }}>
+                Документы (до 10 файлов)
+              </Typography.Title>
+              <Form.List name="documents">
+                {(fields, { add, remove }) => (
+                  <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                    {fields.map((field) => (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        title={`Документ #${field.name + 1}`}
+                        extra={
+                          <Button danger size="small" onClick={() => remove(field.name)}>
+                            Удалить
+                          </Button>
+                        }
+                      >
+                        <Form.Item
+                          name={[field.name, "document_type"]}
+                          label="Тип документа"
+                          rules={[{ required: true, message: "Укажите тип документа" }]}
+                        >
+                          <Select
+                            allowClear
+                            options={documentTypeOptions.length ? documentTypeOptions : [{ label: "attachment", value: "attachment" }]}
+                          />
+                        </Form.Item>
+                        <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя (опционально)">
+                          <Input />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "file_list"]}
+                          label="Файл"
+                          valuePropName="fileList"
+                          getValueFromEvent={(event) => event?.fileList}
+                          rules={[{ required: true, message: "Выберите файл" }]}
+                        >
+                          <Upload beforeUpload={() => false} maxCount={1}>
+                            <Button>Выбрать файл</Button>
+                          </Upload>
+                        </Form.Item>
+                      </Card>
+                    ))}
+                    <Button onClick={() => add()} block disabled={fields.length >= 10}>
+                      Добавить документ
+                    </Button>
+                  </Space>
+                )}
+              </Form.List>
+            </>
+          ) : null}
 
-          {!isRequestCreate ? (
+          {!isRequestCreate && (!isWizardCreateFlow || createWizardStep === 2) ? (
             <>
               <Form.Item name="declared_volume_m3" label="Declared volume (m3)">
                 <Input />
@@ -2567,8 +2739,83 @@ function OrdersPageContent() {
               <Form.Item name="client_goods_value_currency" label="Goods value currency">
                 <Input />
               </Form.Item>
+              <Form.Item label="Price coefficient (readonly)">
+                <Input value={priceCoefficient} readOnly placeholder="auto: amount / volume" />
+              </Form.Item>
+              <Form.Item label="Weight coefficient (readonly)">
+                <Input value={weightCoefficient} readOnly placeholder="auto: volume / total_weight" />
+              </Form.Item>
             </>
           ) : null}
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Добавить контакт фабрики"
+        open={createContactOpen}
+        destroyOnHidden
+        onCancel={() => {
+          setCreateContactOpen(false);
+          createContactForm.resetFields();
+        }}
+        onOk={handleCreateContactSubmit}
+        confirmLoading={createFactoryEmailMutation.isPending}
+      >
+        <Form form={createContactForm} layout="vertical">
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[
+              { required: true, message: "Введите email" },
+              { type: "email", message: "Введите корректный email" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="name" label="Имя (nullable)">
+            <Input placeholder="Временно не сохраняется в backend" />
+          </Form.Item>
+          <Form.Item name="phone" label="Телефон (nullable)">
+            <Input placeholder="Временно не сохраняется в backend" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Добавить строку товара"
+        open={createGoodsLineOpen}
+        destroyOnHidden
+        onCancel={() => {
+          setCreateGoodsLineOpen(false);
+          createGoodsLineForm.resetFields();
+        }}
+        onOk={handleCreateGoodsLineSubmit}
+      >
+        <Form form={createGoodsLineForm} layout="vertical">
+          <Form.Item name="item_type" label="Тип товара" rules={[{ required: true, message: "Выберите тип" }]}>
+            <Select
+              allowClear
+              options={[
+                ...itemTypeOptions,
+                { label: "Other", value: "other" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="custom_item_type" label="Свой тип (если Other)">
+            <Input />
+          </Form.Item>
+          <Form.Item name="weight_kg" label="Вес, кг">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_value" label="Кол-во">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_unit" label="Ед. изм.">
+            <Select allowClear options={QUANTITY_UNIT_FALLBACK_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="description" label="Описание">
+            <Input.TextArea rows={3} />
+          </Form.Item>
         </Form>
       </Modal>
 

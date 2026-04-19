@@ -286,6 +286,8 @@ export type OrderWritePayload = {
   actual_weight_kg?: string;
   order_date?: string;
   ready_date?: string;
+  pickup_date_from?: string;
+  pickup_date_to?: string;
   status_date?: string;
   status_name?: OrderStatus;
   forwarder_name?: string;

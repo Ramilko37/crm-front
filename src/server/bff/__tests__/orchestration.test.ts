@@ -36,6 +36,34 @@ describe("orchestration payload builders", () => {
     });
   });
 
+  it("maps pickup range and forwarder name fields", () => {
+    const payload = buildInternalOrderMultipartPayload({
+      company_id: 10,
+      ready_date: "2026-04-01",
+      pickup_date_from: "2026-04-10",
+      pickup_date_to: "2026-04-15",
+      forwarder_name: "Ivan Ivanov",
+      factory_id: 7,
+      loading_address_id: 3,
+    });
+
+    expect(payload).toEqual({
+      order: {
+        company_id: 10,
+        ready_date: "2026-04-01",
+        pickup_date_from: "2026-04-10",
+        pickup_date_to: "2026-04-15",
+        forwarder_name: "Ivan Ivanov",
+      },
+      factory_selection: {
+        factory_id: 7,
+        loading_address_id: 3,
+      },
+      goods_lines: [],
+      documents: [],
+    });
+  });
+
   it("builds client order payload without internal fields", () => {
     const payload = buildClientOrderMultipartPayload({
       order_number: "C-200",
