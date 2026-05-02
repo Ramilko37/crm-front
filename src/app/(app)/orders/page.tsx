@@ -58,8 +58,9 @@ import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
   ClientOrderCreateMetadata,
+  Postcode,
+  PostcodeCity,
   DictionaryOption,
-  FactoryEmail,
   ClientFactoryDetail,
   ClientFactoryListItem,
   Factory,
@@ -77,7 +78,13 @@ import type {
 } from "@/shared/types/entities";
 
 type CreateMode = "existing" | "create";
-type FactoryContactMode = "existing" | "create";
+type FactoryContactOption = {
+  id: number;
+  full_name: string;
+  phone: string;
+  email: string | null;
+  is_primary?: boolean;
+};
 
 type OrderCreateGoodsLineForm = {
   item_type?: string;
@@ -107,7 +114,6 @@ type OrderCreateForm = {
   factory_id?: number;
   loading_address_id?: number;
   email_id?: number;
-  factory_contact_mode?: FactoryContactMode;
   factory_contact_id?: number;
   create_factory_contact?: {
     full_name?: string;
@@ -169,9 +175,10 @@ type OrderCreateForm = {
   certificate_intent?: boolean;
   new_factory_email_contact_name?: string;
   new_factory_email_contact_phone?: string;
-  client_factory_email_ui?: string;
   client_measurement_ui?: string;
   client_weighing_ui?: string;
+  loading_postcode_id_ui?: number;
+  loading_city_id_ui?: number;
 };
 
 type OrderEditForm = {
@@ -374,7 +381,6 @@ function OrdersPageContent() {
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
   const canEditRestrictedCreateFields =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
-  const canManageFactoryEmails = canEditRestrictedCreateFields;
   const canInlineCreatePostcodeCity = canEditRestrictedCreateFields && !isClientRole;
   const canUseMessengerFields = canEditRestrictedCreateFields && !isClientRole;
 
@@ -398,7 +404,9 @@ function OrdersPageContent() {
   const [selected, setSelected] = useState<OrderListItem | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
-  const [newFactoryEmail, setNewFactoryEmail] = useState("");
+  const [factoryContactModalOpen, setFactoryContactModalOpen] = useState(false);
+  const [postcodeQuery, setPostcodeQuery] = useState("");
+  const [postcodeQueryDebounced, setPostcodeQueryDebounced] = useState("");
 
   const [createForm] = Form.useForm<OrderCreateForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
@@ -449,11 +457,9 @@ function OrdersPageContent() {
     special_tariff_currency_other_label?: string;
   }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
-  const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
+  const [factoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
-  const createFactoryContactMode =
-    (Form.useWatch("factory_contact_mode", createForm) as FactoryContactMode | undefined) ?? "create";
   const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
   const createOrderType = Form.useWatch("order_type", createForm);
   const createSelfDelivery = Boolean(Form.useWatch("self_delivery", createForm));
@@ -463,6 +469,7 @@ function OrdersPageContent() {
   const createCompanyId = Form.useWatch("company_id", createForm);
   const createFactoryCountryId = Form.useWatch("factory_country_id", createForm) as number | undefined;
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
+  const createFactoryContactId = Form.useWatch("factory_contact_id", createForm) as number | undefined;
   const isRequestCreate = createOrderType === "request";
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
@@ -645,10 +652,10 @@ function OrdersPageContent() {
     enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
   });
 
-  const factoryEmailsQuery = useQuery({
-    queryKey: ["orders", "create-factory-emails", createFactoryId],
+  const factoryContactsQuery = useQuery({
+    queryKey: ["orders", "create-factory-contacts", createFactoryId],
     queryFn: () =>
-      apiRequest<PaginatedResponse<FactoryEmail>>(`/api/factories/${createFactoryId}/emails`, {
+      apiRequest<PaginatedResponse<FactoryContactOption>>(`/api/factories/${createFactoryId}/contacts`, {
         query: { page: 1, page_size: 200 },
       }),
     enabled: createOpen && !isClientRole && canCreate && createFactoryMode === "existing" && Boolean(createFactoryId),
@@ -691,6 +698,44 @@ function OrdersPageContent() {
   });
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPostcodeQueryDebounced(postcodeQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [postcodeQuery]);
+
+  const postcodeOptionsQuery = useQuery({
+    queryKey: ["orders", "create-postcodes", isClientRole, createFactoryCountryId, postcodeQueryDebounced],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Postcode>>(isClientRole ? "/api/client/postcodes" : "/api/postcodes", {
+        query: {
+          page: 1,
+          page_size: 200,
+          country_id: createFactoryCountryId,
+          query: postcodeQueryDebounced || undefined,
+        },
+      }),
+    enabled: createOpen && canCreate && Boolean(createFactoryCountryId),
+  });
+
+  const createLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", createForm) as number | undefined;
+  const createLoadingCityIdUi = Form.useWatch("loading_city_id_ui", createForm) as number | undefined;
+
+  const postcodeCitiesQuery = useQuery({
+    queryKey: ["orders", "create-postcode-cities", isClientRole, createLoadingPostcodeIdUi],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(
+        isClientRole
+          ? `/api/client/postcodes/${createLoadingPostcodeIdUi}/cities`
+          : `/api/postcodes/${createLoadingPostcodeIdUi}/cities`,
+        {
+          query: { page: 1, page_size: 200 },
+        },
+      ),
+    enabled: createOpen && canCreate && Boolean(createLoadingPostcodeIdUi),
+  });
+
+  useEffect(() => {
     if (!createOpen || !createFactoryId || createFactoryMode !== "existing") {
       return;
     }
@@ -715,7 +760,7 @@ function OrdersPageContent() {
     if (createFactoryMode === "create") {
       createForm.setFieldValue("factory_id", undefined);
       createForm.setFieldValue("loading_address_id", undefined);
-      createForm.setFieldValue("email_id", undefined);
+      createForm.setFieldValue("factory_contact_id", undefined);
       return;
     }
     createForm.setFieldValue(["create_factory"], undefined);
@@ -728,21 +773,41 @@ function OrdersPageContent() {
     if (createFactoryMode === "existing") {
       createForm.setFieldValue("factory_id", undefined);
       createForm.setFieldValue("loading_address_id", undefined);
-      createForm.setFieldValue("email_id", undefined);
+      createForm.setFieldValue("factory_contact_id", undefined);
       return;
     }
     createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
     createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+    createForm.setFieldValue("loading_postcode_id_ui", undefined);
+    createForm.setFieldValue("loading_city_id_ui", undefined);
   }, [createFactoryCountryId, createFactoryMode, createForm, createOpen]);
 
   useEffect(() => {
     if (!createOpen) return;
-    if (createFactoryContactMode === "existing") {
-      createForm.setFieldValue(["create_factory_contact"], undefined);
+    if (!createLoadingPostcodeIdUi) {
+      createForm.setFieldValue("loading_city_id_ui", undefined);
+      if (createFactoryMode === "create") {
+        createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+      }
       return;
     }
-    createForm.setFieldValue("factory_contact_id", undefined);
-  }, [createFactoryContactMode, createForm, createOpen]);
+
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], createLoadingPostcodeIdUi);
+    }
+  }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen || !createLoadingPostcodeIdUi) return;
+    const cities = postcodeCitiesQuery.data?.items ?? [];
+    if (cities.length !== 1) return;
+    const onlyCityId = cities[0]?.id;
+    if (!onlyCityId) return;
+    createForm.setFieldValue("loading_city_id_ui", onlyCityId);
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], onlyCityId);
+    }
+  }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen, postcodeCitiesQuery.data?.items]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -753,11 +818,17 @@ function OrdersPageContent() {
 
   useEffect(() => {
     if (!createOpen) return;
+    const assignedForwarder = createForm.getFieldValue("assigned_forwarder_user_id");
+    const selfDeliveryForwarder = createForm.getFieldValue("self_delivery_forwarder_user_id");
     if (createSelfDelivery) {
-      createForm.setFieldValue("assigned_forwarder_user_id", undefined);
+      if (!selfDeliveryForwarder && assignedForwarder) {
+        createForm.setFieldValue("self_delivery_forwarder_user_id", assignedForwarder);
+      }
       return;
     }
-    createForm.setFieldValue("self_delivery_forwarder_user_id", undefined);
+    if (!assignedForwarder && selfDeliveryForwarder) {
+      createForm.setFieldValue("assigned_forwarder_user_id", selfDeliveryForwarder);
+    }
   }, [createForm, createOpen, createSelfDelivery]);
 
   function invalidateOrdersQueries(orderId?: number) {
@@ -767,23 +838,31 @@ function OrdersPageContent() {
     ]);
   }
 
-  const createFactoryEmailMutation = useMutation({
-    mutationFn: (payload: { factoryId: number; email: string }) =>
-      apiRequest<FactoryEmail>(`/api/factories/${payload.factoryId}/emails`, {
+  const createFactoryContactMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; full_name: string; phone: string; email: string }) =>
+      apiRequest<FactoryContactOption>(`/api/factories/${payload.factoryId}/contacts`, {
         method: "POST",
-        body: { email: payload.email },
+        body: {
+          full_name: payload.full_name,
+          phone: payload.phone,
+          email: payload.email,
+          is_primary: false,
+        },
       }),
     onSuccess: async (result) => {
-      message.success("Email фабрики добавлен");
-      setNewFactoryEmail("");
-      createFactoryEmailForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-emails", createFactoryId] });
+      message.success("Контакт фабрики добавлен");
+      setFactoryContactModalOpen(false);
+      factoryContactQuickForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createFactoryId] });
       if (result?.id) {
-        createForm.setFieldValue("email_id", result.id);
+        createForm.setFieldValue("factory_contact_id", result.id);
+        createForm.setFieldValue(["create_factory_contact", "full_name"], result.full_name);
+        createForm.setFieldValue(["create_factory_contact", "phone"], result.phone);
+        createForm.setFieldValue(["create_factory_contact", "email"], result.email ?? undefined);
       }
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления email");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления контакта");
     },
   });
 
@@ -803,8 +882,8 @@ function OrdersPageContent() {
       mark("company_contact_id", "Выберите контакт компании");
     }
 
-    if (text.includes("email_id")) {
-      mark("email_id", "Выберите email фабрики");
+    if (text.includes("email_id") || text.includes("factory_contact_id")) {
+      mark("factory_contact_id", "Выберите email контакта фабрики");
     }
 
     if (text.includes("self_delivery_forwarder_user_id")) {
@@ -817,12 +896,9 @@ function OrdersPageContent() {
     }
 
     if (
-      text.includes("factory_contact_id") ||
-      text.includes("create_factory_contact") ||
-      text.includes("xor") ||
-      text.includes("contact mode")
+      text.includes("factory_contact_id") || text.includes("create_factory_contact") || text.includes("xor")
     ) {
-      mark("factory_contact_mode", "Выберите режим контакта фабрики и заполните один вариант");
+      mark("factory_contact_id", "Выберите контакт фабрики");
     }
 
     if (text.includes("primary_email")) {
@@ -889,9 +965,12 @@ function OrdersPageContent() {
   function closeAndResetCreateModal() {
     setCreateOpen(false);
     setCreateStep(0);
+    setFactoryContactModalOpen(false);
     createForm.resetFields();
+    factoryContactQuickForm.resetFields();
     setClientCompaniesQueryText("");
-    setNewFactoryEmail("");
+    setPostcodeQuery("");
+    setPostcodeQueryDebounced("");
   }
 
   function openCreateModal() {
@@ -922,23 +1001,12 @@ function OrdersPageContent() {
         "pickup_date_to",
         "factory_mode",
         "factory_country_id",
-        "factory_contact_mode",
+        "factory_contact_id",
       ];
 
-      if (values.factory_contact_mode === "create") {
-        names.push(
-          ["create_factory_contact", "full_name"],
-          ["create_factory_contact", "phone"],
-          ["create_factory_contact", "email"],
-        );
-      } else {
-        names.push("factory_contact_id");
-      }
-
+      names.push("assigned_forwarder_user_id");
       if (values.self_delivery) {
         names.push("self_delivery_forwarder_user_id");
-      } else {
-        names.push("assigned_forwarder_user_id");
       }
 
       if (values.factory_mode === "create") {
@@ -955,7 +1023,7 @@ function OrdersPageContent() {
           ["create_factory", "loading_address", "messenger_value"],
         );
       } else {
-        names.push("factory_id", "loading_address_id", "email_id");
+        names.push("factory_id", "loading_address_id");
       }
 
       return names;
@@ -1096,7 +1164,7 @@ function OrdersPageContent() {
         throw new Error("Для инвойса на другую компанию заполните название компании");
       }
 
-      if (!isClientRole && values.self_delivery && !values.self_delivery_forwarder_user_id) {
+      if (!isClientRole && values.self_delivery && !values.assigned_forwarder_user_id && !values.self_delivery_forwarder_user_id) {
         throw new Error("Для self-delivery выберите экспедитора");
       }
 
@@ -1160,23 +1228,8 @@ function OrdersPageContent() {
           loading_address_id: values.loading_address_id,
         };
       } else {
-        const createFactoryContact = values.create_factory_contact;
-        const createFactoryContactPayload = {
-          full_name: trimOrUndefined(createFactoryContact?.full_name),
-          phone: trimOrUndefined(createFactoryContact?.phone),
-          email: trimOrUndefined(createFactoryContact?.email),
-        };
-
-        if (values.factory_contact_mode === "existing") {
-          if (!values.factory_contact_id) {
-            throw new Error("Выберите контакт фабрики");
-          }
-        } else if (values.factory_contact_mode === "create") {
-          if (!createFactoryContactPayload.full_name || !createFactoryContactPayload.phone) {
-            throw new Error("Для нового контакта фабрики заполните имя и телефон");
-          }
-        } else {
-          throw new Error("Выберите режим контакта фабрики");
+        if (!values.factory_contact_id) {
+          throw new Error("Выберите контакт фабрики");
         }
 
         if (values.factory_mode === "create") {
@@ -1208,35 +1261,18 @@ function OrdersPageContent() {
             factory_mode: "create",
             country_id: values.factory_country_id,
             create_factory: createFactoryPayload,
-            factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
-            create_factory_contact:
-              values.factory_contact_mode === "create"
-                ? {
-                    full_name: createFactoryContactPayload.full_name,
-                    phone: createFactoryContactPayload.phone,
-                    email: createFactoryContactPayload.email ?? undefined,
-                  }
-                : undefined,
+            factory_contact_id: values.factory_contact_id,
           };
         } else {
-          if (!values.factory_country_id || !values.factory_id || !values.loading_address_id || !values.email_id) {
-            throw new Error("Выберите фабрику, адрес загрузки и email фабрики");
+          if (!values.factory_country_id || !values.factory_id || !values.loading_address_id) {
+            throw new Error("Выберите фабрику и адрес загрузки");
           }
           factorySelection = {
             factory_mode: "existing",
             country_id: values.factory_country_id,
             factory_id: values.factory_id,
             loading_address_id: values.loading_address_id,
-            email_id: values.email_id,
-            factory_contact_id: values.factory_contact_mode === "existing" ? values.factory_contact_id : undefined,
-            create_factory_contact:
-              values.factory_contact_mode === "create"
-                ? {
-                    full_name: createFactoryContactPayload.full_name,
-                    phone: createFactoryContactPayload.phone,
-                    email: createFactoryContactPayload.email ?? undefined,
-                  }
-                : undefined,
+            factory_contact_id: values.factory_contact_id,
           };
         }
       }
@@ -1276,6 +1312,9 @@ function OrdersPageContent() {
       };
 
       if (!isClientRole) {
+        const resolvedSelfDeliveryForwarderId = values.self_delivery
+          ? values.assigned_forwarder_user_id ?? values.self_delivery_forwarder_user_id
+          : undefined;
         const assignedForwarderUserId = canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined;
         Object.assign(orderPayload, {
           company_id: values.company_id,
@@ -1284,7 +1323,7 @@ function OrdersPageContent() {
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
           self_delivery: Boolean(values.self_delivery),
-          self_delivery_forwarder_user_id: values.self_delivery_forwarder_user_id,
+          self_delivery_forwarder_user_id: resolvedSelfDeliveryForwarderId,
           is_1c: values.is_1c,
           measurement_payload: values.measurement_status
             ? {
@@ -2130,6 +2169,65 @@ function OrdersPageContent() {
     () => (loadingAddressesQuery.data ?? []).find((address) => address.id === createLoadingAddressId),
     [createLoadingAddressId, loadingAddressesQuery.data],
   );
+  const selectedFactoryContact = useMemo(
+    () => (factoryContactsQuery.data?.items ?? []).find((contact) => contact.id === createFactoryContactId),
+    [createFactoryContactId, factoryContactsQuery.data?.items],
+  );
+  const postcodeOptions = useMemo(
+    () =>
+      (postcodeOptionsQuery.data?.items ?? []).map((postcode) => ({
+        label: postcode.postcode,
+        value: postcode.id,
+      })),
+    [postcodeOptionsQuery.data?.items],
+  );
+  const cityOptions = useMemo(
+    () =>
+      (postcodeCitiesQuery.data?.items ?? []).map((city) => ({
+        label: city.city,
+        value: city.id,
+      })),
+    [postcodeCitiesQuery.data?.items],
+  );
+  const filteredLoadingAddresses = useMemo(() => {
+    const all = loadingAddressesQuery.data ?? [];
+    if (!createLoadingPostcodeIdUi && !createLoadingCityIdUi) return all;
+    return all.filter((address) => {
+      if (createLoadingPostcodeIdUi && address.postcode_id !== createLoadingPostcodeIdUi) return false;
+      if (createLoadingCityIdUi && address.city_id !== createLoadingCityIdUi) return false;
+      return true;
+    });
+  }, [createLoadingCityIdUi, createLoadingPostcodeIdUi, loadingAddressesQuery.data]);
+  const postcodeAddressMismatch =
+    createFactoryMode === "existing" &&
+    Boolean(createLoadingPostcodeIdUi) &&
+    Boolean(createFactoryId) &&
+    filteredLoadingAddresses.length === 0;
+
+  useEffect(() => {
+    if (!createOpen || createFactoryMode !== "existing") return;
+    if (!createLoadingAddressId) return;
+    const stillVisible = filteredLoadingAddresses.some((address) => address.id === createLoadingAddressId);
+    if (!stillVisible) {
+      createForm.setFieldValue("loading_address_id", undefined);
+    }
+  }, [
+    createFactoryMode,
+    createForm,
+    createLoadingAddressId,
+    createOpen,
+    filteredLoadingAddresses,
+  ]);
+
+  useEffect(() => {
+    if (!createOpen || !selectedLoadingAddress) return;
+    createForm.setFieldValue("loading_postcode_id_ui", selectedLoadingAddress.postcode_id ?? undefined);
+    createForm.setFieldValue("loading_city_id_ui", selectedLoadingAddress.city_id ?? undefined);
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], selectedLoadingAddress.postcode_id ?? undefined);
+      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], selectedLoadingAddress.city_id ?? undefined);
+    }
+  }, [createFactoryMode, createForm, createOpen, selectedLoadingAddress]);
   const priceCoefficient = formatRatio(createClientGoodsValueAmount, createDeclaredVolumeM3);
   const weightCoefficient = formatRatio(createDeclaredVolumeM3, createDeclaredTotalWeightKg);
   const countryOptions = (countriesQuery.data?.items ?? []).map((country) => ({
@@ -2151,10 +2249,25 @@ function OrdersPageContent() {
             value: -1,
           },
         ];
-  const factoryEmailOptions = (factoryEmailsQuery.data?.items ?? []).map((item) => ({
-    label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
-    value: item.id,
-  }));
+  const factoryContactEmailOptions = (factoryContactsQuery.data?.items ?? [])
+    .filter((item) => Boolean(item.email))
+    .map((item) => ({
+      label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
+      value: item.id,
+    }));
+
+  useEffect(() => {
+    if (!createOpen || isClientRole) return;
+    if (!selectedFactoryContact) {
+      createForm.setFieldValue(["create_factory_contact", "full_name"], undefined);
+      createForm.setFieldValue(["create_factory_contact", "phone"], undefined);
+      createForm.setFieldValue(["create_factory_contact", "email"], undefined);
+      return;
+    }
+    createForm.setFieldValue(["create_factory_contact", "full_name"], selectedFactoryContact.full_name);
+    createForm.setFieldValue(["create_factory_contact", "phone"], selectedFactoryContact.phone);
+    createForm.setFieldValue(["create_factory_contact", "email"], selectedFactoryContact.email ?? undefined);
+  }, [createForm, createOpen, isClientRole, selectedFactoryContact]);
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
@@ -2628,7 +2741,7 @@ function OrdersPageContent() {
             )}
           </div>
         }
-        width={1080}
+        width={createStep === 0 ? "min(520px, calc(100vw - 32px))" : 1080}
       >
         <div className="crm-create-wizard-head">
           <Typography.Text className="crm-create-wizard-step-counter">
@@ -2651,7 +2764,6 @@ function OrdersPageContent() {
           initialValues={{
             order_type: "delivery",
             factory_mode: "existing",
-            factory_contact_mode: "create",
             client_goods_value_currency: "EUR",
             documents: [],
             goods_lines: [],
@@ -2666,9 +2778,6 @@ function OrdersPageContent() {
         >
           {createStep === 0 ? (
             <div className="crm-order-create-section">
-              <Typography.Title level={5} className="crm-order-create-section-title">
-                Новый заказ
-              </Typography.Title>
               <div className="crm-order-create-grid">
                 {!isClientRole ? (
                   <Form.Item
@@ -2787,8 +2896,8 @@ function OrdersPageContent() {
                   {createSelfDelivery ? (
                     <Form.Item
                       name="self_delivery_forwarder_user_id"
-                      label="Назначить экспедитора"
-                      rules={!isClientRole ? [{ required: true, message: "Выберите экспедитора" }] : undefined}
+                      label="Экспедитор самодоставки"
+                      rules={!isClientRole ? [{ required: true, message: "Выберите экспедитора самодоставки" }] : undefined}
                       className="crm-order-create-col"
                       extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
                     >
@@ -2803,36 +2912,35 @@ function OrdersPageContent() {
                               ? undefined
                               : "Нет экспедиторов в metadata"
                         }
+                        onChange={(value) => {
+                          createForm.setFieldValue("assigned_forwarder_user_id", value ?? undefined);
+                        }}
                       />
                     </Form.Item>
-                  ) : (
-                    <Form.Item
-                      name="assigned_forwarder_user_id"
-                      label="Назначить экспедитора"
-                      className="crm-order-create-col"
-                      extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
-                    >
-                      <Select
-                        allowClear
-                        loading={!isClientRole && forwardersQuery.isLoading}
-                        options={
-                          isClientRole
-                            ? clientForwarderUiOptions
-                            : (forwardersQuery.data?.items ?? []).map((user) => ({
-                                label: `${user.id} - ${user.full_name || user.login}`,
-                                value: user.id,
-                              }))
-                        }
-                        placeholder={isClientRole ? "UI-only поле" : undefined}
-                      />
-                    </Form.Item>
-                  )}
+                  ) : null}
 
-                  <Form.Item name="factory_mode" hidden initialValue="existing">
-                    <Input />
+                  <Form.Item
+                    name="assigned_forwarder_user_id"
+                    label="Назначить экспедитора"
+                    className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
+                  >
+                    <Select
+                      allowClear
+                      loading={!isClientRole && forwardersQuery.isLoading}
+                      options={
+                        isClientRole
+                          ? clientForwarderUiOptions
+                          : (forwardersQuery.data?.items ?? []).map((user) => ({
+                              label: `${user.id} - ${user.full_name || user.login}`,
+                              value: user.id,
+                            }))
+                      }
+                      placeholder={isClientRole ? "UI-only поле" : undefined}
+                    />
                   </Form.Item>
 
-                  <Form.Item name="factory_contact_mode" hidden initialValue="create">
+                  <Form.Item name="factory_mode" hidden initialValue="existing">
                     <Input />
                   </Form.Item>
 
@@ -2850,7 +2958,11 @@ function OrdersPageContent() {
                       onChange={() => {
                         createForm.setFieldValue("factory_id", undefined);
                         createForm.setFieldValue("loading_address_id", undefined);
-                        createForm.setFieldValue("email_id", undefined);
+                        createForm.setFieldValue("factory_contact_id", undefined);
+                        createForm.setFieldValue("loading_postcode_id_ui", undefined);
+                        createForm.setFieldValue("loading_city_id_ui", undefined);
+                        setPostcodeQuery("");
+                        setPostcodeQueryDebounced("");
                       }}
                     />
                   </Form.Item>
@@ -2867,7 +2979,7 @@ function OrdersPageContent() {
                       }))}
                       onChange={() => {
                         createForm.setFieldValue("loading_address_id", undefined);
-                        createForm.setFieldValue("email_id", undefined);
+                        createForm.setFieldValue("factory_contact_id", undefined);
                       }}
                       notFoundContent={createFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
                     />
@@ -2882,7 +2994,7 @@ function OrdersPageContent() {
                     <Select
                       loading={loadingAddressesQuery.isLoading}
                       disabled={!createFactoryId}
-                      options={(loadingAddressesQuery.data ?? []).map((address) => ({
+                      options={filteredLoadingAddresses.map((address) => ({
                         label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
                         value: address.id,
                       }))}
@@ -2890,156 +3002,117 @@ function OrdersPageContent() {
                     />
                   </Form.Item>
 
-                  <Form.Item label="Индекс" className="crm-order-create-col">
-                    <Input readOnly value={selectedLoadingAddress?.postcode ?? ""} placeholder="Заполняется по адресу" />
-                  </Form.Item>
-
-                  <Form.Item label="Город" className="crm-order-create-col">
-                    <Input readOnly value={selectedLoadingAddress?.city ?? ""} placeholder="Заполняется по адресу" />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory_contact", "full_name"]}
-                    label={isClientRole ? "Контакты" : "Контакты: Имя"}
-                    rules={!isClientRole ? [{ required: true, message: "Укажите имя контакта фабрики" }] : undefined}
-                    className="crm-order-create-col"
-                    extra={isClientRole ? "UI-only до backend parity" : undefined}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory_contact", "phone"]}
-                    label={isClientRole ? "Контакт" : "Контакты: Телефон"}
-                    rules={
-                      !isClientRole
-                        ? [
-                            { required: true, message: "Укажите телефон контакта фабрики" },
-                            { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
-                          ]
-                        : undefined
-                    }
-                    className="crm-order-create-col"
-                    extra={isClientRole ? "UI-only до backend parity" : undefined}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  {!isClientRole ? (
-                    <Form.Item
-                      name={["create_factory_contact", "email"]}
-                      label="Контакты: Email"
-                      rules={[{ type: "email", message: "Введите корректный email" }]}
-                      className="crm-order-create-col"
-                    >
-                      <Input />
-                    </Form.Item>
+                  {postcodeAddressMismatch ? (
+                    <Typography.Text type="warning" className="crm-order-create-col">
+                      Для выбранного индекса нет адресов погрузки у этой фабрики
+                    </Typography.Text>
                   ) : null}
 
-                  {!isClientRole ? (
-                    <Form.Item
-                      name="email_id"
-                      label="Email"
-                      rules={[{ required: true, message: "Выберите email фабрики" }]}
-                      className="crm-order-create-col"
-                    >
-                      <Select
-                        allowClear
-                        loading={factoryEmailsQuery.isLoading}
-                        disabled={!createFactoryId}
-                        options={factoryEmailOptions}
-                        placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
-                      />
-                    </Form.Item>
-                  ) : (
-                    <Form.Item
-                      name="client_factory_email_ui"
-                      label="Email"
-                      className="crm-order-create-col"
-                      extra="UI-only до backend parity"
-                    >
-                      <Input />
-                    </Form.Item>
-                  )}
+                  <Form.Item name="loading_postcode_id_ui" label="Индекс" className="crm-order-create-col">
+                    <Select
+                      showSearch
+                      filterOption={false}
+                      allowClear
+                      disabled={!createFactoryCountryId}
+                      loading={postcodeOptionsQuery.isLoading}
+                      options={postcodeOptions}
+                      onSearch={(value) => setPostcodeQuery(value)}
+                      onChange={(value) => {
+                        createForm.setFieldValue("loading_city_id_ui", undefined);
+                        if (createFactoryMode === "create") {
+                          createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], value ?? undefined);
+                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                        }
+                      }}
+                      placeholder={createFactoryCountryId ? "Начните вводить индекс" : "Сначала выберите страну"}
+                      notFoundContent={createFactoryCountryId ? "Индексы не найдены" : "Сначала выберите страну"}
+                    />
+                  </Form.Item>
 
-                  {!isClientRole && canManageFactoryEmails ? (
-                    <Form.Item label="Добавить Email" className="crm-order-create-col">
-                      <Space.Compact style={{ width: "100%" }}>
-                        <Input
-                          placeholder="Новый email"
-                          value={newFactoryEmail}
-                          onChange={(event) => setNewFactoryEmail(event.target.value)}
-                        />
-                        <Button
-                          loading={createFactoryEmailMutation.isPending}
-                          onClick={() => {
-                            if (!createFactoryId) {
-                              message.error("Сначала выберите фабрику");
-                              return;
-                            }
-                            const email = trimOrUndefined(newFactoryEmail);
-                            if (!email) {
-                              message.error("Введите email");
-                              return;
-                            }
-                            createFactoryEmailMutation.mutate({ factoryId: createFactoryId, email });
-                          }}
-                        >
-                          Добавить
-                        </Button>
-                      </Space.Compact>
-                    </Form.Item>
-                  ) : null}
+                  <Form.Item name="loading_city_id_ui" label="Город" className="crm-order-create-col">
+                    <Select
+                      allowClear
+                      disabled={!createLoadingPostcodeIdUi}
+                      loading={postcodeCitiesQuery.isLoading}
+                      options={cityOptions}
+                      onChange={(value) => {
+                        if (createFactoryMode === "create") {
+                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], value ?? undefined);
+                        }
+                      }}
+                      placeholder={createLoadingPostcodeIdUi ? "Выберите город" : "Сначала выберите индекс"}
+                      notFoundContent={createLoadingPostcodeIdUi ? "Нет городов для индекса" : "Сначала выберите индекс"}
+                    />
+                  </Form.Item>
 
-                  {isClientRole ? (
-                    <Form.Item label="Создать" className="crm-order-create-col" extra="UI-only до backend parity">
+                  <div className="crm-order-create-col crm-order-create-contact-block">
+                    <div className="crm-order-create-contact-head">
+                      <Typography.Text strong>Контакты</Typography.Text>
                       <Button
                         onClick={() => {
-                          message.info("Поле 'создать' пока доступно только как UI-only");
+                          factoryContactQuickForm.resetFields();
+                          setFactoryContactModalOpen(true);
                         }}
                       >
-                        создать
+                        Добавить
                       </Button>
-                    </Form.Item>
-                  ) : null}
+                    </div>
 
-                  {isClientRole || canManageFactoryEmails ? (
+                    {!isClientRole ? (
+                      <Form.Item
+                        name="factory_contact_id"
+                        label="Email"
+                        rules={[{ required: true, message: "Выберите email контакта фабрики" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Select
+                          showSearch
+                          optionFilterProp="label"
+                          allowClear
+                          loading={factoryContactsQuery.isLoading}
+                          disabled={!createFactoryId}
+                          options={factoryContactEmailOptions}
+                          placeholder={createFactoryId ? "Выберите email контакта" : "Сначала выберите фабрику"}
+                        />
+                      </Form.Item>
+                    ) : (
+                      <Form.Item
+                        name={["create_factory_contact", "email"]}
+                        label="Email"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
+                        <Input />
+                      </Form.Item>
+                    )}
+
                     <Form.Item
-                      name="new_factory_email_contact_name"
-                      label={isClientRole ? "Имя" : "Имя (UI-only)"}
+                      name={["create_factory_contact", "full_name"]}
+                      label="Имя"
+                      rules={!isClientRole ? [{ required: true, message: "Укажите имя контакта фабрики" }] : undefined}
                       className="crm-order-create-col"
                       extra={isClientRole ? "UI-only до backend parity" : undefined}
                     >
-                      <Input placeholder={isClientRole ? "Имя" : "Имя для будущего backend-поля"} />
+                      <Input readOnly={!isClientRole} />
                     </Form.Item>
-                  ) : null}
 
-                  {isClientRole || canManageFactoryEmails ? (
                     <Form.Item
-                      name="new_factory_email_contact_phone"
-                      label={isClientRole ? "Телефон" : "Телефон (UI-only)"}
+                      name={["create_factory_contact", "phone"]}
+                      label="Телефон"
+                      rules={
+                        !isClientRole
+                          ? [
+                              { required: true, message: "Укажите телефон контакта фабрики" },
+                              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                            ]
+                          : undefined
+                      }
                       className="crm-order-create-col"
                       extra={isClientRole ? "UI-only до backend parity" : undefined}
                     >
-                      <Input placeholder={isClientRole ? "Телефон" : "Телефон для будущего backend-поля"} />
+                      <Input readOnly={!isClientRole} />
                     </Form.Item>
-                  ) : null}
-
-                  <Form.Item label="Контакт" className="crm-order-create-col">
-                    <Input
-                      readOnly
-                      value={selectedLoadingAddress?.contact_name ?? ""}
-                      placeholder="Будет заполнено автоматически"
-                    />
-                  </Form.Item>
-
-                  <Form.Item label="Телефон" className="crm-order-create-col">
-                    <Input
-                      readOnly
-                      value={selectedLoadingAddress?.phone ?? ""}
-                      placeholder="Будет заполнено автоматически"
-                    />
-                  </Form.Item>
+                  </div>
 
                   <Form.Item
                     name="ready_date"
@@ -3056,28 +3129,30 @@ function OrdersPageContent() {
                     />
                   </Form.Item>
 
-                  <Form.Item name="pickup_date_from" label="Вывоз: От" className="crm-order-create-col">
-                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
-                  </Form.Item>
-
-                  <Form.Item
-                    name="pickup_date_to"
-                    label="Вывоз: До"
-                    dependencies={["pickup_date_from"]}
-                    rules={[
-                      ({ getFieldValue }) => ({
-                        validator(_, value: dayjs.Dayjs | undefined) {
-                          const from = getFieldValue("pickup_date_from") as dayjs.Dayjs | undefined;
-                          if (!from || !value || !from.isAfter(value, "day")) {
-                            return Promise.resolve();
-                          }
-                          return Promise.reject(new Error("Дата 'До' должна быть не раньше даты 'От'"));
-                        },
-                      }),
-                    ]}
-                    className="crm-order-create-col"
-                  >
-                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+                  <Form.Item label="Вывоз" className="crm-order-create-col">
+                    <Space.Compact style={{ width: "100%" }}>
+                      <Form.Item name="pickup_date_from" noStyle>
+                        <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="От" />
+                      </Form.Item>
+                      <Form.Item
+                        name="pickup_date_to"
+                        noStyle
+                        dependencies={["pickup_date_from"]}
+                        rules={[
+                          ({ getFieldValue }) => ({
+                            validator(_, value: dayjs.Dayjs | undefined) {
+                              const from = getFieldValue("pickup_date_from") as dayjs.Dayjs | undefined;
+                              if (!from || !value || !from.isAfter(value, "day")) {
+                                return Promise.resolve();
+                              }
+                              return Promise.reject(new Error("Дата 'До' должна быть не раньше даты 'От'"));
+                            },
+                          }),
+                        ]}
+                      >
+                        <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="До" />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
                 </div>
               </div>
@@ -3393,6 +3468,66 @@ function OrdersPageContent() {
               </Form.List>
             </div>
           ) : null}
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый контакт фабрики"
+        open={factoryContactModalOpen}
+        destroyOnHidden
+        onCancel={() => setFactoryContactModalOpen(false)}
+        onOk={() => factoryContactQuickForm.submit()}
+      >
+        <Form
+          form={factoryContactQuickForm}
+          layout="vertical"
+          onFinish={(values: { full_name?: string; phone?: string; email?: string }) => {
+            const fullName = trimOrUndefined(values.full_name);
+            const phone = trimOrUndefined(values.phone);
+            const email = trimOrUndefined(values.email);
+            if (!fullName || !phone) {
+              message.error("Заполните имя и телефон");
+              return;
+            }
+            if (!email) {
+              message.error("Заполните email");
+              return;
+            }
+            if (!createFactoryId) {
+              message.error("Сначала выберите фабрику");
+              return;
+            }
+            createFactoryContactMutation.mutate({
+              factoryId: createFactoryId,
+              full_name: fullName,
+              phone,
+              email,
+            });
+          }}
+        >
+          <Form.Item name="full_name" label="Имя" rules={[{ required: true, message: "Укажите имя" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Укажите телефон" },
+              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[
+              { required: true, message: "Укажите email" },
+              { type: "email", message: "Введите корректный email" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
         </Form>
       </Modal>
 
