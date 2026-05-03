@@ -172,7 +172,8 @@ type OrderCreateForm = {
   request_payload_json?: string;
   goods_lines?: OrderCreateGoodsLineForm[];
   documents?: OrderCreateDocumentForm[];
-  certificate_intent?: boolean;
+  certificate_intent?: string | null;
+  certificate_intent_enabled?: boolean;
   new_factory_email_contact_name?: string;
   new_factory_email_contact_phone?: string;
   client_measurement_ui?: string;
@@ -310,8 +311,8 @@ function normalizeCurrencyPayload(
   otherLabelFieldName: string,
 ) {
   const normalizedCurrency = (currency || "EUR").toUpperCase();
-  if (!["USD", "EUR", "OTHER"].includes(normalizedCurrency)) {
-    throw new Error("Валюта должна быть USD, EUR или OTHER");
+  if (!["USD", "EUR", "RUB", "OTHER"].includes(normalizedCurrency)) {
+    throw new Error("Валюта должна быть USD, EUR, RUB или OTHER");
   }
 
   const normalizedOtherLabel = trimOrUndefined(otherLabel);
@@ -463,6 +464,7 @@ function OrdersPageContent() {
   const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
   const createOrderType = Form.useWatch("order_type", createForm);
   const createSelfDelivery = Boolean(Form.useWatch("self_delivery", createForm));
+  const createCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", createForm));
   const createClientGoodsValueAmount = Form.useWatch("client_goods_value_amount", createForm);
   const createDeclaredVolumeM3 = Form.useWatch("declared_volume_m3", createForm);
   const createDeclaredTotalWeightKg = Form.useWatch("declared_total_weight_kg", createForm);
@@ -818,6 +820,13 @@ function OrdersPageContent() {
 
   useEffect(() => {
     if (!createOpen) return;
+    if (!createCertificateIntentEnabled) {
+      createForm.setFieldValue("certificate_intent", undefined);
+    }
+  }, [createCertificateIntentEnabled, createForm, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen) return;
     const assignedForwarder = createForm.getFieldValue("assigned_forwarder_user_id");
     const selfDeliveryForwarder = createForm.getFieldValue("self_delivery_forwarder_user_id");
     if (createSelfDelivery) {
@@ -1040,8 +1049,11 @@ function OrdersPageContent() {
         "cargo_places_qty",
       ];
       if (!isClientRole) {
-        names.push("certificate_intent");
-        names.push("measurement_status", "measurement_comment", "weighing_status", "weighing_comment");
+        names.push("certificate_intent_enabled");
+        if (values.certificate_intent_enabled) {
+          names.push("certificate_intent");
+        }
+        names.push("measurement_status", "weighing_status");
       }
       return names;
     }
@@ -1278,8 +1290,8 @@ function OrdersPageContent() {
       }
 
       const clientGoodsValueCurrency = trimOrUndefined(values.client_goods_value_currency);
-      if (clientGoodsValueCurrency && !["USD", "EUR", "OTHER"].includes(clientGoodsValueCurrency)) {
-        throw new Error("Валюта стоимости товара должна быть USD, EUR или OTHER");
+      if (clientGoodsValueCurrency && !["USD", "EUR", "RUB", "OTHER"].includes(clientGoodsValueCurrency)) {
+        throw new Error("Валюта стоимости товара должна быть USD, EUR, RUB или OTHER");
       }
       const clientGoodsValueCurrencyOtherLabel = trimOrUndefined(values.client_goods_value_currency_other_label);
       if (clientGoodsValueCurrency === "OTHER" && !clientGoodsValueCurrencyOtherLabel) {
@@ -1308,6 +1320,10 @@ function OrdersPageContent() {
         product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
+        certificate_intent:
+          values.certificate_intent_enabled && trimOrUndefined(values.certificate_intent ?? undefined)
+            ? String(trimOrUndefined(values.certificate_intent ?? undefined)).toLowerCase()
+            : undefined,
         raw_payload: requestRawPayload,
       };
 
@@ -2138,6 +2154,9 @@ function OrdersPageContent() {
   );
   const productCharacteristicOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.product_characteristic_options,
+  );
+  const certificateIntentOptions = toSelectOptions(
+    (createMetadataQuery.data as OrderCreateMetadata | undefined)?.certificate_intent_options,
   );
   const itemTypeOptions = toSelectOptions(createMetadataQuery.data?.item_type_options);
   const quantityUnitOptions =
@@ -3169,33 +3188,29 @@ function OrdersPageContent() {
                   <Form.Item name="invoice_number" label="Номер инвойса" className="crm-order-create-col">
                     <Input />
                   </Form.Item>
-                  <Form.Item name="client_goods_value_currency" label="Валюта" className="crm-order-create-col">
-                    <Select
-                      options={[
-                        { label: "USD", value: "USD" },
-                        { label: "EUR", value: "EUR" },
-                        { label: "OTHER", value: "OTHER" },
-                      ]}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    noStyle
-                    shouldUpdate={(prev, next) =>
-                      prev.client_goods_value_currency !== next.client_goods_value_currency
-                    }
-                  >
-                    {({ getFieldValue }) =>
-                      getFieldValue("client_goods_value_currency") === "OTHER" ? (
+                  <Form.Item label="Валюта" className="crm-order-create-col">
+                    <div className="crm-order-currency-row">
+                      <Form.Item name="client_goods_value_currency" noStyle>
+                        <Select
+                          className="crm-order-currency-select"
+                          options={[
+                            { label: "USD", value: "USD" },
+                            { label: "RUB", value: "RUB" },
+                            { label: "EUR", value: "EUR" },
+                            { label: "OTHER", value: "OTHER" },
+                          ]}
+                        />
+                      </Form.Item>
+                      {createClientGoodsValueCurrency === "OTHER" ? (
                         <Form.Item
                           name="client_goods_value_currency_other_label"
-                          label="Другая валюта"
                           rules={[{ required: true, message: "Укажите валюту" }]}
-                          className="crm-order-create-col"
+                          className="crm-order-currency-inline-item"
                         >
-                          <Input />
+                          <Input className="crm-order-currency-select" placeholder="Введите валюту" />
                         </Form.Item>
-                      ) : null
-                    }
+                      ) : null}
+                    </div>
                   </Form.Item>
                   <Form.Item name="client_goods_value_amount" label="Сумма" className="crm-order-create-col">
                     <Input />
@@ -3203,33 +3218,26 @@ function OrdersPageContent() {
                   <Form.Item name="declared_volume_m3" label="Заявленный объем, м3" className="crm-order-create-col">
                     <Input />
                   </Form.Item>
-                  <Form.Item name="declared_total_weight_kg" label="Вес, кг" className="crm-order-create-col">
-                    <Input />
-                  </Form.Item>
-                  <Form.Item name="cargo_places_qty" label="Кол-во мест" className="crm-order-create-col">
-                    <InputNumber min={0} style={{ width: "100%" }} />
-                  </Form.Item>
+                  <div className="crm-order-create-col crm-order-inline-pair">
+                    <Form.Item name="declared_total_weight_kg" label="Вес, кг" className="crm-order-inline-pair-item">
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name="cargo_places_qty" label="Кол-во мест" className="crm-order-inline-pair-item">
+                      <InputNumber min={0} style={{ width: "100%" }} />
+                    </Form.Item>
+                  </div>
                 </div>
               </div>
 
               <div className="crm-order-create-section">
-                <Typography.Title level={5} className="crm-order-create-section-title">
-                  Перемер / взвешивание
-                </Typography.Title>
                 <div className="crm-order-create-grid">
                   {!isClientRole ? (
                     <>
-                      <Form.Item name="measurement_status" label="Статус измерений" className="crm-order-create-col">
+                      <Form.Item name="measurement_status" label="Перемер" className="crm-order-create-col">
                         <Select allowClear options={measurementStatusOptions} />
                       </Form.Item>
-                      <Form.Item name="measurement_comment" label="Комментарий измерений" className="crm-order-create-col">
-                        <Input.TextArea rows={2} />
-                      </Form.Item>
-                      <Form.Item name="weighing_status" label="Статус взвешивания" className="crm-order-create-col">
+                      <Form.Item name="weighing_status" label="Взвешивание" className="crm-order-create-col">
                         <Select allowClear options={weighingStatusOptions} />
-                      </Form.Item>
-                      <Form.Item name="weighing_comment" label="Комментарий взвешивания" className="crm-order-create-col">
-                        <Input.TextArea rows={2} />
                       </Form.Item>
                     </>
                   ) : (
@@ -3252,15 +3260,39 @@ function OrdersPageContent() {
                       </Form.Item>
                     </>
                   )}
-                  <Form.Item label="Ценовой коэффициент" className="crm-order-create-col">
+                  <Form.Item
+                    label="Ценовой коэффициент"
+                    className="crm-order-create-col"
+                    extra="Расчет: client_goods_value_amount / declared_volume_m3"
+                  >
                     <Input readOnly value={priceCoefficient} />
                   </Form.Item>
-                  <Form.Item label="Весовой коэффициент" className="crm-order-create-col">
+                  <Form.Item
+                    label="Весовой коэффициент"
+                    className="crm-order-create-col"
+                    extra="Расчет: declared_volume_m3 / declared_total_weight_kg"
+                  >
                     <Input readOnly value={weightCoefficient} />
                   </Form.Item>
-                  {!isClientRole ? (
-                    <Form.Item name="certificate_intent" valuePropName="checked" className="crm-order-create-col">
-                      <Checkbox>Сертификат (UI-only)</Checkbox>
+                  <Form.Item name="certificate_intent_enabled" valuePropName="checked" className="crm-order-create-col">
+                    <Checkbox>Сертификат</Checkbox>
+                  </Form.Item>
+                  {createCertificateIntentEnabled ? (
+                    <Form.Item
+                      name="certificate_intent"
+                      label="Сертификат: вариант"
+                      className="crm-order-create-col"
+                      rules={[{ required: true, message: "Выберите вариант сертификата" }]}
+                    >
+                      <Select
+                        allowClear
+                        options={certificateIntentOptions}
+                        placeholder={
+                          certificateIntentOptions.length
+                            ? "Выберите вариант"
+                            : "Нет certificate_intent_options в metadata"
+                        }
+                      />
                     </Form.Item>
                   ) : null}
                 </div>

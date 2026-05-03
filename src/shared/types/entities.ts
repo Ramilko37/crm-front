@@ -824,6 +824,7 @@ export type OrderCreateMetadata = {
   priority_options: DictionaryOption[];
   office_mark_options: DictionaryOption[];
   product_characteristic_options: DictionaryOption[];
+  certificate_intent_options: DictionaryOption[];
   item_type_options: DictionaryOption[];
   quantity_unit_options: DictionaryOption[];
   document_type_options: DictionaryOption[];

@@ -510,6 +510,32 @@ body.crm-column-resizing * {
   margin-bottom: 0 !important;
 }
 
+.crm-order-inline-pair {
+  display: flex;
+  gap: 8px;
+}
+
+.crm-order-inline-pair-item {
+  flex: 1;
+  margin-bottom: 0 !important;
+}
+
+.crm-order-currency-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.crm-order-currency-select {
+  width: 100%;
+  max-width: 200px;
+}
+
+.crm-order-currency-inline-item {
+  margin-bottom: 0 !important;
+}
+
 .crm-order-create-col-full {
   margin-top: 8px;
 }
@@ -667,6 +693,10 @@ body.crm-column-resizing * {
 
   .crm-create-wizard-footer .ant-btn {
     width: 100%;
+  }
+
+  .crm-order-inline-pair {
+    flex-direction: column;
   }
 
   .crm-toolbar-search .ant-input-search {
