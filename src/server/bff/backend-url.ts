@@ -5,7 +5,7 @@ function buildApiPath(baseUrl: string, path: string) {
   const normalizedPrefix = BACKEND_API_PREFIX.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   if (basePath.endsWith(normalizedPrefix)) {
-    return normalizedPath;
+    return `${normalizedPrefix}${normalizedPath}`;
   }
   return `${normalizedPrefix}${normalizedPath}`;
 }
