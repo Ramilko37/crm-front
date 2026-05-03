@@ -449,6 +449,10 @@ body.crm-column-resizing * {
   max-width: 980px;
 }
 
+.ant-modal {
+  min-width: 720px;
+}
+
 .crm-order-create-modal .ant-modal-body {
   max-height: min(78vh, 900px);
   overflow-y: auto;
