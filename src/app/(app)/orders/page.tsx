@@ -36,7 +36,7 @@ import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
@@ -54,6 +54,7 @@ import { toOrderWritePayload } from "@/shared/lib/order-dto";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
+import { CREATE_ORDER_DRAFT_DEFAULTS, useOrderCreateDraftStore } from "@/shared/stores/order-create-draft-store";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
@@ -124,6 +125,7 @@ type OrderCreateForm = {
     factory_name?: string;
     primary_email?: string;
     loading_address?: {
+      name?: string;
       country_id?: number;
       postcode_id?: number;
       city_id?: number;
@@ -406,8 +408,22 @@ function OrdersPageContent() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
   const [factoryContactModalOpen, setFactoryContactModalOpen] = useState(false);
+  const [factoryLoadingAddressModalOpen, setFactoryLoadingAddressModalOpen] = useState(false);
+  const [goodsLineModalOpen, setGoodsLineModalOpen] = useState(false);
+  const [goodsLineEditIndex, setGoodsLineEditIndex] = useState<number | null>(null);
+  const [factoryCreateConfirmed, setFactoryCreateConfirmed] = useState(false);
+  const [factoryCreateConfirmShown, setFactoryCreateConfirmShown] = useState(false);
+  const factoryCreateConfirmOpenRef = useRef(false);
   const [postcodeQuery, setPostcodeQuery] = useState("");
+  const [factorySearchTerm, setFactorySearchTerm] = useState("");
+  const [createdFactoryOption, setCreatedFactoryOption] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  const [createdLoadingAddressOption, setCreatedLoadingAddressOption] = useState<FactoryLoadingAddress | null>(null);
   const [postcodeQueryDebounced, setPostcodeQueryDebounced] = useState("");
+  const createDraft = useOrderCreateDraftStore((state) => state.draft);
+  const setCreateDraft = useOrderCreateDraftStore((state) => state.setDraft);
+  const mergeCreateDraft = useOrderCreateDraftStore((state) => state.mergeDraft);
+  const resetCreateDraft = useOrderCreateDraftStore((state) => state.resetDraft);
+  const isRehydratingCreateFormRef = useRef(false);
 
   const [createForm] = Form.useForm<OrderCreateForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
@@ -459,8 +475,16 @@ function OrdersPageContent() {
   }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const [factoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
+  const [factoryLoadingAddressQuickForm] = Form.useForm<{ name?: string; address?: string; postcode_id?: number; city_id?: number }>();
+  const [goodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
+  const loadingAddressQuickPostcodeId = Form.useWatch("postcode_id", factoryLoadingAddressQuickForm) as number | undefined;
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
+  const goodsLineQuickItemType = Form.useWatch("item_type", goodsLineQuickForm) as string | undefined;
+  const goodsLineRows = useMemo(
+    () => ((createDraft.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
+    [createDraft.goods_lines],
+  );
   const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
   const createOrderType = Form.useWatch("order_type", createForm);
   const createSelfDelivery = Boolean(Form.useWatch("self_delivery", createForm));
@@ -737,6 +761,18 @@ function OrdersPageContent() {
     enabled: createOpen && canCreate && Boolean(createLoadingPostcodeIdUi),
   });
 
+  const loadingAddressQuickCitiesQuery = useQuery({
+    queryKey: ["orders", "create-loading-address-quick-cities", isClientRole, loadingAddressQuickPostcodeId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(
+        isClientRole
+          ? `/api/client/postcodes/${loadingAddressQuickPostcodeId}/cities`
+          : `/api/postcodes/${loadingAddressQuickPostcodeId}/cities`,
+        { query: { page: 1, page_size: 200 } },
+      ),
+    enabled: createOpen && factoryLoadingAddressModalOpen && Boolean(loadingAddressQuickPostcodeId),
+  });
+
   useEffect(() => {
     if (!createOpen || !createFactoryId || createFactoryMode !== "existing") {
       return;
@@ -760,29 +796,134 @@ function OrdersPageContent() {
   useEffect(() => {
     if (!createOpen) return;
     if (createFactoryMode === "create") {
+      setFactoryCreateConfirmed(false);
+      setFactoryCreateConfirmShown(false);
       createForm.setFieldValue("factory_id", undefined);
       createForm.setFieldValue("loading_address_id", undefined);
       createForm.setFieldValue("factory_contact_id", undefined);
       return;
     }
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
     createForm.setFieldValue(["create_factory"], undefined);
   }, [createFactoryMode, createForm, createOpen]);
 
   useEffect(() => {
-    if (!createOpen || !createFactoryCountryId) {
+    if (factoryCreateConfirmOpenRef.current) {
       return;
     }
-    if (createFactoryMode === "existing") {
-      createForm.setFieldValue("factory_id", undefined);
-      createForm.setFieldValue("loading_address_id", undefined);
-      createForm.setFieldValue("factory_contact_id", undefined);
+    if (!createOpen || createFactoryMode !== "create" || factoryCreateConfirmed || factoryCreateConfirmShown) {
       return;
     }
-    createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
-    createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-    createForm.setFieldValue("loading_postcode_id_ui", undefined);
-    createForm.setFieldValue("loading_city_id_ui", undefined);
-  }, [createFactoryCountryId, createFactoryMode, createForm, createOpen]);
+    const factoryName = createForm.getFieldValue(["create_factory", "factory_name"]);
+    const loadingAddress = createForm.getFieldValue(["create_factory", "loading_address", "address"]);
+    const postcodeId = createForm.getFieldValue("loading_postcode_id_ui");
+    const cityId = createForm.getFieldValue("loading_city_id_ui");
+    if (!factoryName || !loadingAddress || !postcodeId || !cityId) {
+      return;
+    }
+    setFactoryCreateConfirmShown(true);
+    factoryCreateConfirmOpenRef.current = true;
+    Modal.confirm({
+      title: "Вы готовы создать фабрику?",
+      okText: "Да",
+      cancelText: "Нет",
+      onOk: async () => {
+        try {
+          const values = createForm.getFieldsValue(true) as OrderCreateForm;
+          const factoryName = trimOrUndefined(values.create_factory?.factory_name);
+          const countryId = values.factory_country_id;
+          const address = trimOrUndefined(values.create_factory?.loading_address?.address);
+          const loadingAddressName =
+            trimOrUndefined(values.create_factory?.loading_address?.name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.address) ??
+            trimOrUndefined(values.create_factory?.factory_name) ??
+            "Основной адрес";
+          const postcodeId = values.loading_postcode_id_ui;
+          const cityId = values.loading_city_id_ui;
+          const primaryContactName =
+            trimOrUndefined(values.create_factory_contact?.full_name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
+            "Primary Contact";
+          const primaryContactPhone =
+            trimOrUndefined(values.create_factory_contact?.phone) ??
+            trimOrUndefined(values.create_factory?.loading_address?.phone) ??
+            "+70000000000";
+          const primaryContactEmail =
+            trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+          if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
+            throw new Error("missing-factory-fields");
+          }
+
+          const createdFactory = await apiRequest<Factory>("/api/factories", {
+            method: "POST",
+            body: {
+              name: factoryName,
+              country_id: countryId,
+              country: countriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+              city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
+              address,
+              postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
+              phone: trimOrUndefined(values.create_factory_contact?.phone),
+              primary_contact: {
+                full_name: primaryContactName,
+                phone: primaryContactPhone,
+                email: primaryContactEmail,
+              },
+            },
+          });
+
+          const createdAddress = await apiRequest<FactoryLoadingAddress>(`/api/factories/${createdFactory.id}/loading-addresses`, {
+            method: "POST",
+            body: {
+              name: loadingAddressName,
+              country_id: countryId,
+              postcode_id: postcodeId,
+              city_id: cityId,
+              address,
+              contact_name:
+                trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
+              phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+            },
+          });
+
+          createForm.setFieldValue("factory_mode", "existing");
+          setCreatedFactoryOption({
+            id: createdFactory.id,
+            name: createdFactory.name,
+            subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+          });
+          setCreatedLoadingAddressOption(createdAddress);
+          createForm.setFieldValue("factory_id", createdFactory.id);
+          createForm.setFieldValue("loading_address_id", createdAddress.id);
+          setFactoryCreateConfirmed(true);
+          setFactoryCreateConfirmShown(false);
+          factoryCreateConfirmOpenRef.current = false;
+          await queryClient.invalidateQueries({ queryKey: ["factories"] });
+          await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createdFactory.id] });
+          message.success("Фабрика создана");
+        } catch {
+          setFactoryCreateConfirmShown(false);
+          factoryCreateConfirmOpenRef.current = false;
+          message.error("Произошла ошибка");
+          return;
+        }
+      },
+      onCancel: () => {
+        setFactoryCreateConfirmShown(false);
+        factoryCreateConfirmOpenRef.current = false;
+      },
+    });
+  }, [
+    queryClient,
+    createFactoryMode,
+    createForm,
+    createOpen,
+    createLoadingCityIdUi,
+    createLoadingPostcodeIdUi,
+    factoryCreateConfirmed,
+    factoryCreateConfirmShown,
+  ]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -872,6 +1013,33 @@ function OrdersPageContent() {
     },
     onError: (error) => {
       message.error(error instanceof ApiError ? error.detail : "Ошибка добавления контакта");
+    },
+  });
+
+  const createFactoryLoadingAddressMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; countryId: number; name: string; address: string; postcode_id: number; city_id: number }) =>
+      apiRequest<FactoryLoadingAddress>(`/api/factories/${payload.factoryId}/loading-addresses`, {
+        method: "POST",
+        body: {
+          name: payload.name,
+          country_id: payload.countryId,
+          postcode_id: payload.postcode_id,
+          city_id: payload.city_id,
+          address: payload.address,
+          contact_name: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "full_name"])) ?? "Contact",
+          phone: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "phone"])) ?? "+70000000000",
+        },
+      }),
+    onSuccess: async (result) => {
+      message.success("Адрес добавлен");
+      setFactoryLoadingAddressModalOpen(false);
+      factoryLoadingAddressQuickForm.resetFields();
+      setCreatedLoadingAddressOption(result);
+      createForm.setFieldValue("loading_address_id", result.id);
+      await queryClient.invalidateQueries({ queryKey: ["orders", "create-loading-addresses", isClientRole, "existing", createFactoryId] });
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления адреса");
     },
   });
 
@@ -975,8 +1143,18 @@ function OrdersPageContent() {
     setCreateOpen(false);
     setCreateStep(0);
     setFactoryContactModalOpen(false);
+    setFactoryLoadingAddressModalOpen(false);
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
+    factoryCreateConfirmOpenRef.current = false;
+    resetCreateDraft();
     createForm.resetFields();
+    createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
     factoryContactQuickForm.resetFields();
+    factoryLoadingAddressQuickForm.resetFields();
+    goodsLineQuickForm.resetFields();
     setClientCompaniesQueryText("");
     setPostcodeQuery("");
     setPostcodeQueryDebounced("");
@@ -984,8 +1162,24 @@ function OrdersPageContent() {
 
   function openCreateModal() {
     setCreateStep(0);
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
+    factoryCreateConfirmOpenRef.current = false;
+    resetCreateDraft();
     setCreateOpen(true);
+    createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
   }
+
+  useEffect(() => {
+    if (!createOpen) return;
+    isRehydratingCreateFormRef.current = true;
+    createForm.setFieldsValue(createDraft);
+    queueMicrotask(() => {
+      isRehydratingCreateFormRef.current = false;
+    });
+  }, [createForm, createOpen]);
 
   function getCreateStepFieldNames(step: number): NamePath[] {
     const values = createForm.getFieldsValue(true) as OrderCreateForm;
@@ -2124,6 +2318,74 @@ function OrdersPageContent() {
     [columnsWithResize],
   );
 
+  function openCreateGoodsLineModal() {
+    setGoodsLineEditIndex(null);
+    goodsLineQuickForm.resetFields();
+    setGoodsLineModalOpen(true);
+  }
+
+  function openEditGoodsLineModal(index: number) {
+    const line = goodsLineRows[index];
+    if (!line) return;
+    setGoodsLineEditIndex(index);
+    goodsLineQuickForm.setFieldsValue(line);
+    setGoodsLineModalOpen(true);
+  }
+
+  function removeGoodsLine(index: number) {
+    const nextLines = goodsLineRows.filter((_, currentIndex) => currentIndex !== index);
+    createForm.setFieldsValue({ goods_lines: nextLines });
+    mergeCreateDraft({ goods_lines: nextLines });
+  }
+
+  async function saveGoodsLine(values: OrderCreateGoodsLineForm) {
+    const itemType = trimOrUndefined(values.item_type);
+    const customItemType = trimOrUndefined(values.custom_item_type);
+    if (itemType === "other" && !customItemType) {
+      goodsLineQuickForm.setFields([
+        { name: ["custom_item_type"], errors: ["Укажите свой тип для 'другой'"] },
+      ]);
+      return;
+    }
+
+    const nextLine: OrderCreateGoodsLineForm = {
+      item_type: itemType,
+      custom_item_type: itemType === "other" ? customItemType : undefined,
+      description: trimOrUndefined(values.description),
+      weight_kg: trimOrUndefined(values.weight_kg),
+      quantity_value: trimOrUndefined(values.quantity_value),
+      quantity_unit: trimOrUndefined(values.quantity_unit),
+    };
+
+    const nextLines = [...goodsLineRows];
+    if (goodsLineEditIndex === null) {
+      nextLines.push(nextLine);
+    } else {
+      nextLines[goodsLineEditIndex] = nextLine;
+    }
+    createForm.setFieldsValue({ goods_lines: nextLines });
+    mergeCreateDraft({ goods_lines: nextLines });
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    goodsLineQuickForm.resetFields();
+  }
+
+  function getGoodsLineSummary(line: OrderCreateGoodsLineForm) {
+    const itemTypeCode = trimOrUndefined(line.item_type);
+    const customItemType = trimOrUndefined(line.custom_item_type);
+    const itemTypeLabel =
+      itemTypeCode === "other"
+        ? customItemType ?? "—"
+        : itemTypeCode
+          ? (itemTypeLabelByValue.get(itemTypeCode) ?? itemTypeCode)
+          : "—";
+    const weight = trimOrUndefined(line.weight_kg) ?? "—";
+    const quantity = trimOrUndefined(line.quantity_value) ?? "—";
+    const unitCode = trimOrUndefined(line.quantity_unit);
+    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : "—";
+    return `${itemTypeLabel} + ${weight} + ${quantity} + ${unit}`;
+  }
+
   function handleTableChange(
     pagination: TablePaginationConfig,
     _: unknown,
@@ -2163,6 +2425,23 @@ function OrdersPageContent() {
     toSelectOptions(createMetadataQuery.data?.quantity_unit_options).length > 0
       ? toSelectOptions(createMetadataQuery.data?.quantity_unit_options)
       : QUANTITY_UNIT_FALLBACK_OPTIONS;
+  const itemTypeLabelByValue = useMemo(
+    () =>
+      new Map(
+        itemTypeOptions.map((option) => [option.value, typeof option.label === "string" ? option.label : String(option.label)]),
+      ),
+    [itemTypeOptions],
+  );
+  const quantityUnitLabelByValue = useMemo(
+    () =>
+      new Map(
+        quantityUnitOptions.map((option) => [
+          option.value,
+          typeof option.label === "string" ? option.label : String(option.label),
+        ]),
+      ),
+    [quantityUnitOptions],
+  );
   const documentTypeOptions = toSelectOptions(createMetadataQuery.data?.document_type_options);
   const measurementStatusOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.measurement_status_options,
@@ -2208,25 +2487,17 @@ function OrdersPageContent() {
       })),
     [postcodeCitiesQuery.data?.items],
   );
-  const filteredLoadingAddresses = useMemo(() => {
-    const all = loadingAddressesQuery.data ?? [];
-    if (!createLoadingPostcodeIdUi && !createLoadingCityIdUi) return all;
-    return all.filter((address) => {
-      if (createLoadingPostcodeIdUi && address.postcode_id !== createLoadingPostcodeIdUi) return false;
-      if (createLoadingCityIdUi && address.city_id !== createLoadingCityIdUi) return false;
-      return true;
-    });
-  }, [createLoadingCityIdUi, createLoadingPostcodeIdUi, loadingAddressesQuery.data]);
-  const postcodeAddressMismatch =
-    createFactoryMode === "existing" &&
-    Boolean(createLoadingPostcodeIdUi) &&
-    Boolean(createFactoryId) &&
-    filteredLoadingAddresses.length === 0;
+  const allLoadingAddresses = useMemo(() => {
+    const source = loadingAddressesQuery.data ?? [];
+    return createdLoadingAddressOption && !source.some((address) => address.id === createdLoadingAddressOption.id)
+      ? [createdLoadingAddressOption, ...source]
+      : source;
+  }, [createdLoadingAddressOption, loadingAddressesQuery.data]);
 
   useEffect(() => {
     if (!createOpen || createFactoryMode !== "existing") return;
     if (!createLoadingAddressId) return;
-    const stillVisible = filteredLoadingAddresses.some((address) => address.id === createLoadingAddressId);
+    const stillVisible = allLoadingAddresses.some((address) => address.id === createLoadingAddressId);
     if (!stillVisible) {
       createForm.setFieldValue("loading_address_id", undefined);
     }
@@ -2235,7 +2506,7 @@ function OrdersPageContent() {
     createForm,
     createLoadingAddressId,
     createOpen,
-    filteredLoadingAddresses,
+    allLoadingAddresses,
   ]);
 
   useEffect(() => {
@@ -2780,19 +3051,21 @@ function OrdersPageContent() {
           form={createForm}
           layout="vertical"
           className="crm-order-create-form"
-          initialValues={{
-            order_type: "delivery",
-            factory_mode: "existing",
-            client_goods_value_currency: "EUR",
-            documents: [],
-            goods_lines: [],
+          initialValues={CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>}
+          onValuesChange={(_, allValues) => {
+            if (isRehydratingCreateFormRef.current) {
+              return;
+            }
+            setCreateDraft(allValues as Record<string, unknown>);
           }}
           onFinish={(values) => {
             if (createStep < CREATE_WIZARD_LAST_STEP) {
               setCreateStep((previous) => Math.min(previous + 1, CREATE_WIZARD_LAST_STEP));
               return;
             }
-            createMutation.mutate(values);
+            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
+            const draftPayload = (createDraft as Partial<OrderCreateForm>) ?? {};
+            createMutation.mutate({ ...snapshot, ...draftPayload, ...values });
           }}
         >
           {createStep === 0 ? (
@@ -2986,45 +3259,154 @@ function OrdersPageContent() {
                     />
                   </Form.Item>
 
-                  <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]} className="crm-order-create-col">
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={factoryOptionsQuery.isLoading}
-                      disabled={!createFactoryCountryId}
-                      options={(factoryOptionsQuery.data ?? []).map((factory) => ({
-                        label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
-                        value: factory.id,
-                      }))}
-                      onChange={() => {
-                        createForm.setFieldValue("loading_address_id", undefined);
-                        createForm.setFieldValue("factory_contact_id", undefined);
-                      }}
-                      notFoundContent={createFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
-                    />
-                  </Form.Item>
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]} className="crm-order-create-col">
+                      {(() => {
+                        const source = factoryOptionsQuery.data ?? [];
+                        const options =
+                          createdFactoryOption && !source.some((factory) => factory.id === createdFactoryOption.id)
+                            ? [createdFactoryOption, ...source]
+                            : source;
+                        return (
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={factoryOptionsQuery.isLoading}
+                        disabled={!createFactoryCountryId}
+                        options={options.map((factory) => ({
+                          label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
+                          value: factory.id,
+                        }))}
+                        onSearch={setFactorySearchTerm}
+                        onChange={() => {
+                          createForm.setFieldValue("loading_address_id", undefined);
+                          createForm.setFieldValue("factory_contact_id", undefined);
+                        }}
+                        dropdownRender={(menu) => (
+                          <>
+                            {menu}
+                            <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                              <Button
+                                type="link"
+                                style={{ padding: 0 }}
+                                onClick={() => {
+                                  createForm.setFieldValue("factory_mode", "create");
+                                  createForm.setFieldValue("factory_id", undefined);
+                                  createForm.setFieldValue("loading_address_id", undefined);
+                                  createForm.setFieldValue("factory_contact_id", undefined);
+                                  createForm.setFieldValue(["create_factory", "factory_name"], factorySearchTerm?.trim() || undefined);
+                                }}
+                              >
+                                Не нашли фабрику? Добавить вручную
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                        notFoundContent={createFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
+                      />
+                        );
+                      })()}
+                    </Form.Item>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name={["create_factory", "factory_name"]}
+                        label="Фабрика"
+                        rules={[{ required: true, message: "Введите название фабрики" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Input placeholder="Введите название фабрики" />
+                      </Form.Item>
+                      <Form.Item className="crm-order-create-col" style={{ marginTop: -8, marginBottom: 8 }}>
+                        <Button
+                          type="link"
+                          style={{ padding: 0 }}
+                          onClick={() => {
+                            createForm.setFieldValue("factory_mode", "existing");
+                            createForm.setFieldValue(["create_factory"], undefined);
+                          }}
+                        >
+                          Вернуться к поиску по базе
+                        </Button>
+                      </Form.Item>
+                    </>
+                  )}
 
-                  <Form.Item
-                    name="loading_address_id"
-                    label="Адрес погрузки"
-                    rules={[{ required: true }]}
-                    className="crm-order-create-col"
-                  >
-                    <Select
-                      loading={loadingAddressesQuery.isLoading}
-                      disabled={!createFactoryId}
-                      options={filteredLoadingAddresses.map((address) => ({
-                        label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
-                        value: address.id,
-                      }))}
-                      notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
-                    />
-                  </Form.Item>
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item
+                      name="loading_address_id"
+                      label="Название адреса"
+                      rules={[{ required: true }]}
+                      className="crm-order-create-col"
+                    >
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={loadingAddressesQuery.isLoading}
+                        disabled={!createFactoryId}
+                        options={allLoadingAddresses.map((address) => ({
+                          label: (address.name?.trim() || address.address || `Адрес #${address.id}`) + (address.is_primary ? " (Primary)" : ""),
+                          value: address.id,
+                        }))}
+                        dropdownRender={(menu) => (
+                          <>
+                            {menu}
+                            <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                              <Button
+                                type="link"
+                                style={{ padding: 0 }}
+                                onClick={() => {
+                                  factoryLoadingAddressQuickForm.resetFields();
+                                  setFactoryLoadingAddressModalOpen(true);
+                                }}
+                              >
+                                Добавить адрес
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                        notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name={["create_factory", "loading_address", "name"]}
+                        label="Название адреса"
+                        rules={[{ required: true, message: "Введите название адреса" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Input placeholder="Например: Основной склад" />
+                      </Form.Item>
+                      <Form.Item
+                        name={["create_factory", "loading_address", "address"]}
+                        label="Адрес погрузки"
+                        rules={[{ required: true, message: "Введите адрес погрузки" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Input placeholder="Введите адрес погрузки" />
+                      </Form.Item>
+                    </>
+                  )}
 
-                  {postcodeAddressMismatch ? (
-                    <Typography.Text type="warning" className="crm-order-create-col">
-                      Для выбранного индекса нет адресов погрузки у этой фабрики
-                    </Typography.Text>
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item label="Адрес погрузки" className="crm-order-create-col">
+                      <Input
+                        readOnly
+                        value={
+                          selectedLoadingAddress
+                            ? [
+                                selectedLoadingAddress.postcode,
+                                selectedLoadingAddress.city,
+                                selectedLoadingAddress.address,
+                              ]
+                                .filter(Boolean)
+                                .join(" -> ")
+                            : ""
+                        }
+                        placeholder={createFactoryId ? "Выберите название адреса" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
                   ) : null}
 
                   <Form.Item name="loading_postcode_id_ui" label="Индекс" className="crm-order-create-col">
@@ -3064,6 +3446,7 @@ function OrdersPageContent() {
                     />
                   </Form.Item>
 
+                  {(createFactoryMode === "existing" || factoryCreateConfirmed) ? (
                   <div className="crm-order-create-col crm-order-create-contact-block">
                     <div className="crm-order-create-contact-head">
                       <Typography.Text strong>Контакты</Typography.Text>
@@ -3132,6 +3515,11 @@ function OrdersPageContent() {
                       <Input readOnly={!isClientRole} />
                     </Form.Item>
                   </div>
+                  ) : (
+                    <Typography.Text type="secondary" className="crm-order-create-col">
+                      Заполните кастомную фабрику и подтвердите создание, чтобы перейти к контактам.
+                    </Typography.Text>
+                  )}
 
                   <Form.Item
                     name="ready_date"
@@ -3306,52 +3694,34 @@ function OrdersPageContent() {
                 <Typography.Title level={5} className="crm-order-create-section-title">
                   Товары
                 </Typography.Title>
-                <Form.List name="goods_lines">
-                  {(fields, { add, remove }) => (
-                    <Space direction="vertical" style={{ width: "100%" }} size={8}>
-                      {fields.map((field) => (
-                        <Card
-                          key={field.key}
-                          size="small"
-                          title={`Строка #${field.name + 1}`}
-                          extra={
-                            <Button danger size="small" onClick={() => remove(field.name)}>
-                              Удалить
-                            </Button>
-                          }
-                        >
-                          <div className="crm-order-create-grid">
-                            <Form.Item name={[field.name, "item_type"]} label="Тип товара" className="crm-order-create-col">
-                              <Select allowClear options={itemTypeOptions} />
-                            </Form.Item>
-                            <Form.Item
-                              name={[field.name, "custom_item_type"]}
-                              label="Свой тип (если другой)"
-                              className="crm-order-create-col"
-                            >
-                              <Input />
-                            </Form.Item>
-                            <Form.Item name={[field.name, "description"]} label="Описание" className="crm-order-create-col">
-                              <Input />
-                            </Form.Item>
-                            <Form.Item name={[field.name, "weight_kg"]} label="Вес, кг" className="crm-order-create-col">
-                              <Input />
-                            </Form.Item>
-                            <Form.Item name={[field.name, "quantity_unit"]} label="Единицы изм." className="crm-order-create-col">
-                              <Select allowClear options={quantityUnitOptions} />
-                            </Form.Item>
-                            <Form.Item name={[field.name, "quantity_value"]} label="Кол-во" className="crm-order-create-col">
-                              <Input />
-                            </Form.Item>
-                          </div>
-                        </Card>
-                      ))}
-                      <Button onClick={() => add()} block>
-                        Добавить строку товара
-                      </Button>
-                    </Space>
-                  )}
-                </Form.List>
+                <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                  <Button onClick={openCreateGoodsLineModal} block>
+                    Добавить строку товара
+                  </Button>
+                  {goodsLineRows.map((line, index) => (
+                    <Card
+                      key={`goods-line-${index}`}
+                      size="small"
+                      extra={
+                        <Space>
+                          <Button size="small" onClick={() => openEditGoodsLineModal(index)}>
+                            изменить
+                          </Button>
+                          <Button danger size="small" onClick={() => removeGoodsLine(index)}>
+                            удалить
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      <Typography.Text>{getGoodsLineSummary(line)}</Typography.Text>
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text type="secondary">
+                          {trimOrUndefined(line.description) ?? "—"}
+                        </Typography.Text>
+                      </div>
+                    </Card>
+                  ))}
+                </Space>
               </div>
 
               <div className="crm-order-create-section">
@@ -3559,6 +3929,118 @@ function OrdersPageContent() {
             ]}
           >
             <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый адрес погрузки"
+        open={factoryLoadingAddressModalOpen}
+        destroyOnHidden
+        onCancel={() => setFactoryLoadingAddressModalOpen(false)}
+        onOk={() => factoryLoadingAddressQuickForm.submit()}
+      >
+        <Form
+          form={factoryLoadingAddressQuickForm}
+          layout="vertical"
+          onFinish={(values: { name?: string; address?: string; postcode_id?: number; city_id?: number }) => {
+            const name = trimOrUndefined(values.name);
+            const address = trimOrUndefined(values.address);
+            const postcodeId = values.postcode_id;
+            const cityId = values.city_id;
+            if (!name || !address || !postcodeId || !cityId) {
+              message.error("Заполните название, индекс, город и адрес");
+              return;
+            }
+            if (!createFactoryId || !createFactoryCountryId) {
+              message.error("Сначала выберите фабрику и страну");
+              return;
+            }
+            createFactoryLoadingAddressMutation.mutate({
+              factoryId: createFactoryId,
+              countryId: createFactoryCountryId,
+              name,
+              address,
+              postcode_id: postcodeId,
+              city_id: cityId,
+            });
+          }}
+        >
+          <Form.Item name="name" label="Название адреса" rules={[{ required: true, message: "Укажите название" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="postcode_id" label="Индекс" rules={[{ required: true, message: "Выберите индекс" }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              options={postcodeOptions}
+              onSearch={(value) => setPostcodeQuery(value)}
+              onChange={() => {
+                factoryLoadingAddressQuickForm.setFieldValue("city_id", undefined);
+              }}
+              placeholder="Начните вводить индекс"
+              notFoundContent="Индексы не найдены"
+            />
+          </Form.Item>
+          <Form.Item
+            name="city_id"
+            label="Город"
+            rules={[{ required: true, message: "Выберите город" }]}
+            dependencies={["postcode_id"]}
+          >
+            <Select
+              allowClear
+              disabled={!factoryLoadingAddressQuickForm.getFieldValue("postcode_id")}
+              loading={loadingAddressQuickCitiesQuery.isLoading}
+              options={(loadingAddressQuickCitiesQuery.data?.items ?? []).map((city) => ({
+                label: city.city,
+                value: city.id,
+              }))}
+              placeholder="Выберите город"
+              notFoundContent="Нет городов для индекса"
+            />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес погрузки" rules={[{ required: true, message: "Укажите адрес" }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={goodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
+        open={goodsLineModalOpen}
+        destroyOnHidden
+        onCancel={() => {
+          setGoodsLineModalOpen(false);
+          setGoodsLineEditIndex(null);
+          goodsLineQuickForm.resetFields();
+        }}
+        onOk={() => goodsLineQuickForm.submit()}
+      >
+        <Form<OrderCreateGoodsLineForm> form={goodsLineQuickForm} layout="vertical" onFinish={saveGoodsLine}>
+          <Form.Item name="item_type" label="Тип товара">
+            <Select allowClear options={itemTypeOptions} />
+          </Form.Item>
+          {goodsLineQuickItemType === "other" ? (
+            <Form.Item
+              name="custom_item_type"
+              label="Свой тип (если другой)"
+              rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
+            >
+              <Input />
+            </Form.Item>
+          ) : null}
+          <Form.Item name="weight_kg" label="Вес, кг">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_unit" label="Единицы изм.">
+            <Select allowClear options={quantityUnitOptions} />
+          </Form.Item>
+          <Form.Item name="quantity_value" label="Кол-во">
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Описание">
+            <Input.TextArea rows={4} />
           </Form.Item>
         </Form>
       </Modal>

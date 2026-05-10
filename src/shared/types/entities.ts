@@ -437,6 +437,7 @@ export type FactoryEmail = {
 export type FactoryLoadingAddress = {
   id: number;
   factory_id: number;
+  name?: string | null;
   country_id: number | null;
   postcode_id?: number | null;
   city_id?: number | null;
