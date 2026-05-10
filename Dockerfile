@@ -2,7 +2,7 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate && pnpm install --frozen-lockfile
 
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -13,7 +13,7 @@ ENV NODE_OPTIONS=--max-old-space-size=768
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN corepack enable && pnpm exec next build --webpack
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate && pnpm exec next build --webpack
 
 FROM node:20-alpine AS runner
 WORKDIR /app
