@@ -592,6 +592,53 @@ body.crm-column-resizing * {
   gap: 4px;
 }
 
+.crm-order-edit-drawer .ant-drawer-body {
+  padding: 12px 14px;
+}
+
+.crm-order-edit-header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.crm-order-edit-form .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.crm-order-edit-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.crm-order-view-drawer .ant-drawer-body {
+  padding: 12px 14px;
+}
+
+.crm-order-chat-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.crm-order-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(680px, 860px) minmax(220px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.crm-order-detail-left {
+  min-width: 0;
+}
+
+.crm-order-detail-right {
+  min-height: calc(100vh - 120px);
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;
@@ -697,6 +744,15 @@ body.crm-column-resizing * {
 
   .crm-order-inline-pair {
     flex-direction: column;
+  }
+
+  .crm-order-detail-layout {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .crm-order-detail-right {
+    display: none;
   }
 
   .crm-toolbar-search .ant-input-search {

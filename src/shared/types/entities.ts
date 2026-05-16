@@ -279,6 +279,36 @@ export type OrderDetail = OrderListItem & {
   chat_messages?: OrderChatMessage[];
 };
 
+export type OrderEditFactorySelection = {
+  factory_mode?: "existing" | "create";
+  country_id?: number | null;
+  factory_id?: number | null;
+  loading_address_id?: number | null;
+  factory_contact_id?: number | null;
+  loading_address?: FactoryLoadingAddress | null;
+  factory_contact?: {
+    id: number;
+    full_name: string;
+    phone: string | null;
+    email: string | null;
+  } | null;
+};
+
+export type OrderEditCard = {
+  price_coefficient_effective?: string | number | null;
+  weight_coefficient_effective?: string | number | null;
+  days_same_status?: number | null;
+  latest_factory_request_at?: string | null;
+};
+
+export type OrderInternalEditRead = {
+  order: OrderListItem;
+  factory_selection?: OrderEditFactorySelection | null;
+  goods_lines?: OrderGoodsLine[];
+  documents?: OrderDocument[];
+  card?: OrderEditCard | null;
+};
+
 export type Order = OrderListItem;
 
 export type OrderWritePayload = {

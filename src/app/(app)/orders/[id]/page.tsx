@@ -45,6 +45,10 @@ function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
 }
 
+function renderText(value: string | null | undefined) {
+  return value && value.trim().length > 0 ? value : "—";
+}
+
 function renderOrderStatus(value: OrderStatus | null) {
   if (!value) {
     return <Tag className="crm-status-tag">-</Tag>;
@@ -504,6 +508,11 @@ export default function OrderDetailPage() {
   ];
 
   const goodsLines = useMemo(() => order?.goods_lines ?? [], [order?.goods_lines]);
+  const companyDisplayName = order?.client?.company_name ?? order?.company_name;
+  const clientDisplayName = order?.client?.user_full_name ?? order?.contact_name_snapshot;
+  const factoryDisplayName = order?.factory?.factory_name ?? order?.factory_name;
+  const tripDisplayName = order?.trip_name;
+  const forwarderDisplayName = order?.assigned_forwarder?.full_name ?? order?.forwarder_name;
 
   async function handleDocumentDownload(row: OrderDocument) {
     const fallbackName = row.file_name || `order-${orderId}-document-${row.id}`;
@@ -543,39 +552,41 @@ export default function OrderDetailPage() {
   }
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
-      <PageHeader
-        title={`Заказ #${order.id}`}
-        subtitle="Aggregate order card: данные, действия, чат и файлы"
-        actions={<Link href="/orders">Назад к заказам</Link>}
-      />
+    <div className="crm-order-detail-layout">
+      <div className="crm-order-detail-left">
+        <Space direction="vertical" size={16} className="crm-page-stack">
+          <PageHeader
+            title={`Заказ #${order.id}`}
+            subtitle="Данные заказа, действия, чат и файлы"
+            actions={<Link href="/orders">Назад к заказам</Link>}
+          />
 
-      <Card className="crm-panel" title="Общие данные">
-        <Descriptions bordered size="small" column={screens.lg ? 3 : 1}>
-          <Descriptions.Item label="Номер заказа">{renderOrderNumber(order.order_number)}</Descriptions.Item>
-          <Descriptions.Item label="Статус">{renderOrderStatus(order.status_name)}</Descriptions.Item>
-          <Descriptions.Item label="Тип заказа">{order.order_type ? formatEnumCode(order.order_type) : "-"}</Descriptions.Item>
-          <Descriptions.Item label="Компания">{order.client?.company_name ?? order.company_id ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Клиент">{order.client?.user_full_name ?? order.user_id}</Descriptions.Item>
-          <Descriptions.Item label="Фабрика">{order.factory?.factory_name ?? order.factory_id}</Descriptions.Item>
-          <Descriptions.Item label="Рейс">{order.trip_name ?? order.trip_id ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Экспедитор">{order.assigned_forwarder?.full_name ?? order.assigned_forwarder_user_id ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Инвойс">{order.invoice_number ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Дата заказа">{order.order_date ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Дата готовности">{order.ready_date ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Дата вывоза">{order.pickup_date ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Активен дней">{order.days_active ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Дней в статусе">{order.days_in_current_status ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Коэф. цены">{order.price_coefficient ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Коэф. веса">{order.weight_coefficient ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Последний запрос на фабрику">{order.latest_factory_request_at ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Комментарий" span={screens.lg ? 3 : 1}>
-            {order.comment ?? "-"}
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
+          <Card className="crm-panel" title="Общие данные">
+            <Descriptions bordered size="small" column={screens.lg ? 3 : 1}>
+              <Descriptions.Item label="Номер заказа">{renderOrderNumber(order.order_number)}</Descriptions.Item>
+              <Descriptions.Item label="Статус">{renderOrderStatus(order.status_name)}</Descriptions.Item>
+              <Descriptions.Item label="Тип заказа">{order.order_type ? formatEnumCode(order.order_type) : "-"}</Descriptions.Item>
+              <Descriptions.Item label="Компания">{renderText(companyDisplayName)}</Descriptions.Item>
+              <Descriptions.Item label="Клиент">{renderText(clientDisplayName)}</Descriptions.Item>
+              <Descriptions.Item label="Фабрика">{renderText(factoryDisplayName)}</Descriptions.Item>
+              <Descriptions.Item label="Рейс">{renderText(tripDisplayName)}</Descriptions.Item>
+              <Descriptions.Item label="Экспедитор">{renderText(forwarderDisplayName)}</Descriptions.Item>
+              <Descriptions.Item label="Инвойс">{renderText(order.invoice_number)}</Descriptions.Item>
+              <Descriptions.Item label="Дата заказа">{renderText(order.order_date)}</Descriptions.Item>
+              <Descriptions.Item label="Дата готовности">{renderText(order.ready_date)}</Descriptions.Item>
+              <Descriptions.Item label="Дата вывоза">{renderText(order.pickup_date)}</Descriptions.Item>
+              <Descriptions.Item label="Активен дней">{order.days_active ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Дней в статусе">{order.days_in_current_status ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Коэф. цены">{order.price_coefficient ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Коэф. веса">{order.weight_coefficient ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Последний запрос на фабрику">{renderText(order.latest_factory_request_at)}</Descriptions.Item>
+              <Descriptions.Item label="Комментарий" span={screens.lg ? 3 : 1}>
+                {renderText(order.comment)}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
 
-      <Card className="crm-panel" title="Операционные действия">
+          <Card className="crm-panel" title="Операционные действия">
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Form form={patchForm} layout="vertical" onFinish={(values: { comment?: string }) => patchMutation.mutate(values)}>
             <Form.Item name="comment" label="Комментарий">
@@ -618,7 +629,7 @@ export default function OrderDetailPage() {
                 allowClear
                 loading={tripsQuery.isLoading}
                 options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                  label: `${trip.id} - ${trip.name}`,
+                  label: trip.name,
                   value: trip.id,
                 }))}
               />
@@ -640,7 +651,7 @@ export default function OrderDetailPage() {
                 allowClear
                 loading={forwardersQuery.isLoading}
                 options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                  label: `${user.id} - ${user.full_name || user.login}`,
+                  label: user.full_name || user.login || `Пользователь`,
                   value: user.id,
                 }))}
               />
@@ -718,9 +729,9 @@ export default function OrderDetailPage() {
             </Button>
           </Form>
         </Space>
-      </Card>
+          </Card>
 
-      <Card className="crm-panel" title="Товары">
+          <Card className="crm-panel" title="Товары">
         {goodsLines.length ? (
           <Table
             rowKey="id"
@@ -738,9 +749,9 @@ export default function OrderDetailPage() {
         ) : (
           <Typography.Text type="secondary">Нет строк товаров</Typography.Text>
         )}
-      </Card>
+          </Card>
 
-      <Card className="crm-panel" title="Документы">
+          <Card className="crm-panel" title="Документы">
         <Form
           form={documentUploadForm}
           layout="vertical"
@@ -778,9 +789,9 @@ export default function OrderDetailPage() {
           pagination={false}
           locale={{ emptyText: "Нет документов" }}
         />
-      </Card>
+          </Card>
 
-      <Card className="crm-panel" title="Сертификат">
+          <Card className="crm-panel" title="Сертификат">
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Descriptions bordered size="small" column={screens.lg ? 2 : 1}>
             <Descriptions.Item label="Номер">{certificate?.number ?? "-"}</Descriptions.Item>
@@ -850,9 +861,9 @@ export default function OrderDetailPage() {
             </Button>
           </Form>
         </Space>
-      </Card>
+          </Card>
 
-      <Card className="crm-panel" title="История статусов">
+          <Card className="crm-panel" title="История статусов">
         <Table<OrderStatusHistoryItem>
           rowKey="id"
           loading={statusFallbackQuery.isLoading}
@@ -861,9 +872,9 @@ export default function OrderDetailPage() {
           pagination={false}
           locale={{ emptyText: "Нет записей" }}
         />
-      </Card>
+          </Card>
 
-      <Card className="crm-panel" title="Чат по заказу">
+          <Card className="crm-panel" title="Чат по заказу">
         <Form
           form={chatForm}
           layout="vertical"
@@ -887,7 +898,10 @@ export default function OrderDetailPage() {
           pagination={false}
           locale={{ emptyText: "Нет сообщений" }}
         />
-      </Card>
-    </Space>
+          </Card>
+        </Space>
+      </div>
+      <aside className="crm-order-detail-right" aria-hidden />
+    </div>
   );
 }

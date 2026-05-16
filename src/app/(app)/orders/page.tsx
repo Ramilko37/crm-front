@@ -14,6 +14,8 @@ import {
   Card,
   Checkbox,
   DatePicker,
+  Descriptions,
+  Drawer,
   Dropdown,
   Form,
   Grid,
@@ -34,7 +36,6 @@ import type { ColumnType, ColumnsType, TablePaginationConfig } from "antd/es/tab
 import type { SorterResult } from "antd/es/table/interface";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -50,11 +51,11 @@ import {
   type QuoteStatus,
 } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
-import { toOrderWritePayload } from "@/shared/lib/order-dto";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
 import { CREATE_ORDER_DRAFT_DEFAULTS, useOrderCreateDraftStore } from "@/shared/stores/order-create-draft-store";
+import { useOrderEditDraftStore } from "@/shared/stores/order-edit-draft-store";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
@@ -67,12 +68,16 @@ import type {
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
+  OrderChatMessage,
+  OrderDocument,
+  OrderEditFactorySelection,
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
   OrderDetail,
   OrderFilterParams,
+  OrderStatusHistoryItem,
+  OrderInternalEditRead,
   OrderListItem,
-  OrderWritePayload,
   PaginatedResponse,
   Trip,
   UserAdmin,
@@ -185,10 +190,64 @@ type OrderCreateForm = {
 };
 
 type OrderEditForm = {
-  order_number?: string;
-  trip_id?: number;
-  comment?: string;
+  order_date?: dayjs.Dayjs;
   status_name?: OrderStatus;
+  status_date?: dayjs.Dayjs;
+  order_number?: string;
+  company_id?: number;
+  company_contact_id?: number;
+  invoice_on_other_company?: boolean;
+  invoice_company_name?: string;
+
+  self_delivery?: boolean;
+  assigned_forwarder_user_id?: number;
+  self_delivery_forwarder_user_id?: number;
+  factory_country_id?: number;
+  factory_id?: number;
+  loading_address_id?: number;
+  loading_postcode_id_ui?: number;
+  loading_city_id_ui?: number;
+  loading_address_line?: string;
+  loading_address_fax?: string;
+  factory_contact_id?: number;
+  factory_contact_email?: string;
+  factory_contact_name?: string;
+  factory_contact_phone?: string;
+
+  ready_date?: dayjs.Dayjs;
+  pickup_date_from?: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs;
+  certificate_intent_enabled?: boolean;
+  certificate_intent?: string;
+
+  invoice_number?: string;
+  client_goods_value_amount?: string;
+  client_goods_value_currency?: string;
+  client_goods_value_currency_other_label?: string;
+  goods_lines?: OrderCreateGoodsLineForm[];
+  declared_volume_m3?: string;
+  volume_m3?: string;
+  declared_total_weight_kg?: string;
+  cargo_places_qty?: number;
+  measurement_status?: MeasurementPayload["status"];
+  actual_volume_m3?: string;
+  weighing_status?: MeasurementPayload["status"];
+  actual_weight_kg?: string;
+  actual_qty?: number;
+  quantity_whs?: number;
+
+  product_characteristic_codes?: string[];
+  office_mark_codes?: string[];
+  additional_description?: string;
+  comment?: string;
+  is_1c?: boolean;
+  is_factory_payment_via_company?: boolean;
+  is_checked?: boolean;
+  is_factory_payment_completed?: boolean;
+  mrn?: string;
+  trip_id?: number;
+
+  documents?: OrderCreateDocumentForm[];
 };
 
 type OrderBulkEndpoint =
@@ -235,6 +294,74 @@ function trimOrUndefined(value: string | null | undefined) {
 
 function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
+}
+
+function parseDayjsValue(value: string | null | undefined) {
+  if (!value) return undefined;
+  const next = dayjs(value);
+  return next.isValid() ? next : undefined;
+}
+
+function toOptionalInteger(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function toOptionalBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return undefined;
+}
+
+function normalizeGoodsLineFromDetail(line: unknown): OrderCreateGoodsLineForm {
+  if (!line || typeof line !== "object" || Array.isArray(line)) {
+    return {};
+  }
+  const source = line as Record<string, unknown>;
+  const itemType = trimOrUndefined(typeof source.item_type === "string" ? source.item_type : undefined);
+  const customItemType = trimOrUndefined(typeof source.custom_item_type === "string" ? source.custom_item_type : undefined);
+  const description = trimOrUndefined(typeof source.description === "string" ? source.description : undefined);
+  const weight = trimOrUndefined(
+    typeof source.weight_kg === "string"
+      ? source.weight_kg
+      : typeof source.weight_kg === "number"
+        ? String(source.weight_kg)
+        : undefined,
+  );
+  const quantityValue = trimOrUndefined(
+    typeof source.quantity_value === "string"
+      ? source.quantity_value
+      : typeof source.quantity_value === "number"
+        ? String(source.quantity_value)
+        : typeof source.quantity === "string"
+          ? source.quantity
+          : typeof source.quantity === "number"
+            ? String(source.quantity)
+            : undefined,
+  );
+  const quantityUnit = trimOrUndefined(
+    typeof source.quantity_unit === "string"
+      ? source.quantity_unit
+      : typeof source.unit === "string"
+        ? source.unit
+        : undefined,
+  );
+  return {
+    item_type: itemType,
+    custom_item_type: itemType === "other" ? customItemType : undefined,
+    description,
+    weight_kg: weight,
+    quantity_value: quantityValue,
+    quantity_unit: quantityUnit,
+  };
 }
 
 const ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY = "crm-orders-column-widths-v1";
@@ -368,7 +495,8 @@ function OrdersPageContent() {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
-  const isMobile = !screens.md;
+  const [isHydrated, setIsHydrated] = useState(false);
+  const isMobile = isHydrated ? !screens.md : false;
 
   const meQuery = useCurrentUser(true);
   const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
@@ -389,6 +517,8 @@ function OrdersPageContent() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createStep, setCreateStep] = useState(0);
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewOrderId, setViewOrderId] = useState<number | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -411,6 +541,13 @@ function OrdersPageContent() {
   const [factoryLoadingAddressModalOpen, setFactoryLoadingAddressModalOpen] = useState(false);
   const [goodsLineModalOpen, setGoodsLineModalOpen] = useState(false);
   const [goodsLineEditIndex, setGoodsLineEditIndex] = useState<number | null>(null);
+  const [editFactoryContactModalOpen, setEditFactoryContactModalOpen] = useState(false);
+  const [editGoodsLineModalOpen, setEditGoodsLineModalOpen] = useState(false);
+  const [editGoodsLineEditIndex, setEditGoodsLineEditIndex] = useState<number | null>(null);
+  const [editCompanyQueryText, setEditCompanyQueryText] = useState("");
+  const [editPostcodeQuery, setEditPostcodeQuery] = useState("");
+  const [editPostcodeQueryDebounced, setEditPostcodeQueryDebounced] = useState("");
+  const [editContactEmailOptions, setEditContactEmailOptions] = useState<FactoryContactOption[]>([]);
   const [factoryCreateConfirmed, setFactoryCreateConfirmed] = useState(false);
   const [factoryCreateConfirmShown, setFactoryCreateConfirmShown] = useState(false);
   const factoryCreateConfirmOpenRef = useRef(false);
@@ -423,7 +560,13 @@ function OrdersPageContent() {
   const setCreateDraft = useOrderCreateDraftStore((state) => state.setDraft);
   const mergeCreateDraft = useOrderCreateDraftStore((state) => state.mergeDraft);
   const resetCreateDraft = useOrderCreateDraftStore((state) => state.resetDraft);
+  const editDraftsByOrderId = useOrderEditDraftStore((state) => state.draftsByOrderId);
+  const setEditDraft = useOrderEditDraftStore((state) => state.setDraft);
+  const mergeEditDraft = useOrderEditDraftStore((state) => state.mergeDraft);
+  const resetEditDraft = useOrderEditDraftStore((state) => state.resetDraft);
   const isRehydratingCreateFormRef = useRef(false);
+  const isRehydratingEditFormRef = useRef(false);
+  const hydratedEditOrderIdRef = useRef<number | null>(null);
 
   const [createForm] = Form.useForm<OrderCreateForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
@@ -475,12 +618,13 @@ function OrdersPageContent() {
   }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const [factoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
+  const [editFactoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
   const [factoryLoadingAddressQuickForm] = Form.useForm<{ name?: string; address?: string; postcode_id?: number; city_id?: number }>();
   const [goodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
+  const [editGoodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
   const loadingAddressQuickPostcodeId = Form.useWatch("postcode_id", factoryLoadingAddressQuickForm) as number | undefined;
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
-  const goodsLineQuickItemType = Form.useWatch("item_type", goodsLineQuickForm) as string | undefined;
   const goodsLineRows = useMemo(
     () => ((createDraft.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
     [createDraft.goods_lines],
@@ -497,6 +641,20 @@ function OrdersPageContent() {
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
   const createFactoryContactId = Form.useWatch("factory_contact_id", createForm) as number | undefined;
   const isRequestCreate = createOrderType === "request";
+  const selectedOrderId = selected?.id;
+  const editFactoryId = Form.useWatch("factory_id", editForm) as number | undefined;
+  const editCompanyId = Form.useWatch("company_id", editForm) as number | undefined;
+  const editFactoryCountryId = Form.useWatch("factory_country_id", editForm) as number | undefined;
+  const editLoadingAddressId = Form.useWatch("loading_address_id", editForm) as number | undefined;
+  const editLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", editForm) as number | undefined;
+  const editSelfDelivery = Boolean(Form.useWatch("self_delivery", editForm));
+  const editCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", editForm));
+  const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
+  const editDraftRecord = selectedOrderId ? editDraftsByOrderId[selectedOrderId] : undefined;
+  const editGoodsLineRows = useMemo(
+    () => ((editDraftRecord?.values.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
+    [editDraftRecord?.values.goods_lines],
+  );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const hasActiveFilters = Boolean(
@@ -511,31 +669,45 @@ function OrdersPageContent() {
       (params.office_mark_codes?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => {
-    if (typeof window === "undefined") return {};
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+
+  useEffect(() => {
+    if (columnWidthsHydrated || typeof window === "undefined") return;
     try {
       const raw = window.localStorage.getItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY);
-      if (!raw) return {};
+      if (!raw) {
+        setColumnWidthsHydrated(true);
+        return;
+      }
       const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return Object.entries(parsed).reduce<Record<string, number>>((acc, [key, value]) => {
+      const next = Object.entries(parsed).reduce<Record<string, number>>((acc, [key, value]) => {
         if (typeof value === "number" && Number.isFinite(value) && value >= ORDER_TABLE_MIN_COLUMN_WIDTH) {
           acc[key] = Math.round(value);
         }
         return acc;
       }, {});
+      setColumnWidths(next);
     } catch {
-      return {};
+      // ignore storage parse issues
+    } finally {
+      setColumnWidthsHydrated(true);
     }
-  });
+  }, [columnWidthsHydrated]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!columnWidthsHydrated) return;
     try {
       window.localStorage.setItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(columnWidths));
     } catch {
       // no-op: ignore storage write issues
     }
-  }, [columnWidths]);
+  }, [columnWidths, columnWidthsHydrated]);
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   const startColumnResize = useCallback(
     (columnKey: string, initialWidth: number, event: React.MouseEvent<HTMLSpanElement>) => {
@@ -598,6 +770,46 @@ function OrdersPageContent() {
       }),
   });
 
+  const viewOrderQuery = useQuery({
+    queryKey: viewOrderId ? queryKeys.orders.detail(viewOrderId) : ["orders", "detail", "drawer-none"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${viewOrderId}`),
+    enabled: viewOpen && Boolean(viewOrderId),
+  });
+
+  const viewDocumentsFallbackQuery = useQuery({
+    queryKey: viewOrderId ? queryKeys.orders.documents(viewOrderId) : ["orders", "documents", "drawer-none"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderDocument>>(`/api/orders/${viewOrderId}/documents`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.documents?.length ?? 0),
+  });
+
+  const viewStatusFallbackQuery = useQuery({
+    queryKey: viewOrderId ? queryKeys.orders.statusHistory(viewOrderId) : ["orders", "status-history", "drawer-none"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderStatusHistoryItem>>(`/api/orders/${viewOrderId}/status-history`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled:
+      viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.status_history?.length ?? 0),
+  });
+
+  const viewChatFallbackQuery = useQuery({
+    queryKey: viewOrderId ? queryKeys.orders.chatMessages(viewOrderId) : ["orders", "chat-messages", "drawer-none"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderChatMessage>>(`/api/orders/${viewOrderId}/chat-messages`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.chat_messages?.length ?? 0),
+  });
+
+  const editDetailQuery = useQuery({
+    queryKey: selectedOrderId ? queryKeys.orders.detail(selectedOrderId) : ["orders", "detail", "none"],
+    queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${selectedOrderId}`),
+    enabled: editOpen && Boolean(selectedOrderId),
+  });
+
   const createMetadataQuery = useQuery({
     queryKey: ["orders", "create-metadata", isClientRole],
     queryFn: () =>
@@ -605,6 +817,12 @@ function OrdersPageContent() {
         ? apiRequest<ClientOrderCreateMetadata>("/api/client/orders/create-metadata")
         : apiRequest<OrderCreateMetadata>("/api/orders/create-metadata"),
     enabled: createOpen && canCreate,
+  });
+
+  const editMetadataQuery = useQuery({
+    queryKey: ["orders", "edit-metadata"],
+    queryFn: () => apiRequest<OrderCreateMetadata>("/api/orders/create-metadata"),
+    enabled: editOpen && canWriteOrder,
   });
 
   const clientCompaniesQuery = useQuery({
@@ -623,6 +841,27 @@ function OrdersPageContent() {
   const selectedClientCompany = useMemo(
     () => (clientCompaniesQuery.data?.items ?? []).find((item) => item.company_id === createCompanyId),
     [clientCompaniesQuery.data?.items, createCompanyId],
+  );
+
+  const editClientCompaniesQuery = useQuery({
+    queryKey: ["orders", "edit-client-companies", editCompanyQueryText],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderClientCompanyLookupItem>>("/api/orders/client-companies", {
+        query: {
+          page: 1,
+          page_size: 50,
+          query: editCompanyQueryText || undefined,
+        },
+      }),
+    enabled: editOpen && !isClientRole && canWriteOrder,
+  });
+
+  const selectedEditCompany = useMemo(
+    () =>
+      (editClientCompaniesQuery.data?.items ?? []).find(
+        (item) => item.company_id === editCompanyId,
+      ),
+    [editClientCompaniesQuery.data?.items, editCompanyId],
   );
 
   const tripsQuery = useQuery({
@@ -678,6 +917,24 @@ function OrdersPageContent() {
     enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
   });
 
+  const editFactoryOptionsQuery = useQuery({
+    queryKey: ["factories", "order-edit-options", editFactoryCountryId],
+    queryFn: async () => {
+      if (!editFactoryCountryId) {
+        return [] as Array<{ id: number; name: string; subtitle: string }>;
+      }
+      const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+        query: { page: 1, page_size: 200, sort_desc: false, country_id: editFactoryCountryId },
+      });
+      return response.items.map((factory) => ({
+        id: factory.id,
+        name: factory.name,
+        subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+      }));
+    },
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
+  });
+
   const factoryContactsQuery = useQuery({
     queryKey: ["orders", "create-factory-contacts", createFactoryId],
     queryFn: () =>
@@ -685,6 +942,15 @@ function OrdersPageContent() {
         query: { page: 1, page_size: 200 },
       }),
     enabled: createOpen && !isClientRole && canCreate && createFactoryMode === "existing" && Boolean(createFactoryId),
+  });
+
+  const editFactoryContactsQuery = useQuery({
+    queryKey: ["orders", "edit-factory-contacts", editFactoryId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryContactOption>>(`/api/factories/${editFactoryId}/contacts`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
   });
 
   const countriesQuery = useQuery({
@@ -723,12 +989,28 @@ function OrdersPageContent() {
     enabled: createOpen && createFactoryMode === "existing" && Boolean(createFactoryId) && canCreate,
   });
 
+  const editLoadingAddressesQuery = useQuery({
+    queryKey: ["orders", "edit-loading-addresses", editFactoryId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${editFactoryId}/loading-addresses`, {
+        query: { page: 1, page_size: 500 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
+  });
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setPostcodeQueryDebounced(postcodeQuery.trim());
     }, 300);
     return () => window.clearTimeout(timer);
   }, [postcodeQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setEditPostcodeQueryDebounced(editPostcodeQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [editPostcodeQuery]);
 
   const postcodeOptionsQuery = useQuery({
     queryKey: ["orders", "create-postcodes", isClientRole, createFactoryCountryId, postcodeQueryDebounced],
@@ -742,6 +1024,20 @@ function OrdersPageContent() {
         },
       }),
     enabled: createOpen && canCreate && Boolean(createFactoryCountryId),
+  });
+
+  const editPostcodeOptionsQuery = useQuery({
+    queryKey: ["orders", "edit-postcodes", editFactoryCountryId, editPostcodeQueryDebounced],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Postcode>>("/api/postcodes", {
+        query: {
+          page: 1,
+          page_size: 200,
+          country_id: editFactoryCountryId,
+          query: editPostcodeQueryDebounced || undefined,
+        },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
   });
 
   const createLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", createForm) as number | undefined;
@@ -761,6 +1057,15 @@ function OrdersPageContent() {
     enabled: createOpen && canCreate && Boolean(createLoadingPostcodeIdUi),
   });
 
+  const editPostcodeCitiesQuery = useQuery({
+    queryKey: ["orders", "edit-postcode-cities", editLoadingPostcodeIdUi],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(`/api/postcodes/${editLoadingPostcodeIdUi}/cities`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editLoadingPostcodeIdUi),
+  });
+
   const loadingAddressQuickCitiesQuery = useQuery({
     queryKey: ["orders", "create-loading-address-quick-cities", isClientRole, loadingAddressQuickPostcodeId],
     queryFn: () =>
@@ -772,6 +1077,81 @@ function OrdersPageContent() {
       ),
     enabled: createOpen && factoryLoadingAddressModalOpen && Boolean(loadingAddressQuickPostcodeId),
   });
+
+  const toEditFormValues = useCallback(
+    (detail: OrderInternalEditRead): OrderEditForm => {
+      const order = detail.order;
+      const factorySelection = (detail.factory_selection ?? {}) as OrderEditFactorySelection;
+      const loadingAddress = factorySelection.loading_address ?? null;
+      const factoryContact = factorySelection.factory_contact ?? null;
+      const rawCertificateIntent = order.raw_payload?.certificate_intent;
+      const certificateIntent = typeof rawCertificateIntent === "string" ? rawCertificateIntent : undefined;
+      const goodsLines = (detail.goods_lines ?? []).map((line) => normalizeGoodsLineFromDetail(line));
+
+      return {
+        order_date: parseDayjsValue(order.order_date ?? undefined),
+        status_name: order.status_name ?? undefined,
+        status_date: parseDayjsValue(order.status_date ?? undefined),
+        order_number: order.order_number ?? undefined,
+        company_id: order.company_id ?? undefined,
+        company_contact_id: undefined,
+        invoice_on_other_company: toOptionalBoolean(order.raw_payload?.invoice_on_other_company),
+        invoice_company_name: (order.raw_payload?.invoice_company_name as string | undefined) ?? undefined,
+        self_delivery: toOptionalBoolean(order.raw_payload?.self_delivery),
+        assigned_forwarder_user_id: order.assigned_forwarder_user_id ?? undefined,
+        self_delivery_forwarder_user_id: toOptionalInteger(order.raw_payload?.self_delivery_forwarder_user_id),
+        factory_country_id: factorySelection.country_id ?? undefined,
+        factory_id: factorySelection.factory_id ?? undefined,
+        loading_address_id: factorySelection.loading_address_id ?? undefined,
+        loading_postcode_id_ui: loadingAddress?.postcode_id ?? undefined,
+        loading_city_id_ui: loadingAddress?.city_id ?? undefined,
+        loading_address_line: loadingAddress?.address ?? undefined,
+        loading_address_fax: loadingAddress?.fax ?? undefined,
+        factory_contact_id: factorySelection.factory_contact_id ?? undefined,
+        factory_contact_email: factoryContact?.email ?? undefined,
+        factory_contact_name: factoryContact?.full_name ?? undefined,
+        factory_contact_phone: factoryContact?.phone ?? undefined,
+        ready_date: parseDayjsValue(order.ready_date ?? undefined),
+        pickup_date_from: parseDayjsValue((order.raw_payload?.pickup_date_from as string | undefined) ?? undefined),
+        pickup_date_to: parseDayjsValue((order.raw_payload?.pickup_date_to as string | undefined) ?? undefined),
+        certificate_intent_enabled: Boolean(certificateIntent),
+        certificate_intent: certificateIntent,
+        invoice_number: order.invoice_number ?? undefined,
+        client_goods_value_amount:
+          typeof order.client_goods_value_amount === "number"
+            ? String(order.client_goods_value_amount)
+            : (order.client_goods_value_amount ?? undefined),
+        client_goods_value_currency: order.client_goods_value_currency ?? "EUR",
+        client_goods_value_currency_other_label:
+          (order.raw_payload?.client_goods_value_currency_other_label as string | undefined) ?? undefined,
+        goods_lines: goodsLines,
+        declared_volume_m3:
+          typeof order.declared_volume_m3 === "number" ? String(order.declared_volume_m3) : (order.declared_volume_m3 ?? undefined),
+        volume_m3: typeof order.volume_m3 === "number" ? String(order.volume_m3) : (order.volume_m3 ?? undefined),
+        declared_total_weight_kg:
+          (order.raw_payload?.declared_total_weight_kg as string | undefined) ??
+          (typeof order.actual_weight_kg === "number" ? String(order.actual_weight_kg) : (order.actual_weight_kg ?? undefined)),
+        cargo_places_qty: order.box_qty ?? undefined,
+        measurement_status: order.measurement_payload?.status ?? undefined,
+        actual_volume_m3: order.actual_volume_m3 ?? undefined,
+        weighing_status: order.weighing_payload?.status ?? undefined,
+        actual_weight_kg: order.actual_weight_kg ?? undefined,
+        actual_qty: order.actual_qty ?? undefined,
+        quantity_whs: order.quantity_whs ?? undefined,
+        product_characteristic_codes: order.product_characteristic_tags?.map((tag) => tag.code) ?? undefined,
+        office_mark_codes: order.office_mark_tags?.map((tag) => tag.code) ?? undefined,
+        additional_description: order.additional_description ?? undefined,
+        comment: order.comment ?? undefined,
+        is_1c: toOptionalBoolean(order.raw_payload?.is_1c),
+        is_factory_payment_via_company: toOptionalBoolean(order.raw_payload?.is_factory_payment_via_company),
+        is_checked: order.is_checked ?? undefined,
+        is_factory_payment_completed: order.is_factory_payment_completed ?? undefined,
+        mrn: order.mrn ?? undefined,
+        trip_id: order.trip_id ?? undefined,
+      };
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!createOpen || !createFactoryId || createFactoryMode !== "existing") {
@@ -1016,6 +1396,42 @@ function OrdersPageContent() {
     },
   });
 
+  const editFactoryContactMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; full_name: string; phone: string; email: string }) =>
+      apiRequest<FactoryContactOption>(`/api/factories/${payload.factoryId}/contacts`, {
+        method: "POST",
+        body: {
+          full_name: payload.full_name,
+          phone: payload.phone,
+          email: payload.email,
+          is_primary: false,
+        },
+      }),
+    onSuccess: async (result) => {
+      message.success("Контакт фабрики добавлен");
+      setEditFactoryContactModalOpen(false);
+      editFactoryContactQuickForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders", "edit-factory-contacts", editFactoryId] });
+      const updatedOptions = [result, ...(editContactEmailOptions.filter((item) => item.id !== result.id))];
+      setEditContactEmailOptions(updatedOptions);
+      editForm.setFieldValue("factory_contact_id", result.id);
+      editForm.setFieldValue("factory_contact_email", result.email ?? undefined);
+      editForm.setFieldValue("factory_contact_name", result.full_name ?? undefined);
+      editForm.setFieldValue("factory_contact_phone", result.phone ?? undefined);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, {
+          factory_contact_id: result.id,
+          factory_contact_email: result.email ?? undefined,
+          factory_contact_name: result.full_name ?? undefined,
+          factory_contact_phone: result.phone ?? undefined,
+        });
+      }
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления контакта");
+    },
+  });
+
   const createFactoryLoadingAddressMutation = useMutation({
     mutationFn: (payload: { factoryId: number; countryId: number; name: string; address: string; postcode_id: number; city_id: number }) =>
       apiRequest<FactoryLoadingAddress>(`/api/factories/${payload.factoryId}/loading-addresses`, {
@@ -1139,6 +1555,41 @@ function OrdersPageContent() {
     return true;
   }
 
+  function applyEdit422FieldErrors(detail: string) {
+    const text = detail.toLowerCase();
+    const fieldErrors: Array<{ name: (string | number)[]; errors: string[] }> = [];
+    const mark = (name: (string | number)[] | string, messageText: string) => {
+      fieldErrors.push({ name: Array.isArray(name) ? name : [name], errors: [messageText] });
+    };
+
+    if (text.includes("company_contact_id")) {
+      mark("company_contact_id", "Выберите клиента");
+    }
+    if (text.includes("loading_address_id")) {
+      mark("loading_address_id", "Выберите адрес погрузки");
+    }
+    if (text.includes("factory_contact_id") || text.includes("email_id")) {
+      mark("factory_contact_id", "Выберите email контакта фабрики");
+    }
+    if (text.includes("pickup_date_from") || text.includes("pickup_date_to")) {
+      mark("pickup_date_from", "Проверьте диапазон дат вывоза");
+      mark("pickup_date_to", "Проверьте диапазон дат вывоза");
+    }
+    if (text.includes("certificate_intent")) {
+      mark("certificate_intent", "Проверьте значение сертификата");
+    }
+    if (text.includes("client_goods_value_currency_other_label")) {
+      mark("client_goods_value_currency_other_label", "Для OTHER укажите валюту");
+    }
+    if (text.includes("goods_lines")) {
+      mark("goods_lines", "Проверьте строки товаров");
+    }
+
+    if (!fieldErrors.length) return false;
+    editForm.setFields(fieldErrors as Parameters<typeof editForm.setFields>[0]);
+    return true;
+  }
+
   function closeAndResetCreateModal() {
     setCreateOpen(false);
     setCreateStep(0);
@@ -1180,6 +1631,87 @@ function OrdersPageContent() {
       isRehydratingCreateFormRef.current = false;
     });
   }, [createForm, createOpen]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId) {
+      hydratedEditOrderIdRef.current = null;
+      return;
+    }
+    if (hydratedEditOrderIdRef.current === selectedOrderId) return;
+
+    const existingDraftValues = editDraftsByOrderId[selectedOrderId]?.values;
+    if (existingDraftValues) {
+      isRehydratingEditFormRef.current = true;
+      editForm.setFieldsValue(existingDraftValues as Partial<OrderEditForm>);
+      queueMicrotask(() => {
+        isRehydratingEditFormRef.current = false;
+      });
+      hydratedEditOrderIdRef.current = selectedOrderId;
+      return;
+    }
+
+    if (!editDetailQuery.data) return;
+    const nextValues = toEditFormValues(editDetailQuery.data);
+    setEditDraft(selectedOrderId, nextValues as Record<string, unknown>, {
+      dirty: false,
+      hydratedAt: new Date().toISOString(),
+    });
+    isRehydratingEditFormRef.current = true;
+    editForm.setFieldsValue(nextValues);
+    queueMicrotask(() => {
+      isRehydratingEditFormRef.current = false;
+    });
+    hydratedEditOrderIdRef.current = selectedOrderId;
+  }, [editDetailQuery.data, editDraftsByOrderId, editForm, editOpen, selectedOrderId, setEditDraft, toEditFormValues]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (!editCertificateIntentEnabled) {
+      editForm.setFieldValue("certificate_intent", undefined);
+    }
+  }, [editCertificateIntentEnabled, editForm, editOpen]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (editClientGoodsCurrency !== "OTHER") {
+      editForm.setFieldValue("client_goods_value_currency_other_label", undefined);
+    }
+  }, [editClientGoodsCurrency, editForm, editOpen]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (editSelfDelivery) {
+      const assigned = editForm.getFieldValue("assigned_forwarder_user_id");
+      const self = editForm.getFieldValue("self_delivery_forwarder_user_id");
+      if (!self && assigned) {
+        editForm.setFieldValue("self_delivery_forwarder_user_id", assigned);
+      }
+      return;
+    }
+    editForm.setFieldValue("self_delivery_forwarder_user_id", undefined);
+  }, [editForm, editOpen, editSelfDelivery]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId || !editFactoryContactsQuery.data?.items) return;
+    const items = editFactoryContactsQuery.data.items;
+    setEditContactEmailOptions(items);
+    const selectedContactId = editForm.getFieldValue("factory_contact_id") as number | undefined;
+    const byId = items.find((contact) => contact.id === selectedContactId);
+    if (!byId) return;
+    editForm.setFieldValue("factory_contact_email", byId.email ?? undefined);
+    editForm.setFieldValue("factory_contact_name", byId.full_name ?? undefined);
+    editForm.setFieldValue("factory_contact_phone", byId.phone ?? undefined);
+  }, [editFactoryContactsQuery.data?.items, editForm, editOpen, selectedOrderId]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId || !editLoadingAddressId) return;
+    const selectedAddress = (editLoadingAddressesQuery.data?.items ?? []).find((item) => item.id === editLoadingAddressId);
+    if (!selectedAddress) return;
+    editForm.setFieldValue("loading_postcode_id_ui", selectedAddress.postcode_id ?? undefined);
+    editForm.setFieldValue("loading_city_id_ui", selectedAddress.city_id ?? undefined);
+    editForm.setFieldValue("loading_address_line", selectedAddress.address ?? undefined);
+    editForm.setFieldValue("loading_address_fax", selectedAddress.fax ?? undefined);
+  }, [editForm, editLoadingAddressId, editLoadingAddressesQuery.data?.items, editOpen, selectedOrderId]);
 
   function getCreateStepFieldNames(step: number): NamePath[] {
     const values = createForm.getFieldsValue(true) as OrderCreateForm;
@@ -1598,18 +2130,138 @@ function OrdersPageContent() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: OrderEditForm }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}`, {
+    mutationFn: async ({ id, payload }: { id: number; payload: OrderEditForm }) => {
+      const compact = <T extends Record<string, unknown>>(source: T) =>
+        Object.fromEntries(
+          Object.entries(source).filter(([, value]) => value !== undefined),
+        ) as Partial<T>;
+
+      const normalizedCurrency = normalizeCurrencyPayload(
+        payload.client_goods_value_currency,
+        payload.client_goods_value_currency_other_label,
+        "client_goods_value_currency_other_label",
+      );
+
+      const orderPayload = compact({
+        order_date: payload.order_date?.format("YYYY-MM-DD"),
+        status_name: payload.status_name,
+        status_date: payload.status_date?.format("YYYY-MM-DD"),
+        order_number: trimOrUndefined(payload.order_number),
+        company_contact_id: payload.company_contact_id,
+        invoice_on_other_company: payload.invoice_on_other_company,
+        invoice_company_name: trimOrUndefined(payload.invoice_company_name),
+        self_delivery: payload.self_delivery,
+        assigned_forwarder_user_id: payload.assigned_forwarder_user_id,
+        self_delivery_forwarder_user_id: payload.self_delivery ? payload.self_delivery_forwarder_user_id : undefined,
+        ready_date: payload.ready_date?.format("YYYY-MM-DD"),
+        pickup_date_from: payload.pickup_date_from?.format("YYYY-MM-DD"),
+        pickup_date_to: payload.pickup_date_to?.format("YYYY-MM-DD"),
+        certificate_intent: payload.certificate_intent_enabled
+          ? trimOrUndefined(payload.certificate_intent) ?? null
+          : null,
+        invoice_number: trimOrUndefined(payload.invoice_number),
+        client_goods_value_amount: trimOrUndefined(payload.client_goods_value_amount),
+        client_goods_value_currency: normalizedCurrency.currency,
+        client_goods_value_currency_other_label: normalizedCurrency.otherLabel ?? null,
+        declared_volume_m3: trimOrUndefined(payload.declared_volume_m3),
+        volume_m3: trimOrUndefined(payload.volume_m3),
+        declared_total_weight_kg: trimOrUndefined(payload.declared_total_weight_kg),
+        cargo_places_qty: payload.cargo_places_qty,
+        measurement_payload: payload.measurement_status ? { status: payload.measurement_status } : undefined,
+        actual_volume_m3: trimOrUndefined(payload.actual_volume_m3),
+        weighing_payload: payload.weighing_status ? { status: payload.weighing_status } : undefined,
+        actual_weight_kg: trimOrUndefined(payload.actual_weight_kg),
+        actual_qty: payload.actual_qty,
+        quantity_whs: payload.quantity_whs,
+        product_characteristic_codes: payload.product_characteristic_codes,
+        office_mark_codes: payload.office_mark_codes,
+        additional_description: trimOrUndefined(payload.additional_description),
+        comment: trimOrUndefined(payload.comment),
+        is_1c: payload.is_1c,
+        is_factory_payment_via_company: payload.is_factory_payment_via_company,
+        is_checked: payload.is_checked,
+        is_factory_payment_completed: payload.is_factory_payment_completed,
+        mrn: trimOrUndefined(payload.mrn),
+        trip_id: payload.trip_id ?? null,
+      });
+
+      const factorySelection = compact({
+        factory_mode: "existing",
+        country_id: payload.factory_country_id,
+        factory_id: payload.factory_id,
+        loading_address_id: payload.loading_address_id,
+        factory_contact_id: payload.factory_contact_id,
+      });
+
+      const goodsLines = (payload.goods_lines ?? [])
+        .map((line) =>
+          compact({
+            item_type: trimOrUndefined(line.item_type),
+            custom_item_type: trimOrUndefined(line.custom_item_type),
+            description: trimOrUndefined(line.description),
+            weight_kg: trimOrUndefined(line.weight_kg),
+            quantity_value: trimOrUndefined(line.quantity_value),
+            quantity_unit: trimOrUndefined(line.quantity_unit),
+          }),
+        )
+        .filter((line) => Object.keys(line).length > 0);
+
+      const filesToUpload: Array<{ slot: string; file: File }> = [];
+      const documentsPayload = (payload.documents ?? []).flatMap((entry, index) => {
+        const docType = trimOrUndefined(entry.document_type);
+        const file = entry.file_list?.[0]?.originFileObj;
+        if (!docType || !file) return [];
+        const slot = `edit_doc_${Date.now()}_${index}`;
+        filesToUpload.push({ slot, file });
+        return [
+          compact({
+            document_type: docType,
+            display_name: trimOrUndefined(entry.display_name),
+            file_slot: slot,
+          }),
+        ];
+      });
+
+      const multipartPayload = {
+        order: orderPayload,
+        factory_selection: factorySelection,
+        goods_lines: goodsLines,
+        documents: documentsPayload,
+      };
+
+      const formData = new FormData();
+      formData.set("payload", JSON.stringify(multipartPayload));
+      filesToUpload.forEach(({ slot, file }) => formData.append(slot, file));
+
+      return apiRequest<OrderDetail>(`/api/orders/${id}`, {
         method: "PATCH",
-        body: toOrderWritePayload(payload as OrderWritePayload),
-      }),
+        body: formData,
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Заказ обновлен");
-      setEditOpen(false);
+      if (values?.id) {
+        resetEditDraft(values.id);
+      }
+      if (selected?.id) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
+        await editDetailQuery.refetch();
+      }
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления заказа");
+      if (error instanceof ApiError) {
+        if (error.status === 422) {
+          applyEdit422FieldErrors(error.detail);
+        }
+        message.error(error.detail);
+        return;
+      }
+      if (error instanceof Error) {
+        message.error(error.message);
+        return;
+      }
+      message.error("Ошибка обновления заказа");
     },
   });
 
@@ -1854,14 +2506,29 @@ function OrdersPageContent() {
   }
 
   function openEdit(record: OrderListItem) {
+    setViewOpen(false);
+    setViewOrderId(null);
     setSelected(record);
-    editForm.setFieldsValue({
-      order_number: record.order_number ?? undefined,
-      comment: record.comment ?? undefined,
-      status_name: record.status_name ?? undefined,
-      trip_id: record.trip_id ?? undefined,
-    });
+    setEditCompanyQueryText(record.company_name ?? "");
+    const existingDraft = editDraftsByOrderId[record.id]?.values;
+    if (existingDraft) {
+      editForm.setFieldsValue(existingDraft as Partial<OrderEditForm>);
+    } else {
+      editForm.setFieldsValue({
+        order_number: record.order_number ?? undefined,
+        comment: record.comment ?? undefined,
+        status_name: record.status_name ?? undefined,
+        trip_id: record.trip_id ?? undefined,
+        order_date: parseDayjsValue(record.order_date ?? undefined),
+        status_date: parseDayjsValue(record.status_date ?? undefined),
+      });
+    }
     setEditOpen(true);
+  }
+
+  function openView(record: OrderListItem) {
+    setViewOrderId(record.id);
+    setViewOpen(true);
   }
 
   function openStatus(record: OrderListItem) {
@@ -2070,7 +2737,11 @@ function OrdersPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
       width: 180,
-      render: (value: string | null, record) => <Link href={`/orders/${record.id}`}>{renderOrderNumber(value)}</Link>,
+      render: (value: string | null, record) => (
+        <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openView(record)}>
+          {renderOrderNumber(value)}
+        </Button>
+      ),
     },
     {
       title: "Клиент",
@@ -2264,7 +2935,7 @@ function OrdersPageContent() {
       width: 190,
       render: (_, record) => (
         <Space size={4}>
-          <Button size="small" type="link" onClick={() => router.push(`/orders/${record.id}`)}>
+          <Button size="small" type="link" onClick={() => openView(record)}>
             Открыть
           </Button>
           {orderActions(record).length ? (
@@ -2386,6 +3057,61 @@ function OrdersPageContent() {
     return `${itemTypeLabel} + ${weight} + ${quantity} + ${unit}`;
   }
 
+  function openEditOrderGoodsLineModal() {
+    setEditGoodsLineEditIndex(null);
+    editGoodsLineQuickForm.resetFields();
+    setEditGoodsLineModalOpen(true);
+  }
+
+  function openUpdateOrderGoodsLineModal(index: number) {
+    const line = editGoodsLineRows[index];
+    if (!line) return;
+    setEditGoodsLineEditIndex(index);
+    editGoodsLineQuickForm.setFieldsValue(line);
+    setEditGoodsLineModalOpen(true);
+  }
+
+  function removeEditOrderGoodsLine(index: number) {
+    if (!selectedOrderId) return;
+    const nextLines = editGoodsLineRows.filter((_, currentIndex) => currentIndex !== index);
+    editForm.setFieldValue("goods_lines", nextLines);
+    mergeEditDraft(selectedOrderId, { goods_lines: nextLines });
+  }
+
+  async function saveEditOrderGoodsLine(values: OrderCreateGoodsLineForm) {
+    if (!selectedOrderId) return;
+    const itemType = trimOrUndefined(values.item_type);
+    const customItemType = trimOrUndefined(values.custom_item_type);
+    if (itemType === "other" && !customItemType) {
+      editGoodsLineQuickForm.setFields([
+        { name: ["custom_item_type"], errors: ["Укажите свой тип для 'другой'"] },
+      ]);
+      return;
+    }
+
+    const nextLine: OrderCreateGoodsLineForm = {
+      item_type: itemType,
+      custom_item_type: itemType === "other" ? customItemType : undefined,
+      description: trimOrUndefined(values.description),
+      weight_kg: trimOrUndefined(values.weight_kg),
+      quantity_value: trimOrUndefined(values.quantity_value),
+      quantity_unit: trimOrUndefined(values.quantity_unit),
+    };
+
+    const nextLines = [...editGoodsLineRows];
+    if (editGoodsLineEditIndex === null) {
+      nextLines.push(nextLine);
+    } else {
+      nextLines[editGoodsLineEditIndex] = nextLine;
+    }
+
+    editForm.setFieldValue("goods_lines", nextLines);
+    mergeEditDraft(selectedOrderId, { goods_lines: nextLines });
+    setEditGoodsLineModalOpen(false);
+    setEditGoodsLineEditIndex(null);
+    editGoodsLineQuickForm.resetFields();
+  }
+
   function handleTableChange(
     pagination: TablePaginationConfig,
     _: unknown,
@@ -2404,6 +3130,17 @@ function OrdersPageContent() {
   }
 
   const rows = useMemo(() => listQuery.data?.items ?? [], [listQuery.data?.items]);
+  const viewOrder = viewOrderQuery.data;
+  const viewGoodsLines = viewOrder?.goods_lines ?? [];
+  const viewDocuments = viewOrder?.documents?.length
+    ? viewOrder.documents
+    : (viewDocumentsFallbackQuery.data?.items ?? []);
+  const viewStatusHistory = viewOrder?.status_history?.length
+    ? viewOrder.status_history
+    : (viewStatusFallbackQuery.data?.items ?? []);
+  const viewChatMessages = viewOrder?.chat_messages?.length
+    ? viewOrder.chat_messages
+    : (viewChatFallbackQuery.data?.items ?? []);
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
@@ -2545,6 +3282,53 @@ function OrdersPageContent() {
       label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
       value: item.id,
     }));
+  const editOfficeMarkOptions = toSelectOptions(editMetadataQuery.data?.office_mark_options);
+  const editProductCharacteristicOptions = toSelectOptions(editMetadataQuery.data?.product_characteristic_options);
+  const editCertificateIntentOptions = toSelectOptions(editMetadataQuery.data?.certificate_intent_options);
+  const editItemTypeOptions = toSelectOptions(editMetadataQuery.data?.item_type_options);
+  const editQuantityUnitOptions =
+    toSelectOptions(editMetadataQuery.data?.quantity_unit_options).length > 0
+      ? toSelectOptions(editMetadataQuery.data?.quantity_unit_options)
+      : QUANTITY_UNIT_FALLBACK_OPTIONS;
+  const editDocumentTypeOptions = toSelectOptions(editMetadataQuery.data?.document_type_options);
+  const editMeasurementStatusOptions = toSelectOptions(editMetadataQuery.data?.measurement_status_options);
+  const editWeighingStatusOptions = toSelectOptions(editMetadataQuery.data?.weighing_status_options);
+  const editFactoryContactEmailSelectOptions = editContactEmailOptions
+    .filter((item) => Boolean(item.email))
+    .map((item) => ({
+      label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
+      value: item.id,
+    }));
+  const editCountryOptions = countryOptions;
+  const editFactoryOptions = (editFactoryOptionsQuery.data ?? []).map((factory) => ({
+    label: [factory.name, factory.subtitle].filter(Boolean).join(" (") + (factory.subtitle ? ")" : ""),
+    value: factory.id,
+  }));
+  const editLoadingAddressOptions = (editLoadingAddressesQuery.data?.items ?? []).map((address) => ({
+    label: (address.name?.trim() || address.address || `Адрес #${address.id}`) + (address.is_primary ? " (Primary)" : ""),
+    value: address.id,
+  }));
+  const editPostcodeOptions = (editPostcodeOptionsQuery.data?.items ?? []).map((postcode) => ({
+    label: postcode.postcode,
+    value: postcode.id,
+  }));
+  const editCityOptions = (editPostcodeCitiesQuery.data?.items ?? []).map((city) => ({
+    label: city.city,
+    value: city.id,
+  }));
+  const editPriceCoefficient = formatRatio(
+    Form.useWatch("client_goods_value_amount", editForm),
+    Form.useWatch("declared_volume_m3", editForm),
+  );
+  const editWeightCoefficient = formatRatio(
+    Form.useWatch("declared_volume_m3", editForm),
+    Form.useWatch("declared_total_weight_kg", editForm),
+  );
+  const editCompanyOptions = (editClientCompaniesQuery.data?.items ?? []).map((item) => ({
+    label: `${item.company_name} (ID ${item.company_id})`,
+    value: item.company_id,
+  }));
+  const selectedEditCompanyContacts = selectedEditCompany?.contacts ?? [];
 
   useEffect(() => {
     if (!createOpen || isClientRole) return;
@@ -2558,6 +3342,17 @@ function OrdersPageContent() {
     createForm.setFieldValue(["create_factory_contact", "phone"], selectedFactoryContact.phone);
     createForm.setFieldValue(["create_factory_contact", "email"], selectedFactoryContact.email ?? undefined);
   }, [createForm, createOpen, isClientRole, selectedFactoryContact]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId) return;
+    const contactId = editForm.getFieldValue("factory_contact_id") as number | undefined;
+    if (!contactId) return;
+    const selectedContact = editContactEmailOptions.find((item) => item.id === contactId);
+    if (!selectedContact) return;
+    editForm.setFieldValue("factory_contact_email", selectedContact.email ?? undefined);
+    editForm.setFieldValue("factory_contact_name", selectedContact.full_name ?? undefined);
+    editForm.setFieldValue("factory_contact_phone", selectedContact.phone ?? undefined);
+  }, [editContactEmailOptions, editForm, editOpen, selectedOrderId]);
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
@@ -2581,7 +3376,7 @@ function OrdersPageContent() {
           />
         }
         actions={
-          canCreate ? (
+          isHydrated && canCreate ? (
             <Button type="primary" onClick={openCreateModal}>
               + Новый заказ
             </Button>
@@ -2883,9 +3678,14 @@ function OrdersPageContent() {
                           Выбрать
                         </Checkbox>
                       ) : null}
-                      <Link href={`/orders/${record.id}`} className="crm-row-title">
+                      <Button
+                        type="link"
+                        className="crm-row-title"
+                        style={{ padding: 0, height: "auto" }}
+                        onClick={() => openView(record)}
+                      >
                         {renderOrderNumber(record.order_number)}
-                      </Link>
+                      </Button>
                       <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
                     </div>
                     {renderOrderStatus(record.status_name)}
@@ -2919,7 +3719,7 @@ function OrdersPageContent() {
                   </div>
 
                   <div className="crm-row-actions">
-                    <Button size="small" type="primary" ghost onClick={() => router.push(`/orders/${record.id}`)}>
+                    <Button size="small" type="primary" ghost onClick={() => openView(record)}>
                       Открыть
                     </Button>
                     {orderActions(record).length ? (
@@ -2993,6 +3793,126 @@ function OrdersPageContent() {
         )}
       </Card>
 
+      <Drawer
+        title={viewOrder ? `Заказ #${viewOrder.id}` : "Карточка заказа"}
+        open={viewOpen}
+        onClose={() => {
+          setViewOpen(false);
+          setViewOrderId(null);
+        }}
+        placement="left"
+        width={640}
+        className="crm-order-view-drawer"
+      >
+        {viewOrderQuery.isLoading ? <Typography.Text>Загрузка...</Typography.Text> : null}
+        {viewOrderQuery.error ? (
+          <Typography.Text type="danger">
+            {viewOrderQuery.error instanceof ApiError ? viewOrderQuery.error.detail : "Ошибка загрузки заказа"}
+          </Typography.Text>
+        ) : null}
+        {viewOrder ? (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Card size="small" title="Общие данные">
+              <Descriptions bordered size="small" column={1}>
+                <Descriptions.Item label="Номер заказа">{renderOrderNumber(viewOrder.order_number)}</Descriptions.Item>
+                <Descriptions.Item label="Статус">{renderOrderStatus(viewOrder.status_name)}</Descriptions.Item>
+                <Descriptions.Item label="Тип заказа">
+                  {viewOrder.order_type ? formatEnumCode(viewOrder.order_type) : "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Компания">{viewOrder.company_name ?? viewOrder.company_id ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Фабрика">{viewOrder.factory_name ?? viewOrder.factory_id ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Рейс">{viewOrder.trip_name ?? viewOrder.trip_id ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Инвойс">{viewOrder.invoice_number ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Дата заказа">{viewOrder.order_date ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Дата готовности">{viewOrder.ready_date ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Комментарий">{viewOrder.comment ?? "—"}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            <Card size="small" title="Товары">
+              {viewGoodsLines.length ? (
+                <Table
+                  size="small"
+                  rowKey={(row) => row.id}
+                  pagination={false}
+                  dataSource={viewGoodsLines}
+                  columns={[
+                    { title: "Товар", dataIndex: "product_name", key: "product_name", render: (v) => v ?? "—" },
+                    { title: "Вес", dataIndex: "weight_kg", key: "weight_kg", width: 90, render: (v) => v ?? "—" },
+                    { title: "Кол-во", dataIndex: "quantity", key: "quantity", width: 90, render: (v) => v ?? "—" },
+                    { title: "Ед.", dataIndex: "unit", key: "unit", width: 90, render: (v) => v ?? "—" },
+                  ]}
+                />
+              ) : (
+                <Typography.Text type="secondary">Нет строк товаров</Typography.Text>
+              )}
+            </Card>
+
+            <Card size="small" title="Документы">
+              {viewDocuments.length ? (
+                <Table
+                  size="small"
+                  rowKey={(row) => row.id}
+                  loading={viewDocumentsFallbackQuery.isLoading}
+                  pagination={false}
+                  dataSource={viewDocuments}
+                  columns={[
+                    { title: "Тип", dataIndex: "document_type", key: "document_type", render: (v) => v ?? "—" },
+                    { title: "Имя", dataIndex: "display_name", key: "display_name", render: (v) => v ?? "—" },
+                    { title: "Файл", dataIndex: "file_name", key: "file_name", render: (v) => v ?? "—" },
+                  ]}
+                />
+              ) : (
+                <Typography.Text type="secondary">Нет документов</Typography.Text>
+              )}
+            </Card>
+
+            <Card size="small" title="История статусов">
+              {viewStatusHistory.length ? (
+                <Table
+                  size="small"
+                  rowKey={(row) => row.id}
+                  loading={viewStatusFallbackQuery.isLoading}
+                  pagination={false}
+                  dataSource={viewStatusHistory}
+                  columns={[
+                    { title: "Статус", dataIndex: "status_name", key: "status_name", render: (v: OrderStatus | null) => renderOrderStatus(v) },
+                    { title: "Дата", dataIndex: "status_date", key: "status_date", width: 120, render: (v) => v ?? "—" },
+                    { title: "Комментарий", dataIndex: "comment", key: "comment", render: (v) => v ?? "—" },
+                  ]}
+                />
+              ) : (
+                <Typography.Text type="secondary">Нет истории статусов</Typography.Text>
+              )}
+            </Card>
+
+            <Card size="small" title="Чат">
+              {viewChatMessages.length ? (
+                <Space direction="vertical" style={{ width: "100%" }} size={6}>
+                  {viewChatMessages.map((messageItem) => (
+                    <div key={messageItem.id} className="crm-order-chat-item">
+                      <Typography.Text strong>
+                        {[messageItem.author_full_name, messageItem.author_role_name].filter(Boolean).join(" · ") || "Система"}
+                      </Typography.Text>
+                      <Typography.Paragraph style={{ margin: "2px 0 0" }}>
+                        {messageItem.message}
+                      </Typography.Paragraph>
+                      <Typography.Text type="secondary">{messageItem.created_at}</Typography.Text>
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">Нет сообщений</Typography.Text>
+              )}
+            </Card>
+
+            <Button onClick={() => openEdit(viewOrder)} type="primary">
+              Редактировать в drawer
+            </Button>
+          </Space>
+        ) : null}
+      </Drawer>
+
       <Modal
         title={
           isClientRole
@@ -3002,7 +3922,6 @@ function OrdersPageContent() {
               : "Создать заказ"
         }
         open={createOpen}
-        destroyOnHidden
         className="crm-order-create-modal"
         onCancel={() => {
           Modal.confirm({
@@ -4009,7 +4928,6 @@ function OrdersPageContent() {
       <Modal
         title={goodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
         open={goodsLineModalOpen}
-        destroyOnHidden
         onCancel={() => {
           setGoodsLineModalOpen(false);
           setGoodsLineEditIndex(null);
@@ -4021,15 +4939,19 @@ function OrdersPageContent() {
           <Form.Item name="item_type" label="Тип товара">
             <Select allowClear options={itemTypeOptions} />
           </Form.Item>
-          {goodsLineQuickItemType === "other" ? (
-            <Form.Item
-              name="custom_item_type"
-              label="Свой тип (если другой)"
-              rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
-            >
-              <Input />
-            </Form.Item>
-          ) : null}
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.item_type !== next.item_type}>
+            {({ getFieldValue }) =>
+              getFieldValue("item_type") === "other" ? (
+                <Form.Item
+                  name="custom_item_type"
+                  label="Свой тип (если другой)"
+                  rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
           <Form.Item name="weight_kg" label="Вес, кг">
             <Input />
           </Form.Item>
@@ -4046,29 +4968,488 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={selected ? `Редактировать заказ #${selected.id}` : "Редактировать заказ"}
-        open={editOpen}
-        destroyOnHidden
-        onCancel={() => setEditOpen(false)}
-        onOk={() => editForm.submit()}
-        confirmLoading={updateMutation.isPending}
+        title={editGoodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
+        open={editGoodsLineModalOpen}
+        onCancel={() => {
+          setEditGoodsLineModalOpen(false);
+          setEditGoodsLineEditIndex(null);
+          editGoodsLineQuickForm.resetFields();
+        }}
+        onOk={() => editGoodsLineQuickForm.submit()}
       >
+        <Form<OrderCreateGoodsLineForm> form={editGoodsLineQuickForm} layout="vertical" onFinish={saveEditOrderGoodsLine}>
+          <Form.Item name="item_type" label="Тип товара">
+            <Select allowClear options={editItemTypeOptions} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.item_type !== next.item_type}>
+            {({ getFieldValue }) =>
+              getFieldValue("item_type") === "other" ? (
+                <Form.Item
+                  name="custom_item_type"
+                  label="Свой тип (если другой)"
+                  rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+          <Form.Item name="weight_kg" label="Вес, кг">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_unit" label="Единицы изм.">
+            <Select allowClear options={editQuantityUnitOptions} />
+          </Form.Item>
+          <Form.Item name="quantity_value" label="Кол-во">
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Описание">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый контакт фабрики"
+        open={editFactoryContactModalOpen}
+        destroyOnHidden
+        onCancel={() => setEditFactoryContactModalOpen(false)}
+        onOk={() => editFactoryContactQuickForm.submit()}
+      >
+        <Form
+          form={editFactoryContactQuickForm}
+          layout="vertical"
+          onFinish={(values: { full_name?: string; phone?: string; email?: string }) => {
+            const fullName = trimOrUndefined(values.full_name);
+            const phone = trimOrUndefined(values.phone);
+            const email = trimOrUndefined(values.email);
+            if (!fullName || !phone || !email) {
+              message.error("Заполните имя, телефон и email");
+              return;
+            }
+            if (!editFactoryId) {
+              message.error("Сначала выберите фабрику");
+              return;
+            }
+            editFactoryContactMutation.mutate({
+              factoryId: editFactoryId,
+              full_name: fullName,
+              phone,
+              email,
+            });
+          }}
+        >
+          <Form.Item name="full_name" label="Имя" rules={[{ required: true, message: "Укажите имя" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Укажите телефон" },
+              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[
+              { required: true, message: "Укажите email" },
+              { type: "email", message: "Введите корректный email" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Drawer
+        title={null}
+        open={editOpen}
+        forceRender
+        width={560}
+        placement="left"
+        onClose={() => setEditOpen(false)}
+        className="crm-order-edit-drawer"
+        styles={{
+          body: { paddingBottom: 88 },
+          footer: { borderTop: "1px solid #e5e7eb", padding: "12px 16px", background: "#fff" },
+        }}
+        footer={
+          <div className="crm-order-edit-footer">
+            <Button onClick={() => setEditOpen(false)}>Отмена</Button>
+            <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
+              Сохранить
+            </Button>
+          </div>
+        }
+      >
+        <div className="crm-order-edit-header">
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {selected ? `Редактирование заказа #${selected.id}` : "Редактирование заказа"}
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Последнее изменение:{" "}
+            {editDetailQuery.data?.order?.status_date ? dayjs(editDetailQuery.data.order.status_date).format("DD.MM.YYYY HH:mm") : "—"}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            Изменил: {editDetailQuery.data?.order?.personal_manager_id ? `ID ${editDetailQuery.data.order.personal_manager_id}` : "—"}
+          </Typography.Text>
+        </div>
         <Form<OrderEditForm>
           form={editForm}
           layout="vertical"
+          className="crm-order-edit-form"
+          onValuesChange={(changedValues, allValues) => {
+            if (isRehydratingEditFormRef.current || !selectedOrderId) return;
+            mergeEditDraft(selectedOrderId, {
+              ...(allValues as Record<string, unknown>),
+              ...(changedValues as Record<string, unknown>),
+            });
+          }}
           onFinish={(values) => {
             if (!selected) return;
             updateMutation.mutate({ id: selected.id, payload: values });
           }}
         >
-          <Form.Item name="order_number" label="Номер заказа">
-            <Input />
-          </Form.Item>
-          <Form.Item name="comment" label="Комментарий">
-            <Input.TextArea rows={3} />
-          </Form.Item>
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="order_date" label="Дата заказа">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item name="status_name" label="Статус">
+                <Select allowClear options={ORDER_STATUS_VALUES.map((status) => ({ label: formatEnumCode(status), value: status }))} />
+              </Form.Item>
+              <Form.Item name="status_date" label="Дата изменения статуса">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item name="order_number" label="Номер заказа (внутренний номер клиента)">
+                <Input />
+              </Form.Item>
+              <Form.Item name="company_id" label="Компания">
+                <Select
+                  showSearch
+                  filterOption={false}
+                  options={editCompanyOptions}
+                  onSearch={(value) => setEditCompanyQueryText(value)}
+                  placeholder="Введите название компании"
+                />
+              </Form.Item>
+              <Form.Item name="company_contact_id" label="Имя клиента">
+                <Select
+                  allowClear
+                  options={selectedEditCompanyContacts.map((contact) => ({
+                    label: [contact.full_name, contact.email, contact.phone].filter(Boolean).join(" · "),
+                    value: contact.id,
+                  }))}
+                  placeholder={selectedEditCompanyContacts.length ? "Выберите клиента" : "Сначала выберите компанию"}
+                />
+              </Form.Item>
+              <Form.Item name="invoice_on_other_company" valuePropName="checked">
+                <Checkbox>Инвойс на другую компанию</Checkbox>
+              </Form.Item>
+              <Form.Item name="invoice_company_name" label="Название компании, на которую будет оформлен груз">
+                <Input />
+              </Form.Item>
+            </div>
+          </div>
+
+          <div className="crm-order-create-section crm-order-create-factory-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Фабрика
+            </Typography.Title>
+            <div className="crm-order-create-grid">
+              <Form.Item name="self_delivery" valuePropName="checked">
+                <Checkbox>Самодоставка</Checkbox>
+              </Form.Item>
+              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
+                <Select
+                  allowClear
+                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                    label: [user.full_name, user.login].filter(Boolean).join(" · "),
+                    value: user.id,
+                  }))}
+                />
+              </Form.Item>
+              {editSelfDelivery ? (
+                <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
+                  <Select
+                    allowClear
+                    options={(editMetadataQuery.data?.self_delivery_forwarder_options ?? []).map((forwarder) => ({
+                      label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · "),
+                      value: forwarder.id,
+                    }))}
+                  />
+                </Form.Item>
+              ) : null}
+              <Form.Item name="factory_country_id" label="Страна">
+                <Select allowClear options={editCountryOptions} />
+              </Form.Item>
+              <Form.Item name="factory_id" label="Фабрика">
+                <Select showSearch allowClear optionFilterProp="label" options={editFactoryOptions} />
+              </Form.Item>
+              <Form.Item name="loading_address_id" label="Адрес погрузки (name)">
+                <Select showSearch allowClear optionFilterProp="label" options={editLoadingAddressOptions} />
+              </Form.Item>
+              <Form.Item name="loading_postcode_id_ui" label="Индекс">
+                <Select
+                  showSearch
+                  filterOption={false}
+                  allowClear
+                  options={editPostcodeOptions}
+                  disabled={!editFactoryCountryId}
+                  onSearch={(value) => setEditPostcodeQuery(value)}
+                />
+              </Form.Item>
+              <Form.Item name="loading_city_id_ui" label="Город">
+                <Select allowClear options={editCityOptions} disabled={!editLoadingPostcodeIdUi} />
+              </Form.Item>
+              <Form.Item name="loading_address_line" label="Адрес">
+                <Input />
+              </Form.Item>
+              <Form.Item name="loading_address_fax" label="Факс">
+                <Input />
+              </Form.Item>
+              <div className="crm-order-create-contact-block">
+                <div className="crm-order-create-contact-head">
+                  <Typography.Text strong>Контакты</Typography.Text>
+                  <Button
+                    onClick={() => {
+                      editFactoryContactQuickForm.resetFields();
+                      setEditFactoryContactModalOpen(true);
+                    }}
+                  >
+                    Добавить
+                  </Button>
+                </div>
+                <Form.Item name="factory_contact_id" label="Email">
+                  <Select
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    options={editFactoryContactEmailSelectOptions}
+                    onChange={(value) => {
+                      const selectedOption = editContactEmailOptions.find((item) => item.id === value);
+                      editForm.setFieldValue("factory_contact_email", selectedOption?.email ?? undefined);
+                      editForm.setFieldValue("factory_contact_name", selectedOption?.full_name ?? undefined);
+                      editForm.setFieldValue("factory_contact_phone", selectedOption?.phone ?? undefined);
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item name="factory_contact_name" label="Имя">
+                  <Input readOnly />
+                </Form.Item>
+                <Form.Item name="factory_contact_phone" label="Телефон">
+                  <Input readOnly />
+                </Form.Item>
+              </div>
+            </div>
+          </div>
+
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="ready_date" label="Дата готовности">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item label="Вывоз">
+                <Space.Compact style={{ width: "100%" }}>
+                  <Form.Item name="pickup_date_from" noStyle>
+                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="От" />
+                  </Form.Item>
+                  <Form.Item name="pickup_date_to" noStyle>
+                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="До" />
+                  </Form.Item>
+                </Space.Compact>
+              </Form.Item>
+              <Form.Item name="certificate_intent_enabled" valuePropName="checked">
+                <Checkbox>Сертификат</Checkbox>
+              </Form.Item>
+              {editCertificateIntentEnabled ? (
+                <Form.Item name="certificate_intent" label="Вариант сертификата">
+                  <Select allowClear options={editCertificateIntentOptions} />
+                </Form.Item>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="invoice_number" label="Номер инвойса/проформы">
+                <Input />
+              </Form.Item>
+              <Form.Item name="client_goods_value_amount" label="Стоимость товара от клиента">
+                <Input />
+              </Form.Item>
+              <Form.Item label="Валюта">
+                <div className="crm-order-currency-row">
+                  <Form.Item name="client_goods_value_currency" noStyle>
+                    <Select
+                      className="crm-order-currency-select"
+                      options={[
+                        { label: "USD", value: "USD" },
+                        { label: "RUB", value: "RUB" },
+                        { label: "EUR", value: "EUR" },
+                        { label: "OTHER", value: "OTHER" },
+                      ]}
+                    />
+                  </Form.Item>
+                  {editClientGoodsCurrency === "OTHER" ? (
+                    <Form.Item name="client_goods_value_currency_other_label" className="crm-order-currency-inline-item">
+                      <Input className="crm-order-currency-select" placeholder="Введите валюту" />
+                    </Form.Item>
+                  ) : null}
+                </div>
+              </Form.Item>
+              <Form.Item label="Перечень товаров">
+                <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                  {editGoodsLineRows.map((line, index) => (
+                    <Card
+                      key={`edit-goods-line-${index}`}
+                      size="small"
+                      extra={
+                        <Space>
+                          <Button size="small" onClick={() => openUpdateOrderGoodsLineModal(index)}>
+                            изменить
+                          </Button>
+                          <Button danger size="small" onClick={() => removeEditOrderGoodsLine(index)}>
+                            удалить
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      <Typography.Text>{getGoodsLineSummary(line)}</Typography.Text>
+                    </Card>
+                  ))}
+                  <Button onClick={openEditOrderGoodsLineModal}>Добавить строку товара</Button>
+                </Space>
+              </Form.Item>
+              <Form.Item name="declared_volume_m3" label="Заявленный клиентом объем, м3">
+                <Input />
+              </Form.Item>
+              <Form.Item name="volume_m3" label="Объем из инвойса, м3">
+                <Input />
+              </Form.Item>
+              <Form.Item name="declared_total_weight_kg" label="Суммарный вес товаров, кг">
+                <Input />
+              </Form.Item>
+              <Form.Item name="cargo_places_qty" label="Кол-во грузовых мест">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="measurement_status" label="Перемер">
+                <Select allowClear options={editMeasurementStatusOptions} />
+              </Form.Item>
+              <Form.Item name="actual_volume_m3" label="Актуальный объем, м3">
+                <Input />
+              </Form.Item>
+              <Form.Item name="weighing_status" label="Взвешивание">
+                <Select allowClear options={editWeighingStatusOptions} />
+              </Form.Item>
+              <Form.Item name="actual_weight_kg" label="Актуальный вес, кг">
+                <Input />
+              </Form.Item>
+              <Form.Item name="actual_qty" label="Актуальное количество">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="quantity_whs" label="На складе">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item label="Ценовой коэффициент" extra="Расчет: client_goods_value_amount / declared_volume_m3">
+                <Input readOnly value={editPriceCoefficient} />
+              </Form.Item>
+              <Form.Item label="Весовой коэффициент" extra="Расчет: declared_volume_m3 / declared_total_weight_kg">
+                <Input readOnly value={editWeightCoefficient} />
+              </Form.Item>
+              <Form.Item name="product_characteristic_codes" label="Характеристики товара">
+                <Select mode="multiple" allowClear options={editProductCharacteristicOptions} />
+              </Form.Item>
+              <Form.Item name="office_mark_codes" label="Отметки офиса">
+                <Select mode="multiple" allowClear options={editOfficeMarkOptions} />
+              </Form.Item>
+              <Form.Item name="additional_description" label="Описание заказа">
+                <Input.TextArea rows={5} />
+              </Form.Item>
+              <Form.Item name="comment" label="Комментарий (всё кроме описания заказа)">
+                <Input.TextArea rows={5} />
+              </Form.Item>
+              <div className="crm-order-inline-pair">
+                <Form.Item name="is_1c" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>1С</Checkbox>
+                </Form.Item>
+                <Form.Item name="is_factory_payment_via_company" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Оплата через компанию</Checkbox>
+                </Form.Item>
+              </div>
+              <div className="crm-order-inline-pair">
+                <Form.Item name="is_checked" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Проверен</Checkbox>
+                </Form.Item>
+                <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Оплачено компанией</Checkbox>
+                </Form.Item>
+              </div>
+              <Form.Item name="mrn" label="MRN">
+                <Input />
+              </Form.Item>
+              <Form.Item name="trip_id" label="Рейс">
+                <Select
+                  allowClear
+                  options={(tripsQuery.data?.items ?? []).map((trip) => ({
+                    label: `${trip.id} - ${trip.name}`,
+                    value: trip.id,
+                  }))}
+                />
+              </Form.Item>
+              <Form.List name="documents">
+                {(fields, { add, remove }) => (
+                  <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                    {fields.map((field) => (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        title={`Документ #${field.name + 1}`}
+                        extra={
+                          <Button danger size="small" onClick={() => remove(field.name)}>
+                            Удалить
+                          </Button>
+                        }
+                      >
+                        <div className="crm-order-create-grid">
+                          <Form.Item
+                            name={[field.name, "document_type"]}
+                            label="Тип документа"
+                            rules={[{ required: true, message: "Укажите тип документа" }]}
+                          >
+                            <Select allowClear options={editDocumentTypeOptions} />
+                          </Form.Item>
+                          <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя">
+                            <Input />
+                          </Form.Item>
+                          <Form.Item
+                            name={[field.name, "file_list"]}
+                            label="Выбрать файл"
+                            valuePropName="fileList"
+                            getValueFromEvent={(event) => event?.fileList}
+                            rules={[{ required: true, message: "Выберите файл" }]}
+                          >
+                            <Upload beforeUpload={() => false} maxCount={1}>
+                              <Button>Выбрать файл</Button>
+                            </Upload>
+                          </Form.Item>
+                        </div>
+                      </Card>
+                    ))}
+                    <Button onClick={() => add()} disabled={fields.length >= 10} block>
+                      Добавить документ
+                    </Button>
+                  </Space>
+                )}
+              </Form.List>
+            </div>
+          </div>
         </Form>
-      </Modal>
+      </Drawer>
 
       <Modal
         title={selected ? `Изменить статус #${selected.id}` : "Изменить статус"}
