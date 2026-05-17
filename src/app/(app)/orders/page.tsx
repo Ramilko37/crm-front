@@ -68,14 +68,12 @@ import type {
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
-  OrderChatMessage,
   OrderDocument,
   OrderEditFactorySelection,
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
   OrderDetail,
   OrderFilterParams,
-  OrderStatusHistoryItem,
   OrderInternalEditRead,
   OrderListItem,
   PaginatedResponse,
@@ -103,7 +101,6 @@ type OrderCreateGoodsLineForm = {
 
 type OrderCreateDocumentForm = {
   document_type?: string;
-  display_name?: string;
   file_list?: UploadFile[];
 };
 
@@ -657,6 +654,9 @@ function OrdersPageContent() {
   );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const deepLinkEditOrderId = parseNumber(searchParams.get("edit_order_id"));
+  const standaloneOrderView = searchParams.get("single_order_view") === "1";
+  const deepLinkedOrderIdRef = useRef<number | null>(null);
   const hasActiveFilters = Boolean(
     params.id ||
       params.query ||
@@ -785,29 +785,16 @@ function OrdersPageContent() {
     enabled: viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.documents?.length ?? 0),
   });
 
-  const viewStatusFallbackQuery = useQuery({
-    queryKey: viewOrderId ? queryKeys.orders.statusHistory(viewOrderId) : ["orders", "status-history", "drawer-none"],
-    queryFn: () =>
-      apiRequest<PaginatedResponse<OrderStatusHistoryItem>>(`/api/orders/${viewOrderId}/status-history`, {
-        query: { page: 1, page_size: 200 },
-      }),
-    enabled:
-      viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.status_history?.length ?? 0),
-  });
-
-  const viewChatFallbackQuery = useQuery({
-    queryKey: viewOrderId ? queryKeys.orders.chatMessages(viewOrderId) : ["orders", "chat-messages", "drawer-none"],
-    queryFn: () =>
-      apiRequest<PaginatedResponse<OrderChatMessage>>(`/api/orders/${viewOrderId}/chat-messages`, {
-        query: { page: 1, page_size: 200 },
-      }),
-    enabled: viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.chat_messages?.length ?? 0),
-  });
-
   const editDetailQuery = useQuery({
     queryKey: selectedOrderId ? queryKeys.orders.detail(selectedOrderId) : ["orders", "detail", "none"],
     queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${selectedOrderId}`),
     enabled: editOpen && Boolean(selectedOrderId),
+  });
+
+  const deepLinkOrderQuery = useQuery({
+    queryKey: deepLinkEditOrderId ? queryKeys.orders.detail(deepLinkEditOrderId) : ["orders", "deep-link", "none"],
+    queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${deepLinkEditOrderId}`),
+    enabled: standaloneOrderView && Boolean(deepLinkEditOrderId) && canWriteOrder,
   });
 
   const createMetadataQuery = useQuery({
@@ -1679,6 +1666,64 @@ function OrdersPageContent() {
   }, [editClientGoodsCurrency, editForm, editOpen]);
 
   useEffect(() => {
+    if (!standaloneOrderView || !editOpen || !selectedOrderId) return;
+    if (!editDraftsByOrderId[selectedOrderId]?.dirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editDraftsByOrderId, editOpen, selectedOrderId, standaloneOrderView]);
+
+  useEffect(() => {
+    if (!standaloneOrderView || !editOpen || !selectedOrderId) return;
+    if (!editDraftsByOrderId[selectedOrderId]?.dirty) return;
+
+    const confirmLeave = () => window.confirm("Уверены, что хотите отменить изменения?");
+
+    const handleAnchorNavigation = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const anchor = target?.closest("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#")) return;
+
+      const nextUrl = new URL(href, window.location.href);
+      const sameLocation =
+        nextUrl.pathname === window.location.pathname &&
+        nextUrl.search === window.location.search &&
+        nextUrl.hash === window.location.hash;
+      if (sameLocation) return;
+
+      if (confirmLeave()) {
+        resetEditDraft(selectedOrderId);
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    const handlePopState = () => {
+      if (confirmLeave()) {
+        resetEditDraft(selectedOrderId);
+        return;
+      }
+      window.history.pushState(null, "", window.location.href);
+    };
+
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("click", handleAnchorNavigation, true);
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("click", handleAnchorNavigation, true);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [editDraftsByOrderId, editOpen, resetEditDraft, selectedOrderId, standaloneOrderView]);
+
+  useEffect(() => {
     if (!editOpen) return;
     if (editSelfDelivery) {
       const assigned = editForm.getFieldValue("assigned_forwarder_user_id");
@@ -1817,7 +1862,6 @@ function OrdersPageContent() {
     (values.documents ?? []).forEach((_, index) => {
       names.push(
         ["documents", index, "document_type"],
-        ["documents", index, "display_name"],
         ["documents", index, "file_list"],
       );
     });
@@ -1873,7 +1917,7 @@ function OrdersPageContent() {
         return {
           document_type: resolvedDocumentType,
           file_slot: slot,
-          display_name: trimOrUndefined(document.display_name) ?? file.name,
+          display_name: file.name,
         };
       });
 
@@ -2216,7 +2260,7 @@ function OrdersPageContent() {
         return [
           compact({
             document_type: docType,
-            display_name: trimOrUndefined(entry.display_name),
+            display_name: file.name,
             file_slot: slot,
           }),
         ];
@@ -2505,6 +2549,35 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
+  function closeEditDrawer() {
+    const finishClose = () => {
+      setEditOpen(false);
+      setSelected(null);
+      if (standaloneOrderView) {
+        router.replace("/orders");
+      }
+    };
+
+    if (!selectedOrderId) {
+      finishClose();
+      return;
+    }
+    const isDirty = Boolean(editDraftsByOrderId[selectedOrderId]?.dirty);
+    if (!isDirty || updateMutation.isPending) {
+      finishClose();
+      return;
+    }
+    Modal.confirm({
+      title: "Уверены, что хотите отменить изменения?",
+      okText: "Да, отменить",
+      cancelText: "Продолжить редактирование",
+      onOk: () => {
+        resetEditDraft(selectedOrderId);
+        finishClose();
+      },
+    });
+  }
+
   function openEdit(record: OrderListItem) {
     setViewOpen(false);
     setViewOrderId(null);
@@ -2530,6 +2603,24 @@ function OrdersPageContent() {
     setViewOrderId(record.id);
     setViewOpen(true);
   }
+
+  useEffect(() => {
+    if (!standaloneOrderView || !deepLinkEditOrderId) {
+      deepLinkedOrderIdRef.current = null;
+      return;
+    }
+    if (deepLinkedOrderIdRef.current === deepLinkEditOrderId) return;
+    if (!deepLinkOrderQuery.data?.order) return;
+    openEdit(deepLinkOrderQuery.data.order);
+    deepLinkedOrderIdRef.current = deepLinkEditOrderId;
+  }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, standaloneOrderView]);
+
+  useEffect(() => {
+    if (!standaloneOrderView || !deepLinkEditOrderId) return;
+    if (!deepLinkOrderQuery.isError) return;
+    message.error(deepLinkOrderQuery.error instanceof ApiError ? deepLinkOrderQuery.error.detail : "Заказ не найден");
+    router.replace("/orders");
+  }, [deepLinkEditOrderId, deepLinkOrderQuery.error, deepLinkOrderQuery.isError, message, router, standaloneOrderView]);
 
   function openStatus(record: OrderListItem) {
     setSelected(record);
@@ -2716,7 +2807,7 @@ function OrdersPageContent() {
       render: (_, record) => (record.has_documents || (record.documents_count ?? 0) > 0 ? record.documents_count ?? 0 : "—"),
     },
     {
-      title: "Оплачено TARGET MOB",
+      title: "Оплачено компанией",
       dataIndex: "is_checked",
       key: "is_checked",
       width: 165,
@@ -2748,14 +2839,14 @@ function OrdersPageContent() {
       dataIndex: "company_name",
       key: "company_name",
       width: 180,
-      render: (value: string | null | undefined, record) => value || (record.company_id ? `ID ${record.company_id}` : "—"),
+      render: (value: string | null | undefined) => value || "—",
     },
     {
       title: "Название фабрики",
       dataIndex: "factory_name",
       key: "factory_name",
       width: 180,
-      render: (value: string | null | undefined, record) => value || `ID ${record.factory_id}`,
+      render: (value: string | null | undefined) => value || "—",
     },
     {
       title: "Инвойс/проформа",
@@ -2868,7 +2959,7 @@ function OrdersPageContent() {
       dataIndex: "trip_name",
       key: "trip_name",
       width: 120,
-      render: (value: string | null | undefined, record) => value || (record.trip_id ? `ID ${record.trip_id}` : "—"),
+      render: (value: string | null | undefined) => value || "—",
     },
     {
       title: "Опис.",
@@ -3135,12 +3226,6 @@ function OrdersPageContent() {
   const viewDocuments = viewOrder?.documents?.length
     ? viewOrder.documents
     : (viewDocumentsFallbackQuery.data?.items ?? []);
-  const viewStatusHistory = viewOrder?.status_history?.length
-    ? viewOrder.status_history
-    : (viewStatusFallbackQuery.data?.items ?? []);
-  const viewChatMessages = viewOrder?.chat_messages?.length
-    ? viewOrder.chat_messages
-    : (viewChatFallbackQuery.data?.items ?? []);
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
@@ -3187,15 +3272,15 @@ function OrdersPageContent() {
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.weighing_status_options,
   );
   const clientCompanyOptions = (clientCompaniesQuery.data?.items ?? []).map((item) => ({
-    label: `${item.company_name} (ID ${item.company_id})`,
+    label: item.company_name,
     value: item.company_id,
   }));
   const selectedCompanyContacts = selectedClientCompany?.contacts ?? [];
-  const clientCompanyLabel = meQuery.data?.company_id ? `Компания ID ${meQuery.data.company_id}` : "Компания из токена";
+  const clientCompanyLabel = meQuery.data?.company_id ? "Компания" : "Компания из токена";
   const clientContactUiOptions = meQuery.data?.id
     ? [
         {
-          label: [meQuery.data.full_name, meQuery.data.login].filter(Boolean).join(" · ") || `Пользователь #${meQuery.data.id}`,
+          label: [meQuery.data.full_name, meQuery.data.login].filter(Boolean).join(" · ") || "Пользователь",
           value: meQuery.data.id,
         },
       ]
@@ -3264,7 +3349,7 @@ function OrdersPageContent() {
   const selfDeliveryForwarderOptions = (
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.self_delivery_forwarder_options ?? []
   ).map((forwarder) => ({
-    label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || `ID ${forwarder.id}`,
+    label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || "Экспедитор",
     value: forwarder.id,
   }));
   const clientForwarderUiOptions =
@@ -3305,7 +3390,7 @@ function OrdersPageContent() {
     value: factory.id,
   }));
   const editLoadingAddressOptions = (editLoadingAddressesQuery.data?.items ?? []).map((address) => ({
-    label: (address.name?.trim() || address.address || `Адрес #${address.id}`) + (address.is_primary ? " (Primary)" : ""),
+    label: (address.name?.trim() || address.address || "Адрес") + (address.is_primary ? " (Primary)" : ""),
     value: address.id,
   }));
   const editPostcodeOptions = (editPostcodeOptionsQuery.data?.items ?? []).map((postcode) => ({
@@ -3325,7 +3410,7 @@ function OrdersPageContent() {
     Form.useWatch("declared_total_weight_kg", editForm),
   );
   const editCompanyOptions = (editClientCompaniesQuery.data?.items ?? []).map((item) => ({
-    label: `${item.company_name} (ID ${item.company_id})`,
+    label: item.company_name,
     value: item.company_id,
   }));
   const selectedEditCompanyContacts = selectedEditCompany?.contacts ?? [];
@@ -3356,7 +3441,9 @@ function OrdersPageContent() {
 
   return (
     <Space direction="vertical" size={16} className="crm-page-stack">
-      <PageToolbar
+      {!standaloneOrderView ? (
+        <>
+          <PageToolbar
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         toggleLabel="Фильтр"
@@ -3702,7 +3789,7 @@ function OrdersPageContent() {
                     </div>
                     <div className="crm-row-meta-item">
                       Рейс
-                      <strong>{record.trip_name ?? record.trip_id ?? "-"}</strong>
+                      <strong>{record.trip_name ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Готовность
@@ -3821,7 +3908,7 @@ function OrdersPageContent() {
                 </Descriptions.Item>
                 <Descriptions.Item label="Компания">{viewOrder.company_name ?? viewOrder.company_id ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Фабрика">{viewOrder.factory_name ?? viewOrder.factory_id ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Рейс">{viewOrder.trip_name ?? viewOrder.trip_id ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Рейс">{viewOrder.trip_name ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Инвойс">{viewOrder.invoice_number ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Дата заказа">{viewOrder.order_date ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Дата готовности">{viewOrder.ready_date ?? "—"}</Descriptions.Item>
@@ -3858,7 +3945,6 @@ function OrdersPageContent() {
                   dataSource={viewDocuments}
                   columns={[
                     { title: "Тип", dataIndex: "document_type", key: "document_type", render: (v) => v ?? "—" },
-                    { title: "Имя", dataIndex: "display_name", key: "display_name", render: (v) => v ?? "—" },
                     { title: "Файл", dataIndex: "file_name", key: "file_name", render: (v) => v ?? "—" },
                   ]}
                 />
@@ -3867,51 +3953,23 @@ function OrdersPageContent() {
               )}
             </Card>
 
-            <Card size="small" title="История статусов">
-              {viewStatusHistory.length ? (
-                <Table
-                  size="small"
-                  rowKey={(row) => row.id}
-                  loading={viewStatusFallbackQuery.isLoading}
-                  pagination={false}
-                  dataSource={viewStatusHistory}
-                  columns={[
-                    { title: "Статус", dataIndex: "status_name", key: "status_name", render: (v: OrderStatus | null) => renderOrderStatus(v) },
-                    { title: "Дата", dataIndex: "status_date", key: "status_date", width: 120, render: (v) => v ?? "—" },
-                    { title: "Комментарий", dataIndex: "comment", key: "comment", render: (v) => v ?? "—" },
-                  ]}
-                />
-              ) : (
-                <Typography.Text type="secondary">Нет истории статусов</Typography.Text>
-              )}
-            </Card>
-
-            <Card size="small" title="Чат">
-              {viewChatMessages.length ? (
-                <Space direction="vertical" style={{ width: "100%" }} size={6}>
-                  {viewChatMessages.map((messageItem) => (
-                    <div key={messageItem.id} className="crm-order-chat-item">
-                      <Typography.Text strong>
-                        {[messageItem.author_full_name, messageItem.author_role_name].filter(Boolean).join(" · ") || "Система"}
-                      </Typography.Text>
-                      <Typography.Paragraph style={{ margin: "2px 0 0" }}>
-                        {messageItem.message}
-                      </Typography.Paragraph>
-                      <Typography.Text type="secondary">{messageItem.created_at}</Typography.Text>
-                    </div>
-                  ))}
-                </Space>
-              ) : (
-                <Typography.Text type="secondary">Нет сообщений</Typography.Text>
-              )}
-            </Card>
-
             <Button onClick={() => openEdit(viewOrder)} type="primary">
               Редактировать в drawer
             </Button>
           </Space>
         ) : null}
-      </Drawer>
+          </Drawer>
+        </>
+      ) : (
+        <div className="crm-order-detail-layout">
+          <Card className="crm-panel crm-order-detail-left" style={{ minHeight: "calc(100vh - 140px)" }}>
+            <Typography.Text type="secondary">
+              Редактирование заказа открыто в левой панели. Правая часть будет использована для истории статусов и сообщений.
+            </Typography.Text>
+          </Card>
+          <Card className="crm-panel crm-order-detail-right" />
+        </div>
+      )}
 
       <Modal
         title={
@@ -4027,7 +4085,7 @@ function OrdersPageContent() {
                         label:
                           [contact.full_name, contact.job_title, contact.email, contact.phone]
                             .filter(Boolean)
-                            .join(" · ") || `Contact #${contact.id}`,
+                            .join(" · ") || "Контакт",
                         value: contact.id,
                       }))}
                       placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
@@ -4143,7 +4201,7 @@ function OrdersPageContent() {
                         isClientRole
                           ? clientForwarderUiOptions
                           : (forwardersQuery.data?.items ?? []).map((user) => ({
-                              label: `${user.id} - ${user.full_name || user.login}`,
+                              label: [user.full_name, user.login].filter(Boolean).join(" · ") || "Экспедитор",
                               value: user.id,
                             }))
                       }
@@ -4264,7 +4322,7 @@ function OrdersPageContent() {
                         loading={loadingAddressesQuery.isLoading}
                         disabled={!createFactoryId}
                         options={allLoadingAddresses.map((address) => ({
-                          label: (address.name?.trim() || address.address || `Адрес #${address.id}`) + (address.is_primary ? " (Primary)" : ""),
+                          label: (address.name?.trim() || address.address || "Адрес") + (address.is_primary ? " (Primary)" : ""),
                           value: address.id,
                         }))}
                         dropdownRender={(menu) => (
@@ -4760,13 +4818,6 @@ function OrdersPageContent() {
                             <Select allowClear options={documentTypeOptions} />
                           </Form.Item>
                           <Form.Item
-                            name={[field.name, "display_name"]}
-                            label="Отображаемое имя"
-                            className="crm-order-create-col"
-                          >
-                            <Input />
-                          </Form.Item>
-                          <Form.Item
                             name={[field.name, "file_list"]}
                             label="Выбрать файл"
                             valuePropName="fileList"
@@ -5071,7 +5122,7 @@ function OrdersPageContent() {
         forceRender
         width={560}
         placement="left"
-        onClose={() => setEditOpen(false)}
+        onClose={closeEditDrawer}
         className="crm-order-edit-drawer"
         styles={{
           body: { paddingBottom: 88 },
@@ -5079,7 +5130,7 @@ function OrdersPageContent() {
         }}
         footer={
           <div className="crm-order-edit-footer">
-            <Button onClick={() => setEditOpen(false)}>Отмена</Button>
+            <Button onClick={closeEditDrawer}>Отмена</Button>
             <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
               Сохранить
             </Button>
@@ -5396,7 +5447,7 @@ function OrdersPageContent() {
                 <Select
                   allowClear
                   options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                    label: `${trip.id} - ${trip.name}`,
+                    label: trip.name,
                     value: trip.id,
                   }))}
                 />
@@ -5422,9 +5473,6 @@ function OrdersPageContent() {
                             rules={[{ required: true, message: "Укажите тип документа" }]}
                           >
                             <Select allowClear options={editDocumentTypeOptions} />
-                          </Form.Item>
-                          <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя">
-                            <Input />
                           </Form.Item>
                           <Form.Item
                             name={[field.name, "file_list"]}
@@ -5509,7 +5557,7 @@ function OrdersPageContent() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} - ${trip.name}`,
+                label: trip.name,
                 value: trip.id,
               }))}
             />
@@ -5541,7 +5589,7 @@ function OrdersPageContent() {
               allowClear
               loading={forwardersQuery.isLoading}
               options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                label: `${user.id} - ${user.full_name || user.login}`,
+                label: [user.full_name, user.login].filter(Boolean).join(" · ") || "Экспедитор",
                 value: user.id,
               }))}
             />
@@ -5792,7 +5840,7 @@ function OrdersPageContent() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} - ${trip.name}`,
+                label: trip.name,
                 value: trip.id,
               }))}
             />
