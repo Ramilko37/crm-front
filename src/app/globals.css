@@ -613,6 +613,19 @@ body.crm-column-resizing * {
   gap: 8px;
 }
 
+.crm-order-edit-page-card {
+  position: relative;
+}
+
+.crm-order-edit-page-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 12px 0 4px;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+}
+
 .crm-order-view-drawer .ant-drawer-body {
   padding: 12px 14px;
 }

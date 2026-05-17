@@ -36,7 +36,7 @@ import type { ColumnType, ColumnsType, TablePaginationConfig } from "antd/es/tab
 import type { SorterResult } from "antd/es/table/interface";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
@@ -488,6 +488,7 @@ function getParams(searchParams: URLSearchParams): OrderFilterParams {
 
 function OrdersPageContent() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
@@ -647,15 +648,24 @@ function OrdersPageContent() {
   const editSelfDelivery = Boolean(Form.useWatch("self_delivery", editForm));
   const editCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", editForm));
   const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
+  const editMeasurementStatus = Form.useWatch("measurement_status", editForm);
+  const editWeighingStatus = Form.useWatch("weighing_status", editForm);
   const editDraftRecord = selectedOrderId ? editDraftsByOrderId[selectedOrderId] : undefined;
+  const editGoodsLineRowsFromForm = Form.useWatch("goods_lines", editForm) as OrderCreateGoodsLineForm[] | undefined;
   const editGoodsLineRows = useMemo(
-    () => ((editDraftRecord?.values.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
-    [editDraftRecord?.values.goods_lines],
+    () => editGoodsLineRowsFromForm ?? ((editDraftRecord?.values.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
+    [editDraftRecord?.values.goods_lines, editGoodsLineRowsFromForm],
   );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
-  const deepLinkEditOrderId = parseNumber(searchParams.get("edit_order_id"));
-  const standaloneOrderView = searchParams.get("single_order_view") === "1";
+  const pathnameOrderId = useMemo(() => {
+    const matched = pathname.match(/^\/orders\/(\d+)$/);
+    if (!matched) return undefined;
+    const parsed = Number(matched[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }, [pathname]);
+  const deepLinkEditOrderId = pathnameOrderId ?? parseNumber(searchParams.get("edit_order_id"));
+  const standaloneOrderView = pathnameOrderId !== undefined || searchParams.get("single_order_view") === "1";
   const deepLinkedOrderIdRef = useRef<number | null>(null);
   const hasActiveFilters = Boolean(
     params.id ||
@@ -950,7 +960,7 @@ function OrdersPageContent() {
         : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
             query: { page: 1, page_size: 200 },
           }),
-    enabled: createOpen && canCreate,
+    enabled: (createOpen && canCreate) || (editOpen && canWriteOrder),
   });
 
   const loadingAddressesQuery = useQuery({
@@ -2581,22 +2591,7 @@ function OrdersPageContent() {
   function openEdit(record: OrderListItem) {
     setViewOpen(false);
     setViewOrderId(null);
-    setSelected(record);
-    setEditCompanyQueryText(record.company_name ?? "");
-    const existingDraft = editDraftsByOrderId[record.id]?.values;
-    if (existingDraft) {
-      editForm.setFieldsValue(existingDraft as Partial<OrderEditForm>);
-    } else {
-      editForm.setFieldsValue({
-        order_number: record.order_number ?? undefined,
-        comment: record.comment ?? undefined,
-        status_name: record.status_name ?? undefined,
-        trip_id: record.trip_id ?? undefined,
-        order_date: parseDayjsValue(record.order_date ?? undefined),
-        status_date: parseDayjsValue(record.status_date ?? undefined),
-      });
-    }
-    setEditOpen(true);
+    router.push(`/orders/${record.id}`);
   }
 
   function openView(record: OrderListItem) {
@@ -2611,9 +2606,25 @@ function OrdersPageContent() {
     }
     if (deepLinkedOrderIdRef.current === deepLinkEditOrderId) return;
     if (!deepLinkOrderQuery.data?.order) return;
-    openEdit(deepLinkOrderQuery.data.order);
+    const order = deepLinkOrderQuery.data.order;
+    setSelected(order);
+    setEditCompanyQueryText(order.company_name ?? "");
+    const existingDraft = editDraftsByOrderId[order.id]?.values;
+    if (existingDraft) {
+      editForm.setFieldsValue(existingDraft as Partial<OrderEditForm>);
+    } else {
+      editForm.setFieldsValue({
+        order_number: order.order_number ?? undefined,
+        comment: order.comment ?? undefined,
+        status_name: order.status_name ?? undefined,
+        trip_id: order.trip_id ?? undefined,
+        order_date: parseDayjsValue(order.order_date ?? undefined),
+        status_date: parseDayjsValue(order.status_date ?? undefined),
+      });
+    }
+    setEditOpen(true);
     deepLinkedOrderIdRef.current = deepLinkEditOrderId;
-  }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, standaloneOrderView]);
+  }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, editDraftsByOrderId, editForm, standaloneOrderView]);
 
   useEffect(() => {
     if (!standaloneOrderView || !deepLinkEditOrderId) return;
@@ -3954,22 +3965,13 @@ function OrdersPageContent() {
             </Card>
 
             <Button onClick={() => openEdit(viewOrder)} type="primary">
-              Редактировать в drawer
+              Редактировать
             </Button>
           </Space>
         ) : null}
           </Drawer>
         </>
-      ) : (
-        <div className="crm-order-detail-layout">
-          <Card className="crm-panel crm-order-detail-left" style={{ minHeight: "calc(100vh - 140px)" }}>
-            <Typography.Text type="secondary">
-              Редактирование заказа открыто в левой панели. Правая часть будет использована для истории статусов и сообщений.
-            </Typography.Text>
-          </Card>
-          <Card className="crm-panel crm-order-detail-right" />
-        </div>
-      )}
+      ) : null}
 
       <Modal
         title={
@@ -5116,27 +5118,10 @@ function OrdersPageContent() {
         </Form>
       </Modal>
 
-      <Drawer
-        title={null}
-        open={editOpen}
-        forceRender
-        width={560}
-        placement="left"
-        onClose={closeEditDrawer}
-        className="crm-order-edit-drawer"
-        styles={{
-          body: { paddingBottom: 88 },
-          footer: { borderTop: "1px solid #e5e7eb", padding: "12px 16px", background: "#fff" },
-        }}
-        footer={
-          <div className="crm-order-edit-footer">
-            <Button onClick={closeEditDrawer}>Отмена</Button>
-            <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
-              Сохранить
-            </Button>
-          </div>
-        }
-      >
+      {standaloneOrderView ? (
+        <div className="crm-order-detail-layout">
+        {editOpen ? (
+        <Card className="crm-panel crm-order-detail-left crm-order-edit-page-card">
         <div className="crm-order-edit-header">
           <Typography.Title level={4} style={{ margin: 0 }}>
             {selected ? `Редактирование заказа #${selected.id}` : "Редактирование заказа"}
@@ -5145,9 +5130,7 @@ function OrdersPageContent() {
             Последнее изменение:{" "}
             {editDetailQuery.data?.order?.status_date ? dayjs(editDetailQuery.data.order.status_date).format("DD.MM.YYYY HH:mm") : "—"}
           </Typography.Text>
-          <Typography.Text type="secondary">
-            Изменил: {editDetailQuery.data?.order?.personal_manager_id ? `ID ${editDetailQuery.data.order.personal_manager_id}` : "—"}
-          </Typography.Text>
+          <Typography.Text type="secondary">Изменил: —</Typography.Text>
         </div>
         <Form<OrderEditForm>
           form={editForm}
@@ -5168,7 +5151,7 @@ function OrdersPageContent() {
           <div className="crm-order-create-section">
             <div className="crm-order-create-grid">
               <Form.Item name="order_date" label="Дата заказа">
-                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" disabled />
               </Form.Item>
               <Form.Item name="status_name" label="Статус">
                 <Select allowClear options={ORDER_STATUS_VALUES.map((status) => ({ label: formatEnumCode(status), value: status }))} />
@@ -5215,15 +5198,6 @@ function OrdersPageContent() {
               <Form.Item name="self_delivery" valuePropName="checked">
                 <Checkbox>Самодоставка</Checkbox>
               </Form.Item>
-              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
-                <Select
-                  allowClear
-                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                    label: [user.full_name, user.login].filter(Boolean).join(" · "),
-                    value: user.id,
-                  }))}
-                />
-              </Form.Item>
               {editSelfDelivery ? (
                 <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
                   <Select
@@ -5235,6 +5209,15 @@ function OrdersPageContent() {
                   />
                 </Form.Item>
               ) : null}
+              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
+                <Select
+                  allowClear
+                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                    label: [user.full_name, user.login].filter(Boolean).join(" · "),
+                    value: user.id,
+                  }))}
+                />
+              </Form.Item>
               <Form.Item name="factory_country_id" label="Страна">
                 <Select allowClear options={editCountryOptions} />
               </Form.Item>
@@ -5391,15 +5374,19 @@ function OrdersPageContent() {
               <Form.Item name="measurement_status" label="Перемер">
                 <Select allowClear options={editMeasurementStatusOptions} />
               </Form.Item>
-              <Form.Item name="actual_volume_m3" label="Актуальный объем, м3">
-                <Input />
-              </Form.Item>
+              {String(editMeasurementStatus ?? "").toLowerCase() === "completed" ? (
+                <Form.Item name="actual_volume_m3" label="Актуальный объем, м3">
+                  <Input />
+                </Form.Item>
+              ) : null}
               <Form.Item name="weighing_status" label="Взвешивание">
                 <Select allowClear options={editWeighingStatusOptions} />
               </Form.Item>
-              <Form.Item name="actual_weight_kg" label="Актуальный вес, кг">
-                <Input />
-              </Form.Item>
+              {String(editWeighingStatus ?? "").toLowerCase() === "completed" ? (
+                <Form.Item name="actual_weight_kg" label="Актуальный вес, кг">
+                  <Input />
+                </Form.Item>
+              ) : null}
               <Form.Item name="actual_qty" label="Актуальное количество">
                 <InputNumber min={0} style={{ width: "100%" }} />
               </Form.Item>
@@ -5497,7 +5484,29 @@ function OrdersPageContent() {
             </div>
           </div>
         </Form>
-      </Drawer>
+        <div className="crm-order-edit-footer crm-order-edit-page-footer">
+          <Button onClick={closeEditDrawer}>Отмена</Button>
+          <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
+            Сохранить
+          </Button>
+        </div>
+      </Card>
+      ) : (
+        <Card className="crm-panel crm-order-detail-left">
+          {deepLinkOrderQuery.isLoading ? (
+            <Typography.Text>Загрузка заказа...</Typography.Text>
+          ) : deepLinkOrderQuery.isError ? (
+            <Typography.Text type="danger">
+              {deepLinkOrderQuery.error instanceof ApiError ? deepLinkOrderQuery.error.detail : "Ошибка загрузки заказа"}
+            </Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">Подготовка формы редактирования...</Typography.Text>
+          )}
+        </Card>
+      )}
+      <Card className="crm-panel crm-order-detail-right" />
+      </div>
+      ) : null}
 
       <Modal
         title={selected ? `Изменить статус #${selected.id}` : "Изменить статус"}
