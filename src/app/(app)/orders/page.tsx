@@ -14,8 +14,6 @@ import {
   Card,
   Checkbox,
   DatePicker,
-  Descriptions,
-  Drawer,
   Dropdown,
   Form,
   Grid,
@@ -68,7 +66,6 @@ import type {
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
-  OrderDocument,
   OrderEditFactorySelection,
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
@@ -515,9 +512,8 @@ function OrdersPageContent() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createStep, setCreateStep] = useState(0);
-  const [viewOpen, setViewOpen] = useState(false);
-  const [viewOrderId, setViewOrderId] = useState<number | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForwarderOpen, setAssignForwarderOpen] = useState(false);
@@ -778,21 +774,6 @@ function OrdersPageContent() {
       apiRequest<PaginatedResponse<OrderListItem>>("/api/orders", {
         query: params,
       }),
-  });
-
-  const viewOrderQuery = useQuery({
-    queryKey: viewOrderId ? queryKeys.orders.detail(viewOrderId) : ["orders", "detail", "drawer-none"],
-    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${viewOrderId}`),
-    enabled: viewOpen && Boolean(viewOrderId),
-  });
-
-  const viewDocumentsFallbackQuery = useQuery({
-    queryKey: viewOrderId ? queryKeys.orders.documents(viewOrderId) : ["orders", "documents", "drawer-none"],
-    queryFn: () =>
-      apiRequest<PaginatedResponse<OrderDocument>>(`/api/orders/${viewOrderId}/documents`, {
-        query: { page: 1, page_size: 200 },
-      }),
-    enabled: viewOpen && Boolean(viewOrderId) && viewOrderQuery.isSuccess && !(viewOrderQuery.data?.documents?.length ?? 0),
   });
 
   const editDetailQuery = useQuery({
@@ -2559,44 +2540,12 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
-  function closeEditDrawer() {
-    const finishClose = () => {
-      setEditOpen(false);
-      setSelected(null);
-      if (standaloneOrderView) {
-        router.replace("/orders");
-      }
-    };
-
-    if (!selectedOrderId) {
-      finishClose();
-      return;
-    }
-    const isDirty = Boolean(editDraftsByOrderId[selectedOrderId]?.dirty);
-    if (!isDirty || updateMutation.isPending) {
-      finishClose();
-      return;
-    }
-    Modal.confirm({
-      title: "Уверены, что хотите отменить изменения?",
-      okText: "Да, отменить",
-      cancelText: "Продолжить редактирование",
-      onOk: () => {
-        resetEditDraft(selectedOrderId);
-        finishClose();
-      },
-    });
-  }
-
   function openEdit(record: OrderListItem) {
-    setViewOpen(false);
-    setViewOrderId(null);
     router.push(`/orders/${record.id}`);
   }
 
   function openView(record: OrderListItem) {
-    setViewOrderId(record.id);
-    setViewOpen(true);
+    router.push(`/orders/${record.id}`);
   }
 
   useEffect(() => {
@@ -2623,6 +2572,7 @@ function OrdersPageContent() {
       });
     }
     setEditOpen(true);
+    setIsEditMode(false);
     deepLinkedOrderIdRef.current = deepLinkEditOrderId;
   }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, editDraftsByOrderId, editForm, standaloneOrderView]);
 
@@ -3232,11 +3182,6 @@ function OrdersPageContent() {
   }
 
   const rows = useMemo(() => listQuery.data?.items ?? [], [listQuery.data?.items]);
-  const viewOrder = viewOrderQuery.data;
-  const viewGoodsLines = viewOrder?.goods_lines ?? [];
-  const viewDocuments = viewOrder?.documents?.length
-    ? viewOrder.documents
-    : (viewDocumentsFallbackQuery.data?.items ?? []);
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
@@ -3891,85 +3836,6 @@ function OrdersPageContent() {
         )}
       </Card>
 
-      <Drawer
-        title={viewOrder ? `Заказ #${viewOrder.id}` : "Карточка заказа"}
-        open={viewOpen}
-        onClose={() => {
-          setViewOpen(false);
-          setViewOrderId(null);
-        }}
-        placement="left"
-        width={640}
-        className="crm-order-view-drawer"
-      >
-        {viewOrderQuery.isLoading ? <Typography.Text>Загрузка...</Typography.Text> : null}
-        {viewOrderQuery.error ? (
-          <Typography.Text type="danger">
-            {viewOrderQuery.error instanceof ApiError ? viewOrderQuery.error.detail : "Ошибка загрузки заказа"}
-          </Typography.Text>
-        ) : null}
-        {viewOrder ? (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Card size="small" title="Общие данные">
-              <Descriptions bordered size="small" column={1}>
-                <Descriptions.Item label="Номер заказа">{renderOrderNumber(viewOrder.order_number)}</Descriptions.Item>
-                <Descriptions.Item label="Статус">{renderOrderStatus(viewOrder.status_name)}</Descriptions.Item>
-                <Descriptions.Item label="Тип заказа">
-                  {viewOrder.order_type ? formatEnumCode(viewOrder.order_type) : "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label="Компания">{viewOrder.company_name ?? viewOrder.company_id ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Фабрика">{viewOrder.factory_name ?? viewOrder.factory_id ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Рейс">{viewOrder.trip_name ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Инвойс">{viewOrder.invoice_number ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Дата заказа">{viewOrder.order_date ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Дата готовности">{viewOrder.ready_date ?? "—"}</Descriptions.Item>
-                <Descriptions.Item label="Комментарий">{viewOrder.comment ?? "—"}</Descriptions.Item>
-              </Descriptions>
-            </Card>
-
-            <Card size="small" title="Товары">
-              {viewGoodsLines.length ? (
-                <Table
-                  size="small"
-                  rowKey={(row) => row.id}
-                  pagination={false}
-                  dataSource={viewGoodsLines}
-                  columns={[
-                    { title: "Товар", dataIndex: "product_name", key: "product_name", render: (v) => v ?? "—" },
-                    { title: "Вес", dataIndex: "weight_kg", key: "weight_kg", width: 90, render: (v) => v ?? "—" },
-                    { title: "Кол-во", dataIndex: "quantity", key: "quantity", width: 90, render: (v) => v ?? "—" },
-                    { title: "Ед.", dataIndex: "unit", key: "unit", width: 90, render: (v) => v ?? "—" },
-                  ]}
-                />
-              ) : (
-                <Typography.Text type="secondary">Нет строк товаров</Typography.Text>
-              )}
-            </Card>
-
-            <Card size="small" title="Документы">
-              {viewDocuments.length ? (
-                <Table
-                  size="small"
-                  rowKey={(row) => row.id}
-                  loading={viewDocumentsFallbackQuery.isLoading}
-                  pagination={false}
-                  dataSource={viewDocuments}
-                  columns={[
-                    { title: "Тип", dataIndex: "document_type", key: "document_type", render: (v) => v ?? "—" },
-                    { title: "Файл", dataIndex: "file_name", key: "file_name", render: (v) => v ?? "—" },
-                  ]}
-                />
-              ) : (
-                <Typography.Text type="secondary">Нет документов</Typography.Text>
-              )}
-            </Card>
-
-            <Button onClick={() => openEdit(viewOrder)} type="primary">
-              Редактировать
-            </Button>
-          </Space>
-        ) : null}
-          </Drawer>
         </>
       ) : null}
 
@@ -5131,10 +4997,16 @@ function OrdersPageContent() {
             {editDetailQuery.data?.order?.status_date ? dayjs(editDetailQuery.data.order.status_date).format("DD.MM.YYYY HH:mm") : "—"}
           </Typography.Text>
           <Typography.Text type="secondary">Изменил: —</Typography.Text>
+          {!isEditMode ? (
+            <Button type="primary" onClick={() => setIsEditMode(true)}>
+              Редактировать
+            </Button>
+          ) : null}
         </div>
         <Form<OrderEditForm>
           form={editForm}
           layout="vertical"
+          disabled={!isEditMode}
           className="crm-order-edit-form"
           onValuesChange={(changedValues, allValues) => {
             if (isRehydratingEditFormRef.current || !selectedOrderId) return;
@@ -5485,10 +5357,31 @@ function OrdersPageContent() {
           </div>
         </Form>
         <div className="crm-order-edit-footer crm-order-edit-page-footer">
-          <Button onClick={closeEditDrawer}>Отмена</Button>
-          <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
-            Сохранить
-          </Button>
+          {isEditMode ? (
+            <>
+              <Button
+                onClick={() => {
+                  if (!selectedOrderId) return;
+                  const detail = editDetailQuery.data;
+                  if (!detail) return;
+                  resetEditDraft(selectedOrderId);
+                  isRehydratingEditFormRef.current = true;
+                  editForm.setFieldsValue(toEditFormValues(detail));
+                  queueMicrotask(() => {
+                    isRehydratingEditFormRef.current = false;
+                  });
+                  setIsEditMode(false);
+                }}
+              >
+                Отмена
+              </Button>
+              <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
+                Сохранить
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => router.push("/orders")}>К списку заказов</Button>
+          )}
         </div>
       </Card>
       ) : (
