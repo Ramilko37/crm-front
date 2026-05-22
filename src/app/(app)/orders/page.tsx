@@ -931,7 +931,7 @@ function OrdersPageContent() {
     enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
   });
 
-  const countriesQuery = useQuery({
+  const createCountriesQuery = useQuery({
     queryKey: ["orders", "create-countries", isClientRole],
     queryFn: () =>
       isClientRole
@@ -941,7 +941,20 @@ function OrdersPageContent() {
         : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
             query: { page: 1, page_size: 200 },
           }),
-    enabled: (createOpen && canCreate) || (editOpen && canWriteOrder),
+    enabled: createOpen && canCreate,
+  });
+
+  const editCountriesQuery = useQuery({
+    queryKey: ["orders", "edit-countries", isClientRole],
+    queryFn: () =>
+      isClientRole
+        ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
+            query: { page: 1, page_size: 200 },
+          })
+        : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
+            query: { page: 1, page_size: 200 },
+          }),
+    enabled: editOpen && canWriteOrder,
   });
 
   const loadingAddressesQuery = useQuery({
@@ -1218,7 +1231,7 @@ function OrdersPageContent() {
             body: {
               name: factoryName,
               country_id: countryId,
-              country: countriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+              country: createCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
               city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
               address,
               postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
@@ -3298,7 +3311,7 @@ function OrdersPageContent() {
   }, [createFactoryMode, createForm, createOpen, selectedLoadingAddress]);
   const priceCoefficient = formatRatio(createClientGoodsValueAmount, createDeclaredVolumeM3);
   const weightCoefficient = formatRatio(createDeclaredVolumeM3, createDeclaredTotalWeightKg);
-  const countryOptions = (countriesQuery.data?.items ?? []).map((country) => ({
+  const createCountryOptions = (createCountriesQuery.data?.items ?? []).map((country) => ({
     label: country.name_ru,
     value: country.id,
   }));
@@ -3340,7 +3353,10 @@ function OrdersPageContent() {
       label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
       value: item.id,
     }));
-  const editCountryOptions = countryOptions;
+  const editCountryOptions = (editCountriesQuery.data?.items ?? []).map((country) => ({
+    label: country.name_ru,
+    value: country.id,
+  }));
   const editFactoryOptions = (editFactoryOptionsQuery.data ?? []).map((factory) => ({
     label: [factory.name, factory.subtitle].filter(Boolean).join(" (") + (factory.subtitle ? ")" : ""),
     value: factory.id,
@@ -4090,8 +4106,8 @@ function OrdersPageContent() {
                     <Select
                       showSearch
                       optionFilterProp="label"
-                      loading={countriesQuery.isLoading}
-                      options={countryOptions}
+                      loading={createCountriesQuery.isLoading}
+                      options={createCountryOptions}
                       onChange={() => {
                         createForm.setFieldValue("factory_id", undefined);
                         createForm.setFieldValue("loading_address_id", undefined);
@@ -5038,14 +5054,17 @@ function OrdersPageContent() {
                 <Select
                   showSearch
                   filterOption={false}
+                  loading={editClientCompaniesQuery.isLoading}
                   options={editCompanyOptions}
                   onSearch={(value) => setEditCompanyQueryText(value)}
                   placeholder="Введите название компании"
+                  notFoundContent={editClientCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
                 />
               </Form.Item>
               <Form.Item name="company_contact_id" label="Имя клиента">
                 <Select
                   allowClear
+                  disabled={!editCompanyId}
                   options={selectedEditCompanyContacts.map((contact) => ({
                     label: [contact.full_name, contact.email, contact.phone].filter(Boolean).join(" · "),
                     value: contact.id,
@@ -5070,47 +5089,98 @@ function OrdersPageContent() {
               <Form.Item name="self_delivery" valuePropName="checked">
                 <Checkbox>Самодоставка</Checkbox>
               </Form.Item>
-              {editSelfDelivery ? (
-                <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
-                  <Select
-                    allowClear
-                    options={(editMetadataQuery.data?.self_delivery_forwarder_options ?? []).map((forwarder) => ({
-                      label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · "),
-                      value: forwarder.id,
-                    }))}
-                  />
-                </Form.Item>
-              ) : null}
               <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
                 <Select
                   allowClear
+                  loading={forwardersQuery.isLoading}
                   options={(forwardersQuery.data?.items ?? []).map((user) => ({
                     label: [user.full_name, user.login].filter(Boolean).join(" · "),
                     value: user.id,
                   }))}
+                  notFoundContent={forwardersQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
                 />
               </Form.Item>
+              {editSelfDelivery ? (
+                <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
+                  <Select
+                    allowClear
+                    loading={editMetadataQuery.isLoading}
+                    options={(editMetadataQuery.data?.self_delivery_forwarder_options ?? []).map((forwarder) => ({
+                      label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · "),
+                      value: forwarder.id,
+                    }))}
+                    notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
+                  />
+                </Form.Item>
+              ) : null}
               <Form.Item name="factory_country_id" label="Страна">
-                <Select allowClear options={editCountryOptions} />
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  allowClear
+                  loading={editCountriesQuery.isLoading}
+                  disabled={!canWriteOrder}
+                  notFoundContent={editCountriesQuery.isLoading ? "Загрузка..." : "Страны не найдены"}
+                  options={editCountryOptions}
+                  placeholder="Выберите страну"
+                  onChange={() => {
+                    editForm.setFieldValue("factory_id", undefined);
+                    editForm.setFieldValue("loading_address_id", undefined);
+                    editForm.setFieldValue("factory_contact_id", undefined);
+                    editForm.setFieldValue("loading_postcode_id_ui", undefined);
+                    editForm.setFieldValue("loading_city_id_ui", undefined);
+                    editForm.setFieldValue("loading_address_line", undefined);
+                    editForm.setFieldValue("loading_address_fax", undefined);
+                    editForm.setFieldValue("factory_contact_email", undefined);
+                    editForm.setFieldValue("factory_contact_name", undefined);
+                    editForm.setFieldValue("factory_contact_phone", undefined);
+                    setEditPostcodeQuery("");
+                    setEditPostcodeQueryDebounced("");
+                  }}
+                />
               </Form.Item>
               <Form.Item name="factory_id" label="Фабрика">
-                <Select showSearch allowClear optionFilterProp="label" options={editFactoryOptions} />
+                <Select
+                  showSearch
+                  allowClear
+                  optionFilterProp="label"
+                  loading={editFactoryOptionsQuery.isLoading}
+                  disabled={!editFactoryCountryId}
+                  options={editFactoryOptions}
+                  notFoundContent={editFactoryOptionsQuery.isLoading ? "Загрузка..." : "Фабрики не найдены"}
+                />
               </Form.Item>
               <Form.Item name="loading_address_id" label="Адрес погрузки (name)">
-                <Select showSearch allowClear optionFilterProp="label" options={editLoadingAddressOptions} />
+                <Select
+                  showSearch
+                  allowClear
+                  optionFilterProp="label"
+                  loading={editLoadingAddressesQuery.isLoading}
+                  disabled={!editFactoryId}
+                  options={editLoadingAddressOptions}
+                  notFoundContent={editLoadingAddressesQuery.isLoading ? "Загрузка..." : "Адреса не найдены"}
+                />
               </Form.Item>
               <Form.Item name="loading_postcode_id_ui" label="Индекс">
                 <Select
                   showSearch
                   filterOption={false}
                   allowClear
+                  loading={editPostcodeOptionsQuery.isLoading}
                   options={editPostcodeOptions}
                   disabled={!editFactoryCountryId}
                   onSearch={(value) => setEditPostcodeQuery(value)}
+                  notFoundContent={editPostcodeOptionsQuery.isLoading ? "Загрузка..." : "Индексы не найдены"}
                 />
               </Form.Item>
               <Form.Item name="loading_city_id_ui" label="Город">
-                <Select allowClear options={editCityOptions} disabled={!editLoadingPostcodeIdUi} />
+                <Select
+                  allowClear
+                  loading={editPostcodeCitiesQuery.isLoading}
+                  options={editCityOptions}
+                  disabled={!editLoadingPostcodeIdUi}
+                  notFoundContent={editPostcodeCitiesQuery.isLoading ? "Загрузка..." : "Города не найдены"}
+                />
               </Form.Item>
               <Form.Item name="loading_address_line" label="Адрес">
                 <Input />
@@ -5135,6 +5205,8 @@ function OrdersPageContent() {
                     showSearch
                     allowClear
                     optionFilterProp="label"
+                    loading={editFactoryContactsQuery.isLoading}
+                    disabled={!editFactoryId}
                     options={editFactoryContactEmailSelectOptions}
                     onChange={(value) => {
                       const selectedOption = editContactEmailOptions.find((item) => item.id === value);
@@ -5142,6 +5214,7 @@ function OrdersPageContent() {
                       editForm.setFieldValue("factory_contact_name", selectedOption?.full_name ?? undefined);
                       editForm.setFieldValue("factory_contact_phone", selectedOption?.phone ?? undefined);
                     }}
+                    notFoundContent={editFactoryContactsQuery.isLoading ? "Загрузка..." : "Контакты не найдены"}
                   />
                 </Form.Item>
                 <Form.Item name="factory_contact_name" label="Имя">
@@ -5174,7 +5247,12 @@ function OrdersPageContent() {
               </Form.Item>
               {editCertificateIntentEnabled ? (
                 <Form.Item name="certificate_intent" label="Вариант сертификата">
-                  <Select allowClear options={editCertificateIntentOptions} />
+                  <Select
+                    allowClear
+                    loading={editMetadataQuery.isLoading}
+                    options={editCertificateIntentOptions}
+                    notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Варианты не найдены"}
+                  />
                 </Form.Item>
               ) : null}
             </div>
@@ -5210,6 +5288,7 @@ function OrdersPageContent() {
               </Form.Item>
               <Form.Item label="Перечень товаров">
                 <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                  <Form.List name="goods_lines">{() => null}</Form.List>
                   {editGoodsLineRows.map((line, index) => (
                     <Card
                       key={`edit-goods-line-${index}`}
@@ -5305,10 +5384,12 @@ function OrdersPageContent() {
               <Form.Item name="trip_id" label="Рейс">
                 <Select
                   allowClear
+                  loading={tripsQuery.isLoading}
                   options={(tripsQuery.data?.items ?? []).map((trip) => ({
                     label: trip.name,
                     value: trip.id,
                   }))}
+                  notFoundContent={tripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
                 />
               </Form.Item>
               <Form.List name="documents">
@@ -5331,7 +5412,12 @@ function OrdersPageContent() {
                             label="Тип документа"
                             rules={[{ required: true, message: "Укажите тип документа" }]}
                           >
-                            <Select allowClear options={editDocumentTypeOptions} />
+                            <Select
+                              allowClear
+                              loading={editMetadataQuery.isLoading}
+                              options={editDocumentTypeOptions}
+                              notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Типы документов не найдены"}
+                            />
                           </Form.Item>
                           <Form.Item
                             name={[field.name, "file_list"]}
@@ -5364,13 +5450,27 @@ function OrdersPageContent() {
                   if (!selectedOrderId) return;
                   const detail = editDetailQuery.data;
                   if (!detail) return;
-                  resetEditDraft(selectedOrderId);
-                  isRehydratingEditFormRef.current = true;
-                  editForm.setFieldsValue(toEditFormValues(detail));
-                  queueMicrotask(() => {
-                    isRehydratingEditFormRef.current = false;
+                  const discardChanges = () => {
+                    resetEditDraft(selectedOrderId);
+                    isRehydratingEditFormRef.current = true;
+                    editForm.setFieldsValue(toEditFormValues(detail));
+                    queueMicrotask(() => {
+                      isRehydratingEditFormRef.current = false;
+                    });
+                    setIsEditMode(false);
+                  };
+
+                  if (!editDraftRecord?.dirty) {
+                    discardChanges();
+                    return;
+                  }
+
+                  Modal.confirm({
+                    title: "Уверены, что хотите отменить изменения?",
+                    okText: "Да",
+                    cancelText: "Нет",
+                    onOk: discardChanges,
                   });
-                  setIsEditMode(false);
                 }}
               >
                 Отмена
