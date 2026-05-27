@@ -234,7 +234,7 @@ function RequestsPageContent() {
     : (documentsFallbackQuery.data?.items ?? []);
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
+    <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader title="Заявки" subtitle="Вкладка построена только на orders API (order_type=request)." />
 
       <PageToolbar
@@ -315,7 +315,7 @@ function RequestsPageContent() {
 
       <Drawer
         title={`Заявка #${renderOrderNumber(detailQuery.data?.order_number)}`}
-        width={760}
+        size={760}
         open={detailsOpen}
         onClose={() => {
           setDetailsOpen(false);

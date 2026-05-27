@@ -226,7 +226,7 @@ function NormativeDocumentsPageContent() {
   const totalRows = listQuery.data?.meta.total ?? 0;
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
+    <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader
         title="Нормативные документы"
         subtitle="Справочник нормативной документации"
