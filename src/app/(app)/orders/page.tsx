@@ -3,6 +3,7 @@
 import {
   ApartmentOutlined,
   EditOutlined,
+  FileTextOutlined,
   MessageOutlined,
   MoreOutlined,
   SwapOutlined,
@@ -14,6 +15,7 @@ import {
   Card,
   Checkbox,
   DatePicker,
+  Descriptions,
   Dropdown,
   Form,
   Grid,
@@ -49,6 +51,11 @@ import {
   type QuoteStatus,
 } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
+import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
+import {
+  clampOrderCreateWizardStep,
+  getOrderCreateWizardSteps,
+} from "@/shared/lib/order-create-wizard";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
@@ -71,6 +78,7 @@ import type {
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
   OrderDetail,
+  OrderDocument,
   OrderFilterParams,
   OrderInternalEditRead,
   OrderListItem,
@@ -422,15 +430,15 @@ const QUANTITY_UNIT_FALLBACK_OPTIONS = [
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
 const ORDER_TRIP_FACTORY_MISMATCH_CODE = "order-trip-factory-mismatch";
-const CREATE_WIZARD_STEPS = [
-  { title: "Новый заказ" },
-  { title: "Фабрика" },
-  { title: "Данные заказа" },
-  { title: "Товары" },
-  { title: "Документы" },
-] as const;
-const CREATE_WIZARD_LAST_STEP = CREATE_WIZARD_STEPS.length - 1;
-
+const REQUEST_DOCUMENT_TYPE_OPTIONS = [
+  { label: "WORD", value: "word" },
+  { label: "XLSX", value: "xlsx" },
+  { label: "XLS", value: "xls" },
+  { label: "PDF", value: "pdf" },
+  { label: "ZIP", value: "zip" },
+];
+const REQUEST_BACKEND_DOCUMENT_TYPE = "goods_description_docs";
+const COMPACT_CREATE_MODAL_WIDTH = 720;
 function formatRatio(numerator: string | undefined, denominator: string | undefined) {
   const nextNumerator = Number(numerator);
   const nextDenominator = Number(denominator);
@@ -534,6 +542,13 @@ function OrdersPageContent() {
     ["administrator", "manager", "logist", "forwarder"].includes(normalizedRole);
   const canRunOperationalActions =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
+  const canQuotePrice = meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager";
+  const permissionsReady = isHydrated && meQuery.isSuccess;
+  const canCreateUi = permissionsReady && canCreate;
+  const canWriteOrderUi = permissionsReady && canWriteOrder;
+  const canRunOperationalActionsUi = permissionsReady && canRunOperationalActions;
+  const canQuotePriceUi = permissionsReady && canQuotePrice;
+  const isClientRoleUi = permissionsReady && isClientRole;
   const canEditRestrictedCreateFields =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
   const canInlineCreatePostcodeCity = canEditRestrictedCreateFields && !isClientRole;
@@ -558,6 +573,19 @@ function OrdersPageContent() {
   const [bulkCommentOpen, setBulkCommentOpen] = useState(false);
   const [bulkCommentTarget, setBulkCommentTarget] = useState<"warehouse" | "forwarder">("warehouse");
   const [selected, setSelected] = useState<OrderListItem | null>(null);
+  const [documentsOrder, setDocumentsOrder] = useState<OrderListItem | null>(null);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<number | null>(null);
+  const [clientOrder, setClientOrder] = useState<OrderListItem | null>(null);
+  const [clientOpen, setClientOpen] = useState(false);
+  const [factoryOrder, setFactoryOrder] = useState<OrderListItem | null>(null);
+  const [factoryOpen, setFactoryOpen] = useState(false);
+  const [forwarderOrder, setForwarderOrder] = useState<OrderListItem | null>(null);
+  const [forwarderOpen, setForwarderOpen] = useState(false);
+  const [invoiceOrder, setInvoiceOrder] = useState<OrderListItem | null>(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [descriptionOrder, setDescriptionOrder] = useState<OrderListItem | null>(null);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
   const [factoryContactModalOpen, setFactoryContactModalOpen] = useState(false);
@@ -672,7 +700,13 @@ function OrdersPageContent() {
   const createFactoryCountryId = Form.useWatch("factory_country_id", createForm) as number | undefined;
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
   const createFactoryContactId = Form.useWatch("factory_contact_id", createForm) as number | undefined;
-  const isRequestCreate = createOrderType === "request";
+  const currentCreateOrderType = (createOrderType ??
+    (createDraft.order_type as OrderType | undefined) ??
+    "delivery") as OrderType;
+  const isRequestCreate = currentCreateOrderType === "request";
+  const createWizardSteps = useMemo(() => getOrderCreateWizardSteps(currentCreateOrderType), [currentCreateOrderType]);
+  const createWizardLastStep = createWizardSteps.length - 1;
+  const createWizardStepKey = createWizardSteps[createStep]?.key ?? createWizardSteps[createWizardLastStep]?.key;
   const selectedOrderId = selected?.id;
   const editFactoryId = Form.useWatch("factory_id", editForm) as number | undefined;
   const editFactoryMode = (Form.useWatch("factory_mode", editForm) as CreateMode | undefined) ?? "existing";
@@ -755,6 +789,13 @@ function OrdersPageContent() {
     setIsHydrated(true);
   }, []);
 
+  useEffect(() => {
+    const nextStep = clampOrderCreateWizardStep(createStep, currentCreateOrderType);
+    if (nextStep !== createStep) {
+      setCreateStep(nextStep);
+    }
+  }, [createStep, currentCreateOrderType]);
+
   const startColumnResize = useCallback(
     (columnKey: string, initialWidth: number, event: React.MouseEvent<HTMLSpanElement>) => {
       if (typeof window === "undefined") return;
@@ -820,6 +861,54 @@ function OrdersPageContent() {
     queryKey: selectedOrderId ? queryKeys.orders.detail(selectedOrderId) : ["orders", "detail", "none"],
     queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${selectedOrderId}`),
     enabled: editOpen && Boolean(selectedOrderId),
+  });
+
+  const documentsQuery = useQuery({
+    queryKey: documentsOrder ? queryKeys.orders.documents(documentsOrder.id) : ["orders", "documents", "idle"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderDocument>>(`/api/orders/${documentsOrder?.id}/documents`, {
+        query: { page: 1, page_size: 100 },
+      }),
+    enabled: documentsOpen && Boolean(documentsOrder),
+  });
+
+  const clientDetailQuery = useQuery({
+    queryKey: clientOrder ? queryKeys.orders.detail(clientOrder.id) : ["orders", "client-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${clientOrder?.id}`),
+    enabled: clientOpen && Boolean(clientOrder),
+  });
+
+  const factoryDetailQuery = useQuery({
+    queryKey: factoryOrder ? queryKeys.orders.detail(factoryOrder.id) : ["orders", "factory-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${factoryOrder?.id}`),
+    enabled: factoryOpen && Boolean(factoryOrder),
+  });
+
+  const forwarderDetailQuery = useQuery({
+    queryKey: forwarderOrder ? queryKeys.orders.detail(forwarderOrder.id) : ["orders", "forwarder-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${forwarderOrder?.id}`),
+    enabled: forwarderOpen && Boolean(forwarderOrder),
+  });
+
+  const forwarderUserId = forwarderDetailQuery.data?.assigned_forwarder_user_id ?? forwarderOrder?.assigned_forwarder_user_id;
+  const personalManagerId = forwarderDetailQuery.data?.personal_manager_id ?? forwarderOrder?.personal_manager_id;
+
+  const forwarderUserQuery = useQuery({
+    queryKey: forwarderUserId ? queryKeys.users.detail(forwarderUserId) : ["users", "forwarder-detail", "idle"],
+    queryFn: () => apiRequest<UserAdmin>(`/api/users/${forwarderUserId}`),
+    enabled: forwarderOpen && Boolean(forwarderUserId),
+  });
+
+  const personalManagerQuery = useQuery({
+    queryKey: personalManagerId ? queryKeys.users.detail(personalManagerId) : ["users", "personal-manager-detail", "idle"],
+    queryFn: () => apiRequest<UserAdmin>(`/api/users/${personalManagerId}`),
+    enabled: forwarderOpen && Boolean(personalManagerId),
+  });
+
+  const descriptionDetailQuery = useQuery({
+    queryKey: descriptionOrder ? queryKeys.orders.detail(descriptionOrder.id) : ["orders", "description-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${descriptionOrder?.id}`),
+    enabled: descriptionOpen && Boolean(descriptionOrder),
   });
 
   const deepLinkOrderQuery = useQuery({
@@ -2049,8 +2138,9 @@ function OrdersPageContent() {
 
   function getCreateStepFieldNames(step: number): NamePath[] {
     const values = createForm.getFieldsValue(true) as OrderCreateForm;
+    const stepKey = getOrderCreateWizardSteps(values.order_type)[step]?.key;
 
-    if (step === 0) {
+    if (stepKey === "base") {
       if (isClientRole) {
         return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json"];
       }
@@ -2058,7 +2148,7 @@ function OrdersPageContent() {
       return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json", "company_id", "company_contact_id"];
     }
 
-    if (step === 1) {
+    if (stepKey === "factory") {
       if (isClientRole) {
         return ["factory_mode", "factory_country_id", "factory_id", "loading_address_id", "ready_date", "pickup_date_from", "pickup_date_to"];
       }
@@ -2098,7 +2188,7 @@ function OrdersPageContent() {
       return names;
     }
 
-    if (step === 2) {
+    if (stepKey === "order_data") {
       const names: NamePath[] = [
         "invoice_number",
         "client_goods_value_currency",
@@ -2118,7 +2208,7 @@ function OrdersPageContent() {
       return names;
     }
 
-    if (step === 3) {
+    if (stepKey === "goods") {
       const names: NamePath[] = ["additional_description", "comment", "product_characteristic_codes", "goods_lines"];
       if (!isClientRole && canEditRestrictedCreateFields) {
         names.push("user_comment", "forwarder_comment", "warehouse_comment");
@@ -2147,7 +2237,7 @@ function OrdersPageContent() {
       return names;
     }
 
-    const names: NamePath[] = ["documents"];
+    const names: NamePath[] = values.order_type === "request" ? ["additional_description", "documents"] : ["documents"];
     (values.documents ?? []).forEach((_, index) => {
       names.push(
         ["documents", index, "document_type"],
@@ -2164,27 +2254,75 @@ function OrdersPageContent() {
   }
 
   async function goToCreateStep(nextStep: number) {
+    const latestValues = createForm.getFieldsValue(true) as OrderCreateForm;
+    const latestLastStep = getOrderCreateWizardSteps(latestValues.order_type ?? currentCreateOrderType).length - 1;
+    const clampedNextStep = Math.min(nextStep, latestLastStep);
     if (nextStep === createStep) return;
     if (nextStep < createStep) {
-      setCreateStep(nextStep);
+      setCreateStep(clampedNextStep);
       return;
     }
 
     try {
       await validateCreateStep(createStep);
-      setCreateStep(nextStep);
+      setCreateStep(clampedNextStep);
     } catch {
       // Form validation messages are shown inline by antd.
     }
   }
 
   async function goToNextCreateStep() {
-    if (createStep >= CREATE_WIZARD_LAST_STEP) return;
+    if (createStep >= createWizardLastStep) return;
     await goToCreateStep(createStep + 1);
+  }
+
+  async function resolveRequestFactorySelection(values: OrderCreateForm) {
+    if (values.factory_country_id && values.factory_id && values.loading_address_id && values.factory_contact_id) {
+      return {
+        factory_mode: "existing",
+        country_id: values.factory_country_id,
+        factory_id: values.factory_id,
+        loading_address_id: values.loading_address_id,
+        factory_contact_id: values.factory_contact_id,
+      };
+    }
+
+    const factories = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+      query: { page: 1, page_size: 20 },
+    });
+
+    for (const factory of factories.items) {
+      if (!factory.id || !factory.country_id) continue;
+
+      const [addresses, contacts] = await Promise.all([
+        apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${factory.id}/loading-addresses`, {
+          query: { page: 1, page_size: 1 },
+        }),
+        apiRequest<PaginatedResponse<FactoryContactOption> | FactoryContactOption[]>(`/api/factories/${factory.id}/contacts`, {
+          query: { page: 1, page_size: 1 },
+        }),
+      ]);
+
+      const address = addresses.items[0];
+      const contactItems = Array.isArray(contacts) ? contacts : contacts.items;
+      const contact = contactItems[0];
+      if (!address?.id || !contact?.id) continue;
+
+      return {
+        factory_mode: "existing",
+        country_id: factory.country_id,
+        factory_id: factory.id,
+        loading_address_id: address.id,
+        factory_contact_id: contact.id,
+      };
+    }
+
+    throw new Error("Для создания заявки нужна фабрика с адресом погрузки и контактом");
   }
 
   const createMutation = useMutation({
     mutationFn: async (values: OrderCreateForm) => {
+      const isRequestOrder = (values.order_type ?? "delivery") === "request";
       const docs = values.documents ?? [];
       if (docs.length > 10) {
         throw new Error("Можно загрузить максимум 10 документов");
@@ -2196,10 +2334,11 @@ function OrdersPageContent() {
         if (!(file instanceof File)) {
           throw new Error(`Документ #${index + 1}: выберите файл`);
         }
-        const slot = `create_file_${index + 1}`;
+        const slot = `doc_${index + 1}`;
         filesToUpload.push({ slot, file });
-        const resolvedDocumentType =
-          trimOrUndefined(document.document_type) ?? createMetadataQuery.data?.document_type_options?.[0]?.code;
+        const resolvedDocumentType = isRequestOrder
+          ? REQUEST_BACKEND_DOCUMENT_TYPE
+          : trimOrUndefined(document.document_type) ?? createMetadataQuery.data?.document_type_options?.[0]?.code;
         if (!resolvedDocumentType) {
           throw new Error(`Документ #${index + 1}: не найден доступный тип документа`);
         }
@@ -2218,16 +2357,16 @@ function OrdersPageContent() {
         throw new Error("Выберите контакт компании");
       }
 
-      if (!values.factory_mode) {
+      if (!isRequestOrder && !values.factory_mode) {
         throw new Error("Выберите режим фабрики");
       }
 
-      if (!values.ready_date) {
+      if (!isRequestOrder && !values.ready_date) {
         throw new Error("Укажите дату готовности");
       }
 
       const today = dayjs().startOf("day");
-      if (values.ready_date.startOf("day").isBefore(today)) {
+      if (!isRequestOrder && values.ready_date?.startOf("day").isBefore(today)) {
         throw new Error("Дата готовности не может быть в прошлом");
       }
 
@@ -2235,7 +2374,7 @@ function OrdersPageContent() {
         throw new Error("Для инвойса на другую компанию заполните название компании");
       }
 
-      if (!isClientRole && values.self_delivery && !values.assigned_forwarder_user_id && !values.self_delivery_forwarder_user_id) {
+      if (!isRequestOrder && !isClientRole && values.self_delivery && !values.assigned_forwarder_user_id && !values.self_delivery_forwarder_user_id) {
         throw new Error("Для self-delivery выберите экспедитора");
       }
 
@@ -2275,17 +2414,23 @@ function OrdersPageContent() {
         })
         .filter((line): line is NonNullable<typeof line> => Boolean(line));
 
-      if (!goodsLines.length && !trimOrUndefined(values.additional_description)) {
+      if (isRequestOrder && !trimOrUndefined(values.additional_description)) {
+        throw new Error("Заполните описание");
+      }
+
+      if (!isRequestOrder && !goodsLines.length && !trimOrUndefined(values.additional_description)) {
         throw new Error("Если строки товара пустые, заполните описание груза");
       }
 
       let requestRawPayload: Record<string, unknown> | undefined;
-      if ((values.order_type ?? "delivery") === "request" && trimOrUndefined(values.request_payload_json)) {
+      if (isRequestOrder && trimOrUndefined(values.request_payload_json)) {
         requestRawPayload = JSON.parse(values.request_payload_json as string) as Record<string, unknown>;
       }
 
       let factorySelection: Record<string, unknown>;
-      if (isClientRole) {
+      if (isRequestOrder) {
+        factorySelection = await resolveRequestFactorySelection(values);
+      } else if (isClientRole) {
         if (values.factory_mode === "create") {
           throw new Error("Для client create в этой версии доступен только existing сценарий фабрики");
         }
@@ -2358,12 +2503,14 @@ function OrdersPageContent() {
       }
       if (clientGoodsValueCurrency && clientGoodsValueCurrency !== "OTHER" && clientGoodsValueCurrencyOtherLabel) {
         throw new Error("Текстовое обозначение валюты допустимо только для OTHER");
-      }
+        }
 
       const orderPayload: Record<string, unknown> = {
         order_number: trimOrUndefined(values.order_number),
         order_type: values.order_type ?? "delivery",
-        ready_date: values.ready_date.format("YYYY-MM-DD"),
+        ready_date: isRequestOrder
+          ? (values.ready_date ?? dayjs()).format("YYYY-MM-DD")
+          : values.ready_date?.format("YYYY-MM-DD"),
         pickup_date_from: values.pickup_date_from?.format("YYYY-MM-DD"),
         pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
@@ -2397,8 +2544,8 @@ function OrdersPageContent() {
           user_comment: trimOrUndefined(values.user_comment),
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
-          self_delivery: Boolean(values.self_delivery),
-          self_delivery_forwarder_user_id: resolvedSelfDeliveryForwarderId,
+          self_delivery: isRequestOrder ? undefined : Boolean(values.self_delivery),
+          self_delivery_forwarder_user_id: isRequestOrder ? undefined : resolvedSelfDeliveryForwarderId,
           is_1c: values.is_1c,
           measurement_payload: values.measurement_status
             ? {
@@ -2414,7 +2561,7 @@ function OrdersPageContent() {
             : undefined,
           is_priority: canEditRestrictedCreateFields ? Boolean(values.is_priority) : undefined,
           office_mark_codes: canEditRestrictedCreateFields ? values.office_mark_codes : undefined,
-          assigned_forwarder_user_id: assignedForwarderUserId,
+          assigned_forwarder_user_id: isRequestOrder ? undefined : assignedForwarderUserId,
           is_factory_payment_via_company: canEditRestrictedCreateFields ? values.is_factory_payment_via_company : undefined,
           is_factory_payment_completed: canEditRestrictedCreateFields ? values.is_factory_payment_completed : undefined,
           is_checked: canEditRestrictedCreateFields ? values.is_checked : undefined,
@@ -2965,7 +3112,7 @@ function OrdersPageContent() {
   function orderActions(record: OrderListItem) {
     const actions = [] as Array<{ key: string; label: string; icon?: React.ReactNode; onClick: () => void }>;
 
-    if (canWriteOrder) {
+    if (canWriteOrderUi) {
       actions.push(
         {
           key: "edit",
@@ -2988,7 +3135,7 @@ function OrdersPageContent() {
       );
     }
 
-    if (canRunOperationalActions) {
+    if (canRunOperationalActionsUi) {
       actions.push(
         {
           key: "assign-forwarder",
@@ -3029,8 +3176,7 @@ function OrdersPageContent() {
     }
 
     if (
-      (meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager") &&
-      record.order_type === "quote_request"
+      canQuotePriceUi && record.order_type === "quote_request"
     ) {
       actions.push({
         key: "quote-price",
@@ -3040,7 +3186,7 @@ function OrdersPageContent() {
       });
     }
 
-    if (isClientRole && record.order_type === "quote_request" && record.quote_status === "priced_waiting_client") {
+    if (isClientRoleUi && record.order_type === "quote_request" && record.quote_status === "priced_waiting_client") {
       actions.push({
         key: "quote-decision",
         label: "Решение по квоте",
@@ -3052,19 +3198,232 @@ function OrdersPageContent() {
     return actions;
   }
 
+  function renderPickupWindow(record: OrderListItem) {
+    const pickupDateFrom =
+      typeof record.raw_payload?.pickup_date_from === "string" ? record.raw_payload.pickup_date_from : undefined;
+    const pickupDateTo = typeof record.raw_payload?.pickup_date_to === "string" ? record.raw_payload.pickup_date_to : undefined;
+    if (pickupDateFrom || pickupDateTo) {
+      return [pickupDateFrom, pickupDateTo].filter(Boolean).join(" - ");
+    }
+
+    return record.pickup_date ?? record.trip_name ?? "—";
+  }
+
+  function openDocumentsPopup(record: OrderListItem) {
+    setDocumentsOrder(record);
+    setDocumentsOpen(true);
+  }
+
+  function openClientPopup(record: OrderListItem) {
+    setClientOrder(record);
+    setClientOpen(true);
+  }
+
+  function openFactoryPopup(record: OrderListItem) {
+    setFactoryOrder(record);
+    setFactoryOpen(true);
+  }
+
+  function openForwarderPopup(record: OrderListItem) {
+    setForwarderOrder(record);
+    setForwarderOpen(true);
+  }
+
+  function openInvoicePopup(record: OrderListItem) {
+    if (!record.invoice_number) return;
+    setInvoiceOrder(record);
+    setInvoiceOpen(true);
+  }
+
+  function openDescriptionPopup(record: OrderListItem) {
+    if (!record.additional_description && !record.has_description) return;
+    setDescriptionOrder(record);
+    setDescriptionOpen(true);
+  }
+
+  function getStringValue(source: Record<string, unknown> | null | undefined, keys: string[]) {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  function getClientPopupInfo() {
+    const detail = clientDetailQuery.data;
+    const fallback = clientOrder;
+    const rawPayload = detail?.raw_payload ?? fallback?.raw_payload;
+    const rawRecord = detail as unknown as Record<string, unknown> | undefined;
+    const rawClient = detail?.client as unknown as Record<string, unknown> | undefined;
+
+    return {
+      name:
+        detail?.client?.contact_name ??
+        detail?.client?.user_full_name ??
+        detail?.contact_name_snapshot ??
+        fallback?.contact_name_snapshot ??
+        detail?.company_name ??
+        fallback?.company_name ??
+        "—",
+      address:
+        getStringValue(rawClient, ["address", "company_address", "legal_address", "actual_address"]) ??
+        getStringValue(rawPayload, ["address", "company_address", "legal_address", "actual_address", "delivery_address"]) ??
+        getStringValue(rawRecord, ["address", "company_address", "legal_address", "actual_address"]) ??
+        "—",
+      phone:
+        detail?.client?.contact_phone ??
+        detail?.client?.user_phone ??
+        detail?.contact_phone_snapshot ??
+        fallback?.contact_phone_snapshot ??
+        "—",
+      email:
+        detail?.client?.contact_email ??
+        detail?.client?.user_email ??
+        detail?.contact_email_snapshot ??
+        fallback?.contact_email_snapshot ??
+        "—",
+    };
+  }
+
+  function getFactoryPopupInfo() {
+    const detail = factoryDetailQuery.data;
+    const fallback = factoryOrder;
+    const address = detail?.factory?.selected_loading_address;
+
+    return {
+      name: detail?.factory?.factory_name ?? fallback?.factory_name ?? "—",
+      postcode: address?.postcode ?? "—",
+      address: address?.address ?? "—",
+      phone: address?.phone ?? "—",
+      email: detail?.factory?.primary_email ?? "—",
+    };
+  }
+
+function getUserAddress(user: UserAdmin | undefined, source: Record<string, unknown> | null | undefined) {
+    const address =
+      getStringValue(user as unknown as Record<string, unknown> | undefined, ["address", "legal_address", "actual_address"]) ??
+      getStringValue(source, ["forwarder_address", "assigned_forwarder_address", "address"]) ??
+      [user?.country, user?.city].filter(Boolean).join(", ");
+
+    return address || "—";
+  }
+
+  function getForwarderPopupInfo() {
+    const detail = forwarderDetailQuery.data;
+    const fallback = forwarderOrder;
+    const forwarder = forwarderUserQuery.data;
+    const rawPayload = detail?.raw_payload ?? fallback?.raw_payload;
+
+    return {
+      name: forwarder?.full_name ?? detail?.assigned_forwarder?.full_name ?? fallback?.forwarder_name ?? "—",
+      address: getUserAddress(forwarder, rawPayload),
+      email: forwarder?.email ?? getStringValue(rawPayload, ["forwarder_email", "assigned_forwarder_email"]) ?? "—",
+      phone: forwarder?.phone ?? getStringValue(rawPayload, ["forwarder_phone", "assigned_forwarder_phone"]) ?? "—",
+      personalManagerName: personalManagerQuery.data?.full_name ?? "—",
+    };
+  }
+
+  function getGoodsLinePopupText(line: OrderCreateGoodsLineForm) {
+    const itemTypeCode = trimOrUndefined(line.item_type);
+    const customItemType = trimOrUndefined(line.custom_item_type);
+    const itemType =
+      itemTypeCode === "other"
+        ? customItemType
+        : itemTypeCode
+          ? (itemTypeLabelByValue.get(itemTypeCode) ?? itemTypeCode)
+          : undefined;
+    const description = trimOrUndefined(line.description);
+    const weight = trimOrUndefined(line.weight_kg);
+    const quantity = trimOrUndefined(line.quantity_value);
+    const unitCode = trimOrUndefined(line.quantity_unit);
+    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : undefined;
+    const name = [itemType, description].filter(Boolean).join(" ");
+    const details = [weight ? `${weight}кг` : undefined, quantity ? `${quantity}${unit ? ` ${unit}` : ""}` : undefined].filter(Boolean);
+    return [name || "Строка товара", ...details].join(" - ");
+  }
+
+  function getDescriptionPopupText() {
+    const detail = descriptionDetailQuery.data;
+    const goodsLines = (detail?.goods_lines ?? []).map((line) => getGoodsLinePopupText(normalizeGoodsLineFromDetail(line)));
+    const description = trimOrUndefined(detail?.additional_description ?? descriptionOrder?.additional_description ?? undefined);
+    return [...goodsLines, description].filter(Boolean).join("\n");
+  }
+
+  async function copyDescriptionPopupText() {
+    const text = getDescriptionPopupText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success("Описание скопировано");
+    } catch {
+      message.error("Не удалось скопировать описание");
+    }
+  }
+
+  async function handleOrderDocumentDownload(orderId: number, row: OrderDocument) {
+    const fallbackName = row.file_name || row.display_name || `order-${orderId}-document-${row.id}`;
+    setDownloadingDocumentId(row.id);
+    try {
+      await downloadFileWithCredentials(`/api/orders/${orderId}/documents/${row.id}/download`, fallbackName);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания документа"));
+    } finally {
+      setDownloadingDocumentId(null);
+    }
+  }
+
+  function renderPaymentId(value: number, record: OrderListItem) {
+    const isPaymentCompleted = Boolean(record.is_factory_payment_completed);
+    const isPaymentViaCompany =
+      Boolean(record.factory_payment_via_label) || Boolean(record.raw_payload?.is_factory_payment_via_company);
+    const color = isPaymentCompleted ? "#16a34a" : isPaymentViaCompany ? "#1677ff" : undefined;
+    const background = isPaymentCompleted ? "#f0fdf4" : isPaymentViaCompany ? "#eff6ff" : "transparent";
+
+    return (
+      <span
+        style={{
+          alignItems: "center",
+          background,
+          borderRadius: 6,
+          color,
+          display: "inline-flex",
+          fontSize: "inherit",
+          fontWeight: color ? 600 : 400,
+          height: 24,
+          justifyContent: "center",
+          lineHeight: "24px",
+          minWidth: 32,
+        }}
+      >
+        {value}
+      </span>
+    );
+  }
+
   const columns: ColumnsType<OrderListItem> = [
     {
-      title: "Док.",
+      title: "Documents",
       key: "documents",
-      width: 90,
-      render: (_, record) => (record.has_documents || (record.documents_count ?? 0) > 0 ? record.documents_count ?? 0 : "—"),
-    },
-    {
-      title: "Оплачено компанией",
-      dataIndex: "is_checked",
-      key: "is_checked",
-      width: 165,
-      render: (value: boolean | undefined) => (value ? <Tag color="green">Да</Tag> : "—"),
+      width: 105,
+      align: "center",
+      render: (_, record) => {
+        const documentsCount = record.documents_count ?? 0;
+        const hasDocuments = record.has_documents || documentsCount > 0;
+        return (
+          <Button
+            type="link"
+            size="small"
+            title={hasDocuments ? `Документы: ${documentsCount || "есть"}` : "Документов нет"}
+            style={{ padding: 0 }}
+            onClick={() => openDocumentsPopup(record)}
+          >
+            <FileTextOutlined style={{ opacity: hasDocuments ? 1 : 0.35 }} />
+            {documentsCount > 0 ? <span style={{ marginLeft: 6 }}>{documentsCount}</span> : null}
+          </Button>
+        );
+      },
     },
     {
       title: "Id",
@@ -3073,53 +3432,93 @@ function OrdersPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("id"),
       width: 84,
+      align: "center",
+      render: (value: number, record) => renderPaymentId(value, record),
     },
     {
-      title: "#",
+      title: "Внутренняя нумерация",
       dataIndex: "order_number",
       key: "order_number",
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
       width: 180,
-      render: (value: string | null, record) => (
-        <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openView(record)}>
-          {renderOrderNumber(value)}
-        </Button>
-      ),
+      render: (value: string | null) => renderOrderNumber(value),
     },
     {
       title: "Клиент",
       dataIndex: "company_name",
       key: "company_name",
       width: 180,
-      render: (value: string | null | undefined) => value || "—",
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openClientPopup(record)}>
+            {value}
+          </Button>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      width: 120,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
       title: "Название фабрики",
       dataIndex: "factory_name",
       key: "factory_name",
       width: 180,
-      render: (value: string | null | undefined) => value || "—",
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openFactoryPopup(record)}>
+            {value}
+          </Button>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: "Экспедитор",
+      dataIndex: "forwarder_name",
+      key: "forwarder_name",
+      width: 140,
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openForwarderPopup(record)}>
+            {value}
+          </Button>
+        ) : (
+          "—"
+        ),
     },
     {
       title: "Инвойс/проформа",
       dataIndex: "invoice_number",
       key: "invoice_number",
       width: 160,
-      render: (value: string | null | undefined) => value ?? "—",
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openInvoicePopup(record)}>
+            {value}
+          </Button>
+        ) : (
+          "—"
+        ),
     },
     {
-      title: "Объем из инв.",
-      dataIndex: "declared_volume_m3",
-      key: "declared_volume_m3",
-      width: 130,
-      render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Объем",
+      title: "Объем m3",
       dataIndex: "volume_m3",
       key: "volume_m3",
       width: 100,
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Объем из инвойса",
+      dataIndex: "declared_volume_m3",
+      key: "declared_volume_m3",
+      width: 155,
       render: (value: string | null | undefined) => value ?? "—",
     },
     {
@@ -3128,41 +3527,6 @@ function OrdersPageContent() {
       key: "actual_volume_m3",
       width: 110,
       render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Объем на складе",
-      dataIndex: "shipped_m3",
-      key: "shipped_m3",
-      width: 140,
-      render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Кол-во",
-      dataIndex: "box_qty",
-      key: "box_qty",
-      width: 95,
-      render: (value: number | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Акт. кол-во",
-      dataIndex: "actual_qty",
-      key: "actual_qty",
-      width: 120,
-      render: (value: number | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Акт. вес",
-      dataIndex: "actual_weight_kg",
-      key: "actual_weight_kg",
-      width: 100,
-      render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "На складе",
-      dataIndex: "quantity_whs",
-      key: "quantity_whs",
-      width: 100,
-      render: (value: number | null | undefined) => value ?? "—",
     },
     {
       title: "Статус",
@@ -3174,14 +3538,7 @@ function OrdersPageContent() {
       width: 190,
     },
     {
-      title: "Эксп.",
-      dataIndex: "forwarder_name",
-      key: "forwarder_name",
-      width: 130,
-      render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Дни стат.",
+      title: "Дней в текущем статусе",
       dataIndex: "days_same_status",
       key: "days_same_status",
       sorter: true,
@@ -3208,25 +3565,24 @@ function OrdersPageContent() {
       render: (value: string | null) => value ?? "—",
     },
     {
-      title: "Вывоз",
-      dataIndex: "trip_name",
-      key: "trip_name",
-      width: 120,
-      render: (value: string | null | undefined) => value || "—",
+      title: "Вывоз (от - до)",
+      key: "pickup_window",
+      width: 150,
+      render: (_, record) => renderPickupWindow(record),
     },
     {
-      title: "Опис.",
+      title: "Описание",
       dataIndex: "additional_description",
       key: "additional_description",
       width: 180,
-      render: (value: string | null | undefined) => value ?? "—",
-    },
-    {
-      title: "Страна",
-      dataIndex: "country",
-      key: "country",
-      width: 120,
-      render: (value: string | null | undefined) => value ?? "—",
+      render: (value: string | null | undefined, record) =>
+        value || record.has_description ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openDescriptionPopup(record)}>
+            {value ?? "Описание"}
+          </Button>
+        ) : (
+          "—"
+        ),
     },
     {
       title: "Комм. клиента",
@@ -3243,7 +3599,7 @@ function OrdersPageContent() {
       render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Спецтар.",
+      title: "Спецтариф",
       key: "special_tariff",
       width: 130,
       render: (_, record) =>
@@ -3259,14 +3615,7 @@ function OrdersPageContent() {
       render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Ценовой коэффициент",
-      dataIndex: "price_coefficient",
-      key: "price_coefficient",
-      width: 130,
-      render: (value: string | number | null | undefined) => (value ?? "—") as React.ReactNode,
-    },
-    {
-      title: "Сертификаты",
+      title: "Сертификат",
       dataIndex: "has_certificate",
       key: "has_certificate",
       width: 110,
@@ -3756,7 +4105,7 @@ function OrdersPageContent() {
           />
         }
         actions={
-          isHydrated && canCreate ? (
+          canCreateUi ? (
             <Button type="primary" onClick={openCreateModal}>
               + Новый заказ
             </Button>
@@ -3941,7 +4290,7 @@ function OrdersPageContent() {
         </div>
       </Card>
 
-      {canWriteOrder ? (
+      {canWriteOrderUi ? (
         <Card className="crm-panel crm-actions-strip-bar">
           <div className="crm-actions-strip">
             <Typography.Text type="secondary">Выбрано: {selectedRowKeys.length}</Typography.Text>
@@ -4043,7 +4392,7 @@ function OrdersPageContent() {
                 <article key={record.id} className="crm-row-card">
                   <div className="crm-row-card-head">
                     <div>
-                      {canWriteOrder ? (
+                      {canWriteOrderUi ? (
                         <Checkbox
                           checked={selectedRowKeys.includes(record.id)}
                           onChange={(event) => {
@@ -4144,16 +4493,11 @@ function OrdersPageContent() {
               },
             }}
             rowSelection={
-              canWriteOrder
+              canWriteOrderUi
                 ? {
                     fixed: true,
                     columnWidth: 56,
-                    columnTitle: (checkboxNode) => (
-                      <span className="crm-selection-column-title">
-                        <span aria-hidden="true">..</span>
-                        {checkboxNode}
-                      </span>
-                    ),
+                    columnTitle: (checkboxNode) => <span className="crm-selection-column-title">{checkboxNode}</span>,
                     selectedRowKeys,
                     onChange: (keys) => setSelectedRowKeys(keys as number[]),
                   }
@@ -4176,6 +4520,35 @@ function OrdersPageContent() {
         </>
       ) : null}
 
+      {!isHydrated ? (
+        <>
+          <Form form={createForm} component={false} />
+          <Form form={editForm} component={false} />
+          <Form form={statusForm} component={false} />
+          <Form form={assignForm} component={false} />
+          <Form form={assignForwarderForm} component={false} />
+          <Form form={pickupForm} component={false} />
+          <Form form={specialTariffForm} component={false} />
+          <Form form={requestToFactoryForm} component={false} />
+          <Form form={quotePriceForm} component={false} />
+          <Form form={quoteDecisionForm} component={false} />
+          <Form form={filterForm} component={false} />
+          <Form form={bulkStatusForm} component={false} />
+          <Form form={bulkAssignForm} component={false} />
+          <Form form={bulkPickupForm} component={false} />
+          <Form form={bulkSpecialTariffForm} component={false} />
+          <Form form={bulkCommentForm} component={false} />
+          <Form form={factoryContactQuickForm} component={false} />
+          <Form form={editFactoryContactQuickForm} component={false} />
+          <Form form={factoryLoadingAddressQuickForm} component={false} />
+          <Form form={editFactoryLoadingAddressQuickForm} component={false} />
+          <Form form={goodsLineQuickForm} component={false} />
+          <Form form={editGoodsLineQuickForm} component={false} />
+        </>
+      ) : null}
+
+      {isHydrated ? (
+        <>
       <Modal
         title={
           isClientRole
@@ -4186,6 +4559,7 @@ function OrdersPageContent() {
         }
         open={createOpen}
         className="crm-order-create-modal"
+        forceRender
         onCancel={() => {
           Modal.confirm({
             title: "Вы уверены, что хотите отменить создание заказа?",
@@ -4202,7 +4576,7 @@ function OrdersPageContent() {
             >
               Назад
             </Button>
-            {createStep < CREATE_WIZARD_LAST_STEP ? (
+            {createStep < createWizardLastStep ? (
               <Button type="primary" disabled={createMutation.isPending} onClick={() => void goToNextCreateStep()}>
                 Далее
               </Button>
@@ -4213,18 +4587,18 @@ function OrdersPageContent() {
             )}
           </div>
         }
-        width={createStep === 0 ? "min(520px, calc(100vw - 32px))" : 1080}
+        width={createStep === 0 || isRequestCreate ? COMPACT_CREATE_MODAL_WIDTH : 1080}
       >
         <div className="crm-create-wizard-head">
           <Typography.Text className="crm-create-wizard-step-counter">
-            Шаг {createStep + 1} из {CREATE_WIZARD_STEPS.length}
+            Шаг {createStep + 1} из {createWizardSteps.length}
           </Typography.Text>
           <Steps
             size="small"
             current={createStep}
             className="crm-create-wizard-steps"
-            direction={isMobile ? "vertical" : "horizontal"}
-            items={CREATE_WIZARD_STEPS.map((step) => ({ title: step.title }))}
+            orientation={isMobile ? "vertical" : "horizontal"}
+            items={createWizardSteps.map((step) => ({ title: step.title }))}
             onChange={(nextStep) => void goToCreateStep(nextStep)}
           />
         </div>
@@ -4234,23 +4608,29 @@ function OrdersPageContent() {
           layout="vertical"
           className="crm-order-create-form"
           initialValues={CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>}
-          onValuesChange={(_, allValues) => {
+          onValuesChange={(changedValues) => {
             if (isRehydratingCreateFormRef.current) {
               return;
             }
-            setCreateDraft(allValues as Record<string, unknown>);
+            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
+            const nextOrderType = snapshot.order_type ?? currentCreateOrderType;
+            if ("order_type" in changedValues) {
+              setCreateStep((previous) => clampOrderCreateWizardStep(previous, nextOrderType));
+            }
+            setCreateDraft({ ...snapshot, order_type: nextOrderType } as Record<string, unknown>);
           }}
           onFinish={(values) => {
-            if (createStep < CREATE_WIZARD_LAST_STEP) {
-              setCreateStep((previous) => Math.min(previous + 1, CREATE_WIZARD_LAST_STEP));
+            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
+            const latestLastStep = getOrderCreateWizardSteps(snapshot.order_type ?? currentCreateOrderType).length - 1;
+            if (createStep < latestLastStep) {
+              setCreateStep((previous) => Math.min(previous + 1, latestLastStep));
               return;
             }
-            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
             const draftPayload = (createDraft as Partial<OrderCreateForm>) ?? {};
-            createMutation.mutate({ ...snapshot, ...draftPayload, ...values });
+            createMutation.mutate({ ...draftPayload, ...snapshot, ...values });
           }}
         >
-          {createStep === 0 ? (
+          {createWizardStepKey === "base" ? (
             <div className="crm-order-create-section">
               <div className="crm-order-create-grid">
                 {!isClientRole ? (
@@ -4340,23 +4720,28 @@ function OrdersPageContent() {
                     loading={createMetadataQuery.isLoading}
                     options={orderTypeCreateOptions}
                     placeholder={orderTypeCreateOptions.length ? undefined : "Нет доступных типов в metadata"}
+                    onChange={(value) => {
+                      const orderType = value as OrderType;
+                      const documents = orderType === "request" ? [] : createForm.getFieldValue("documents");
+                      if (orderType === "request") {
+                        createForm.setFieldValue("documents", []);
+                      }
+                      const nextValues = {
+                        ...(createForm.getFieldsValue(true) as OrderCreateForm),
+                        order_type: orderType,
+                        documents,
+                      };
+                      setCreateDraft(nextValues as Record<string, unknown>);
+                      setCreateStep((previous) => clampOrderCreateWizardStep(previous, orderType));
+                    }}
                   />
                 </Form.Item>
 
-                {isRequestCreate ? (
-                  <Form.Item
-                    name="request_payload_json"
-                    label="raw_payload (JSON, опционально)"
-                    className="crm-order-create-col crm-order-create-col-span-2"
-                  >
-                    <Input.TextArea rows={3} placeholder='{"legacy_request_form":{"comment":"From UI"}}' />
-                  </Form.Item>
-                ) : null}
               </div>
             </div>
           ) : null}
 
-          {createStep === 1 ? (
+          {createWizardStepKey === "factory" ? (
             <>
               <div className="crm-order-create-section">
                 <Typography.Title level={5} className="crm-order-create-section-title">
@@ -4748,7 +5133,7 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          {createStep === 2 ? (
+          {createWizardStepKey === "order_data" ? (
             <>
               <div className="crm-order-create-section">
                 <Typography.Title level={5} className="crm-order-create-section-title">
@@ -4870,7 +5255,7 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          {createStep === 3 ? (
+          {createWizardStepKey === "goods" ? (
             <>
               <div className="crm-order-create-section">
                 <Typography.Title level={5} className="crm-order-create-section-title">
@@ -4994,14 +5379,36 @@ function OrdersPageContent() {
             </>
           ) : null}
 
-          {createStep === 4 ? (
+          {createWizardStepKey === "documents" ? (
             <div className="crm-order-create-section">
-              <Typography.Title level={5} className="crm-order-create-section-title">
-                Документы
-              </Typography.Title>
+              {isRequestCreate ? (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Описание
+                </Typography.Title>
+              ) : (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Документы
+                </Typography.Title>
+              )}
+              {isRequestCreate ? (
+                <Form.Item
+                  name="additional_description"
+                  rules={[{ required: true, message: "Заполните описание" }]}
+                >
+                  <Input.TextArea rows={10} />
+                </Form.Item>
+              ) : null}
+              {isRequestCreate ? (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Документы
+                </Typography.Title>
+              ) : null}
               <Form.List name="documents">
                 {(fields, { add, remove }) => (
                   <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                    <Button onClick={() => add()} block disabled={fields.length >= 10}>
+                      Добавить документ
+                    </Button>
                     {fields.map((field) => (
                       <Card
                         key={field.key}
@@ -5020,7 +5427,7 @@ function OrdersPageContent() {
                             rules={[{ required: true, message: "Укажите тип документа" }]}
                             className="crm-order-create-col"
                           >
-                            <Select allowClear options={documentTypeOptions} />
+                            <Select allowClear options={isRequestCreate ? REQUEST_DOCUMENT_TYPE_OPTIONS : documentTypeOptions} />
                           </Form.Item>
                           <Form.Item
                             name={[field.name, "file_list"]}
@@ -5030,16 +5437,17 @@ function OrdersPageContent() {
                             rules={[{ required: true, message: "Выберите файл" }]}
                             className="crm-order-create-col"
                           >
-                            <Upload beforeUpload={() => false} maxCount={1}>
+                            <Upload
+                              accept={isRequestCreate ? ".doc,.docx,.xlsx,.xls,.pdf,.zip" : undefined}
+                              beforeUpload={() => false}
+                              maxCount={1}
+                            >
                               <Button>Выбрать файл</Button>
                             </Upload>
                           </Form.Item>
                         </div>
                       </Card>
                     ))}
-                    <Button onClick={() => add()} block disabled={fields.length >= 10}>
-                      Добавить документ
-                    </Button>
                   </Space>
                 )}
               </Form.List>
@@ -5051,6 +5459,7 @@ function OrdersPageContent() {
       <Modal
         title="Новый контакт фабрики"
         open={factoryContactModalOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setFactoryContactModalOpen(false)}
         onOk={() => factoryContactQuickForm.submit()}
@@ -5111,6 +5520,7 @@ function OrdersPageContent() {
       <Modal
         title="Новый адрес погрузки"
         open={factoryLoadingAddressModalOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setFactoryLoadingAddressModalOpen(false)}
         onOk={() => factoryLoadingAddressQuickForm.submit()}
@@ -5184,6 +5594,7 @@ function OrdersPageContent() {
       <Modal
         title="Новый адрес погрузки"
         open={editFactoryLoadingAddressModalOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setEditFactoryLoadingAddressModalOpen(false)}
         onOk={() => editFactoryLoadingAddressQuickForm.submit()}
@@ -5257,6 +5668,7 @@ function OrdersPageContent() {
       <Modal
         title={goodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
         open={goodsLineModalOpen}
+        forceRender
         onCancel={() => {
           setGoodsLineModalOpen(false);
           setGoodsLineEditIndex(null);
@@ -5299,6 +5711,7 @@ function OrdersPageContent() {
       <Modal
         title={editGoodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
         open={editGoodsLineModalOpen}
+        forceRender
         onCancel={() => {
           setEditGoodsLineModalOpen(false);
           setEditGoodsLineEditIndex(null);
@@ -5341,6 +5754,7 @@ function OrdersPageContent() {
       <Modal
         title="Новый контакт фабрики"
         open={editFactoryContactModalOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setEditFactoryContactModalOpen(false)}
         onOk={() => editFactoryContactQuickForm.submit()}
@@ -6035,8 +6449,175 @@ function OrdersPageContent() {
       ) : null}
 
       <Modal
+        title={documentsOrder ? `Documents #${documentsOrder.id}` : "Documents"}
+        open={documentsOpen}
+        footer={null}
+        width={720}
+        onCancel={() => {
+          setDocumentsOpen(false);
+          setDocumentsOrder(null);
+        }}
+      >
+        <Table<OrderDocument>
+          rowKey="id"
+          size="small"
+          loading={documentsQuery.isLoading}
+          dataSource={documentsQuery.data?.items ?? []}
+          pagination={false}
+          columns={[
+            {
+              title: "Тип",
+              dataIndex: "document_type",
+              key: "document_type",
+              width: 180,
+              render: (value: string | null) => value ?? "—",
+            },
+            {
+              title: "Файл",
+              key: "file_name",
+              render: (_, row) => row.file_name ?? row.display_name ?? row.file_path ?? "—",
+            },
+            {
+              title: "Скачать",
+              key: "download",
+              width: 120,
+              render: (_, row) =>
+                documentsOrder ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={downloadingDocumentId === row.id}
+                    onClick={() => void handleOrderDocumentDownload(documentsOrder.id, row)}
+                  >
+                    Скачать
+                  </Button>
+                ) : null,
+            },
+          ]}
+          locale={{
+            emptyText: documentsQuery.isError
+              ? documentsQuery.error instanceof ApiError
+                ? documentsQuery.error.detail
+                : "Ошибка загрузки документов"
+              : "Нет документов",
+          }}
+        />
+      </Modal>
+
+      <Modal
+        title={clientOrder ? `Клиент #${clientOrder.id}` : "Клиент"}
+        open={clientOpen}
+        footer={null}
+        onCancel={() => {
+          setClientOpen(false);
+          setClientOrder(null);
+        }}
+      >
+        {clientDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {clientDetailQuery.error instanceof ApiError ? clientDetailQuery.error.detail : "Ошибка загрузки клиента"}
+          </Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Имя">{getClientPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getClientPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getClientPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getClientPopupInfo().email}</Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={factoryOrder ? `Фабрика #${factoryOrder.id}` : "Фабрика"}
+        open={factoryOpen}
+        footer={null}
+        onCancel={() => {
+          setFactoryOpen(false);
+          setFactoryOrder(null);
+        }}
+      >
+        {factoryDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {factoryDetailQuery.error instanceof ApiError ? factoryDetailQuery.error.detail : "Ошибка загрузки фабрики"}
+          </Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Название">{getFactoryPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Индекс">{getFactoryPopupInfo().postcode}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getFactoryPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getFactoryPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getFactoryPopupInfo().email}</Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={forwarderOrder ? `Экспедитор #${forwarderOrder.id}` : "Экспедитор"}
+        open={forwarderOpen}
+        footer={null}
+        onCancel={() => {
+          setForwarderOpen(false);
+          setForwarderOrder(null);
+        }}
+      >
+        {forwarderDetailQuery.isError || forwarderUserQuery.isError || personalManagerQuery.isError ? (
+          <Typography.Text type="danger">Ошибка загрузки данных экспедитора</Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Имя">{getForwarderPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getForwarderPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getForwarderPopupInfo().email}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getForwarderPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Имя персонального менеджера">
+            {getForwarderPopupInfo().personalManagerName}
+          </Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={invoiceOrder ? `Инвойс #${invoiceOrder.id}` : "Инвойс"}
+        open={invoiceOpen}
+        footer={null}
+        onCancel={() => {
+          setInvoiceOpen(false);
+          setInvoiceOrder(null);
+        }}
+      >
+        <Typography.Paragraph
+          copyable={invoiceOrder?.invoice_number ? { text: invoiceOrder.invoice_number } : false}
+          style={{ marginBottom: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        >
+          {invoiceOrder?.invoice_number ?? "—"}
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title={descriptionOrder ? `Описание #${descriptionOrder.id}` : "Описание"}
+        open={descriptionOpen}
+        footer={[
+          <Button key="copy" type="primary" onClick={() => void copyDescriptionPopupText()}>
+            Скопировать в буфер
+          </Button>,
+        ]}
+        onCancel={() => {
+          setDescriptionOpen(false);
+          setDescriptionOrder(null);
+        }}
+      >
+        {descriptionDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {descriptionDetailQuery.error instanceof ApiError
+              ? descriptionDetailQuery.error.detail
+              : "Ошибка загрузки описания"}
+          </Typography.Text>
+        ) : null}
+        <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {getDescriptionPopupText() || (descriptionDetailQuery.isLoading ? "Загрузка..." : "—")}
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
         title={selected ? `Изменить статус #${selected.id}` : "Изменить статус"}
         open={statusOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setStatusOpen(false)}
         onOk={() => statusForm.submit()}
@@ -6071,6 +6652,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Назначить рейс #${selected.id}` : "Назначить рейс"}
         open={assignOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setAssignOpen(false)}
         onOk={() => assignForm.submit()}
@@ -6103,6 +6685,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Назначить экспедитора #${selected.id}` : "Назначить экспедитора"}
         open={assignForwarderOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setAssignForwarderOpen(false)}
         onOk={() => assignForwarderForm.submit()}
@@ -6135,6 +6718,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Назначить дату вывоза #${selected.id}` : "Назначить дату вывоза"}
         open={pickupOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setPickupOpen(false)}
         onOk={() => pickupForm.submit()}
@@ -6160,6 +6744,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Спецтариф #${selected.id}` : "Спецтариф"}
         open={specialTariffOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setSpecialTariffOpen(false)}
         onOk={() => specialTariffForm.submit()}
@@ -6214,6 +6799,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Запрос на фабрику #${selected.id}` : "Запрос на фабрику"}
         open={requestToFactoryOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setRequestToFactoryOpen(false)}
         onOk={() => requestToFactoryForm.submit()}
@@ -6243,6 +6829,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Выставить цену #${selected.id}` : "Выставить цену"}
         open={quotePriceOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setQuotePriceOpen(false)}
         onOk={() => quotePriceForm.submit()}
@@ -6293,6 +6880,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Решение по квоте #${selected.id}` : "Решение по квоте"}
         open={quoteDecisionOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setQuoteDecisionOpen(false)}
         onOk={() => quoteDecisionForm.submit()}
@@ -6324,6 +6912,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: изменить статус"
         open={bulkStatusOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkStatusOpen(false)}
         onOk={() => bulkStatusForm.submit()}
@@ -6356,6 +6945,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: назначить рейс"
         open={bulkAssignOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkAssignOpen(false)}
         onOk={() => bulkAssignForm.submit()}
@@ -6386,6 +6976,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: назначить дату вывоза"
         open={bulkPickupOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkPickupOpen(false)}
         onOk={() => bulkPickupForm.submit()}
@@ -6409,6 +7000,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: спецтариф"
         open={bulkSpecialTariffOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkSpecialTariffOpen(false)}
         onOk={() => bulkSpecialTariffForm.submit()}
@@ -6470,6 +7062,7 @@ function OrdersPageContent() {
       <Modal
         title={`Массово: ${bulkCommentTarget === "warehouse" ? "комментарий склада" : "комментарий экспедитора"}`}
         open={bulkCommentOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkCommentOpen(false)}
         onOk={() => bulkCommentForm.submit()}
@@ -6489,6 +7082,8 @@ function OrdersPageContent() {
           </Form.Item>
         </Form>
       </Modal>
+        </>
+      ) : null}
     </Space>
   );
 }
