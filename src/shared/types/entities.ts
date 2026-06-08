@@ -5,6 +5,7 @@ import type {
   QuoteStatus,
   RequestStatus,
   RoleName,
+  LoadingPointType,
   TripStatus,
   TripType,
 } from "@/shared/lib/domain-enums";
@@ -527,6 +528,68 @@ export type TripWritePayload = {
   truck_company_name?: string;
   status_name?: TripStatus;
   type_name?: TripType;
+};
+
+export type TripPathPoint = {
+  id: number;
+  trip_id: number;
+  path_point_id: number;
+  factory_id: number | null;
+  sequence: number;
+  planned_at: string | null;
+  actual_at: string | null;
+};
+
+export type TripPathPointWritePayload = {
+  path_point_id: number;
+  sequence: number;
+  factory_id?: number | null;
+  planned_at?: string | null;
+  actual_at?: string | null;
+};
+
+export type TripPathPointUpdatePayload = Partial<Omit<TripPathPointWritePayload, "path_point_id" | "sequence">> & {
+  path_point_id?: number;
+  sequence?: number;
+};
+
+export type TripLoadingPoint = {
+  id: number;
+  trip_id: number;
+  factory_id: number | null;
+  type: LoadingPointType;
+  name: string;
+  address: string;
+  postcode: string | null;
+  country: string | null;
+  city: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  planned_loading_at: string | null;
+  actual_loading_at: string | null;
+  is_completed: boolean;
+};
+
+export type TripLoadingPointWritePayload = {
+  type: LoadingPointType;
+  name: string;
+  address: string;
+  factory_id?: number | null;
+  postcode?: string | null;
+  country?: string | null;
+  city?: string | null;
+  contact_name?: string | null;
+  phone?: string | null;
+  planned_loading_at?: string | null;
+  actual_loading_at?: string | null;
+  is_completed?: boolean;
+};
+
+export type TripLoadingPointUpdatePayload = Partial<TripLoadingPointWritePayload>;
+
+export type TripDetail = Trip & {
+  loading_points: TripLoadingPoint[];
+  path_points: TripPathPoint[];
 };
 
 export type ListParams = {

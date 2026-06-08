@@ -30,6 +30,8 @@ export const queryKeys = {
   trips: {
     list: (params: unknown) => ["trips", "list", params] as const,
     detail: (id: number) => ["trips", "detail", id] as const,
+    pathPoints: (tripId: number) => ["trips", "path-points", tripId] as const,
+    loadingPoints: (tripId: number) => ["trips", "loading-points", tripId] as const,
   },
   pathPoints: {
     list: (params: unknown) => ["path-points", "list", params] as const,

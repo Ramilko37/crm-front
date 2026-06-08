@@ -1,6 +1,6 @@
 "use client";
 
-import { EditOutlined } from "@ant-design/icons";
+import { EditOutlined, EyeOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
@@ -23,10 +23,12 @@ import {
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import dayjs from "dayjs";
+import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { TripCreateWizardModal } from "@/features/trips/trip-create-wizard-modal";
 import { apiRequest } from "@/shared/lib/api";
 import {
   formatEnumCode,
@@ -69,6 +71,7 @@ function getParams(searchParams: URLSearchParams): TripFilterParams {
     created_at_from: searchParams.get("created_at_from") ?? undefined,
     created_at_to: searchParams.get("created_at_to") ?? undefined,
     current_point_id: parseNumber(searchParams.get("current_point_id")),
+    has_orders: parseBool(searchParams.get("has_orders")),
   };
 }
 
@@ -128,7 +131,6 @@ function TripsPageContent() {
   const [selected, setSelected] = useState<Trip | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
-  const [createForm] = Form.useForm<TripForm>();
   const [editForm] = Form.useForm<TripForm>();
   const [bulkStatusForm] = Form.useForm<{ status_name: TripStatus }>();
   const [bulkTypeForm] = Form.useForm<{ type_name: TripType }>();
@@ -140,6 +142,7 @@ function TripsPageContent() {
     truck_company_name?: string;
     created_at_from?: dayjs.Dayjs;
     created_at_to?: dayjs.Dayjs;
+    has_orders?: boolean;
   }>();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
@@ -154,7 +157,8 @@ function TripsPageContent() {
       params.created_at_from ||
       params.created_at_to ||
       (params.status_names?.length ?? 0) > 0 ||
-      (params.type_names?.length ?? 0) > 0,
+      (params.type_names?.length ?? 0) > 0 ||
+      params.has_orders !== undefined,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
 
@@ -167,11 +171,13 @@ function TripsPageContent() {
       truck_company_name: params.truck_company_name,
       created_at_from: params.created_at_from ? dayjs(params.created_at_from) : undefined,
       created_at_to: params.created_at_to ? dayjs(params.created_at_to) : undefined,
+      has_orders: params.has_orders,
     });
   }, [
     filterForm,
     params.created_at_from,
     params.created_at_to,
+    params.has_orders,
     params.query,
     params.status_names,
     params.truck_company_name,
@@ -185,23 +191,6 @@ function TripsPageContent() {
       apiRequest<PaginatedResponse<Trip>>("/api/trips", {
         query: effectiveParams,
       }),
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (payload: TripForm) =>
-      apiRequest<Trip>("/api/trips", {
-        method: "POST",
-        body: payload,
-      }),
-    onSuccess: async () => {
-      message.success("Рейс создан");
-      setCreateOpen(false);
-      createForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["trips"] });
-    },
-    onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка создания рейса");
-    },
   });
 
   const updateMutation = useMutation({
@@ -267,6 +256,9 @@ function TripsPageContent() {
       key: "name",
       sorter: true,
       sortOrder: sortOrderFor("name"),
+      render: (value: string, record) => (
+        <Link href={`/trips/${record.id}`}>{value}</Link>
+      ),
     },
     {
       title: "Статус",
@@ -301,7 +293,16 @@ function TripsPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("truck_plate"),
       render: (v) => v ?? "-",
-      width: 160,
+      width: 140,
+    },
+    {
+      title: "Транспортная компания",
+      dataIndex: "truck_company_name",
+      key: "truck_company_name",
+      sorter: true,
+      sortOrder: sortOrderFor("truck_company_name"),
+      render: (v) => v ?? "-",
+      width: 180,
     },
     {
       title: "Создан",
@@ -315,15 +316,21 @@ function TripsPageContent() {
     {
       title: "Действия",
       key: "actions",
-      width: 150,
-      render: (_, record) =>
-        canMutate ? (
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-            Редактировать
-          </Button>
-        ) : (
-          "-"
-        ),
+      width: 220,
+      render: (_, record) => (
+        <Space size="small">
+          <Link href={`/trips/${record.id}`}>
+            <Button size="small" icon={<EyeOutlined />}>
+              Открыть
+            </Button>
+          </Link>
+          {canMutate ? (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+              Изменить
+            </Button>
+          ) : null}
+        </Space>
+      ),
     },
   ];
 
@@ -430,6 +437,7 @@ function TripsPageContent() {
             truck_company_name?: string;
             created_at_from?: dayjs.Dayjs;
             created_at_to?: dayjs.Dayjs;
+            has_orders?: boolean;
           }) => {
             const createdFrom = values.created_at_from?.startOf("day");
             const createdTo = values.created_at_to?.startOf("day");
@@ -446,6 +454,7 @@ function TripsPageContent() {
               truck_company_name: values.truck_company_name,
               created_at_from: values.created_at_from?.format("YYYY-MM-DD"),
               created_at_to: values.created_at_to?.format("YYYY-MM-DD"),
+              has_orders: values.has_orders,
               page: 1,
             });
           }}
@@ -487,6 +496,16 @@ function TripsPageContent() {
             </Form.Item>
             <Form.Item name="created_at_to" className="crm-col-2" style={{ marginBottom: 0 }}>
               <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан до" />
+            </Form.Item>
+            <Form.Item name="has_orders" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select
+                allowClear
+                placeholder="Есть заказы"
+                options={[
+                  { label: "С заказами", value: true },
+                  { label: "Без заказов", value: false },
+                ]}
+              />
             </Form.Item>
           </div>
 
@@ -603,11 +622,18 @@ function TripsPageContent() {
                   </div>
 
                   <div className="crm-row-actions">
-                    {canMutate ? (
-                      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-                        Редактировать
-                      </Button>
-                    ) : null}
+                    <Space wrap>
+                      <Link href={`/trips/${record.id}`}>
+                        <Button size="small" icon={<EyeOutlined />}>
+                          Открыть
+                        </Button>
+                      </Link>
+                      {canMutate ? (
+                        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                          Изменить
+                        </Button>
+                      ) : null}
+                    </Space>
                   </div>
                 </article>
               ))}
@@ -661,50 +687,7 @@ function TripsPageContent() {
         )}
       </Card>
 
-      <Modal
-        title="Создать рейс"
-        open={createOpen}
-        destroyOnHidden
-        onCancel={() => setCreateOpen(false)}
-        onOk={() => createForm.submit()}
-        confirmLoading={createMutation.isPending}
-      >
-        <Form<TripForm> form={createForm} layout="vertical" onFinish={(values) => createMutation.mutate(values)}>
-          <Form.Item name="name" label="Название" rules={[{ required: true }]}> 
-            <Input />
-          </Form.Item>
-          <Form.Item name="current_point_id" label="ID текущей точки">
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="current_point_name" label="Текущая точка">
-            <Input />
-          </Form.Item>
-          <Form.Item name="truck_plate" label="Номер тягача">
-            <Input />
-          </Form.Item>
-          <Form.Item name="truck_company_name" label="Транспортная компания">
-            <Input />
-          </Form.Item>
-          <Form.Item name="status_name" label="Статус">
-            <Select
-              allowClear
-              options={TRIP_STATUS_VALUES.map((value) => ({
-                label: formatTripStatus(value),
-                value,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="type_name" label="Тип">
-            <Select
-              allowClear
-              options={TRIP_TYPE_VALUES.map((value) => ({
-                label: formatTripType(value),
-                value,
-              }))}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <TripCreateWizardModal open={createOpen} onClose={() => setCreateOpen(false)} />
 
       <Modal
         title={`Редактировать рейс #${selected?.id ?? ""}`}

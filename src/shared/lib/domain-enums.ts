@@ -81,6 +81,10 @@ export const TRIP_TYPE_VALUES = ["normal"] as const;
 
 export type TripType = (typeof TRIP_TYPE_VALUES)[number];
 
+export const LOADING_POINT_TYPE_VALUES = ["factory", "forwarder_warehouse"] as const;
+
+export type LoadingPointType = (typeof LOADING_POINT_TYPE_VALUES)[number];
+
 export const FACTORY_CERTIFICATE_STATUS_VALUES = [
   "ready_to_provide",
   "agree_to_pay_production",
