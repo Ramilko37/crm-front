@@ -5,7 +5,6 @@ import type {
   QuoteStatus,
   RequestStatus,
   RoleName,
-  LoadingPointType,
   TripStatus,
   TripType,
 } from "@/shared/lib/domain-enums";
@@ -458,6 +457,22 @@ export type Factory = {
   certificate_status: FactoryCertificateStatus | null;
 };
 
+export type TripCityLookupItem = {
+  city: string;
+};
+
+export type TripForwarderLookupItem = {
+  id: number;
+  full_name: string | null;
+  company_id?: number | null;
+  company_name?: string | null;
+  country: string | null;
+  city: string | null;
+  label?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
 export type FactoryEmail = {
   id: number;
   factory_id: number;
@@ -518,6 +533,7 @@ export type Trip = {
   status_name: TripStatus | null;
   type_name: TripType | null;
   created_at?: string | null;
+  current_stage: TripCurrentStage | null;
 };
 
 export type TripWritePayload = {
@@ -530,34 +546,21 @@ export type TripWritePayload = {
   type_name?: TripType;
 };
 
-export type TripPathPoint = {
+export type TripCurrentStage = {
+  point_id: number;
+  point_name: string;
+  point_kind: "loading" | "path";
+  is_completed: boolean;
+};
+
+export type TripPoint = {
   id: number;
   trip_id: number;
-  path_point_id: number;
+  path_point_id: number | null;
   factory_id: number | null;
+  forwarder_user_id: number | null;
   sequence: number;
-  planned_at: string | null;
-  actual_at: string | null;
-};
-
-export type TripPathPointWritePayload = {
-  path_point_id: number;
-  sequence: number;
-  factory_id?: number | null;
-  planned_at?: string | null;
-  actual_at?: string | null;
-};
-
-export type TripPathPointUpdatePayload = Partial<Omit<TripPathPointWritePayload, "path_point_id" | "sequence">> & {
-  path_point_id?: number;
-  sequence?: number;
-};
-
-export type TripLoadingPoint = {
-  id: number;
-  trip_id: number;
-  factory_id: number | null;
-  type: LoadingPointType;
+  is_loading_point: boolean;
   name: string;
   address: string;
   postcode: string | null;
@@ -565,31 +568,33 @@ export type TripLoadingPoint = {
   city: string | null;
   contact_name: string | null;
   phone: string | null;
-  planned_loading_at: string | null;
-  actual_loading_at: string | null;
+  planned_at: string | null;
+  actual_at: string | null;
   is_completed: boolean;
 };
 
-export type TripLoadingPointWritePayload = {
-  type: LoadingPointType;
-  name: string;
-  address: string;
+export type TripPointWritePayload = {
+  path_point_id?: number | null;
+  sequence: number;
+  is_loading_point?: boolean;
   factory_id?: number | null;
+  forwarder_user_id?: number | null;
+  name?: string;
+  address?: string;
   postcode?: string | null;
   country?: string | null;
   city?: string | null;
   contact_name?: string | null;
   phone?: string | null;
-  planned_loading_at?: string | null;
-  actual_loading_at?: string | null;
+  planned_at?: string | null;
+  actual_at?: string | null;
   is_completed?: boolean;
 };
 
-export type TripLoadingPointUpdatePayload = Partial<TripLoadingPointWritePayload>;
+export type TripPointUpdatePayload = Partial<TripPointWritePayload>;
 
 export type TripDetail = Trip & {
-  loading_points: TripLoadingPoint[];
-  path_points: TripPathPoint[];
+  points: TripPoint[];
 };
 
 export type ListParams = {

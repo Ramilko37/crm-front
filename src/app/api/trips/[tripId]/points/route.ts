@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ tripId: string }> },
 ) {
   const { tripId } = await params;
-  return proxyToBackend(request, `/trips/${tripId}/loading-points`);
+  return proxyToBackend(request, `/trips/${tripId}/points`);
 }
 
 export async function POST(
@@ -15,5 +15,5 @@ export async function POST(
   { params }: { params: Promise<{ tripId: string }> },
 ) {
   const { tripId } = await params;
-  return proxyToBackend(request, `/trips/${tripId}/loading-points`);
+  return proxyToBackend(request, `/trips/${tripId}/points`);
 }

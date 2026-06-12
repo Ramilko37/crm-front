@@ -30,8 +30,11 @@ export const queryKeys = {
   trips: {
     list: (params: unknown) => ["trips", "list", params] as const,
     detail: (id: number) => ["trips", "detail", id] as const,
-    pathPoints: (tripId: number) => ["trips", "path-points", tripId] as const,
-    loadingPoints: (tripId: number) => ["trips", "loading-points", tripId] as const,
+    points: (tripId: number) => ["trips", "points", tripId] as const,
+    orders: (tripId: number, params: unknown) => ["trips", "orders", tripId, params] as const,
+    lookupCities: (params: unknown) => ["trips", "lookups", "cities", params] as const,
+    lookupForwarderCities: (params: unknown) => ["trips", "lookups", "forwarder-cities", params] as const,
+    lookupForwarders: (params: unknown) => ["trips", "lookups", "forwarders", params] as const,
   },
   pathPoints: {
     list: (params: unknown) => ["path-points", "list", params] as const,

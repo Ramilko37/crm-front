@@ -6,7 +6,6 @@ import {
   App,
   Button,
   Card,
-  Checkbox,
   Descriptions,
   Form,
   Input,
@@ -18,19 +17,21 @@ import {
   Tag,
   Typography,
 } from "antd";
+import type { TablePaginationConfig } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import dayjs from "dayjs";
+import type { SorterResult } from "antd/es/table/interface";
 import { useParams, useRouter } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
-import { LoadingPointFormFields } from "@/features/trips/loading-point-form-fields";
+import { TripPointFormFields } from "@/features/trips/trip-point-form-fields";
 import { apiRequest } from "@/shared/lib/api";
 import {
   formatEnumCode,
+  ORDER_STATUS_VALUES,
+  type OrderStatus,
   TRIP_STATUS_VALUES,
   TRIP_TYPE_VALUES,
-  type LoadingPointType,
   type TripStatus,
   type TripType,
 } from "@/shared/lib/domain-enums";
@@ -38,25 +39,28 @@ import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { isBackOfficeRole } from "@/shared/lib/rbac";
 import {
-  buildLoadingPointApiPayload,
-  formatLoadingPointDate,
-  formatLoadingPointLocationLabel,
-  formatLoadingPointType,
-  pathPointActualAtFromCompleted,
-  pathPointIsCompleted,
-  resolveLoadingPointLocationId,
-  type LoadingPointFormValues,
+  buildTripPointInitialValues,
+  buildTripPointPayload,
+  formatTripCurrentStage,
+  formatTripPointDate,
+  formatTripPointKind,
+  formatTripPointSourceLabel,
+  getNextTripPointSequence,
+  hasDuplicateTripPointSequence,
+  type TripPointFormValues,
 } from "@/shared/lib/trip-point-forms";
 import { PageHeader } from "@/shared/ui/page-frame";
 import type {
   Factory,
+  Country,
+  OrderListItem,
   PaginatedResponse,
   PathPoint,
+  TripCityLookupItem,
   TripDetail,
-  TripLoadingPoint,
-  TripLoadingPointUpdatePayload,
-  TripPathPoint,
-  TripPathPointUpdatePayload,
+  TripForwarderLookupItem,
+  TripPoint,
+  TripPointUpdatePayload,
   TripWritePayload,
 } from "@/shared/types/entities";
 
@@ -70,9 +74,13 @@ type TripForm = {
   type_name?: TripType;
 };
 
-type PathPointFormValues = {
-  path_point_id: number;
-  is_completed?: boolean;
+type TripOrdersParams = {
+  query?: string;
+  status_names?: OrderStatus[];
+  page: number;
+  page_size: number;
+  sort_by?: string;
+  sort_desc?: boolean;
 };
 
 const tripStatusTagColors: Record<string, string> = {
@@ -82,6 +90,20 @@ const tripStatusTagColors: Record<string, string> = {
   in_moscow_warehouse: "geekblue",
   unloaded: "green",
 };
+
+function uniqueSortedCities(items: TripCityLookupItem[]) {
+  return Array.from(new Set(items.map((item) => item.city).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+function renderTripStatus(value: TripStatus | null) {
+  return value ? (
+    <Tag color={tripStatusTagColors[value] ?? "default"} className="crm-status-tag">
+      {formatEnumCode(value)}
+    </Tag>
+  ) : (
+    "—"
+  );
+}
 
 function TripDetailPageContent() {
   const params = useParams<{ id: string }>();
@@ -94,18 +116,39 @@ function TripDetailPageContent() {
   const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
 
   const [editTripOpen, setEditTripOpen] = useState(false);
-  const [pathPointModalOpen, setPathPointModalOpen] = useState(false);
-  const [loadingPointModalOpen, setLoadingPointModalOpen] = useState(false);
-  const [selectedPathPoint, setSelectedPathPoint] = useState<TripPathPoint | null>(null);
-  const [selectedLoadingPoint, setSelectedLoadingPoint] = useState<TripLoadingPoint | null>(null);
+  const [pointModalOpen, setPointModalOpen] = useState(false);
+  const [selectedPoint, setSelectedPoint] = useState<TripPoint | null>(null);
+  const [ordersParams, setOrdersParams] = useState<TripOrdersParams>({
+    page: 1,
+    page_size: 20,
+  });
 
   const [tripForm] = Form.useForm<TripForm>();
-  const [pathPointForm] = Form.useForm<PathPointFormValues>();
-  const [loadingPointForm] = Form.useForm<LoadingPointFormValues>();
+  const [pointForm] = Form.useForm<TripPointFormValues>();
+  const pointKind = Form.useWatch("point_kind", pointForm);
+  const pointLoadingSource = Form.useWatch("loading_source", pointForm);
+  const pointCountryId = Form.useWatch("country_id", pointForm);
+  const pointCountryName = Form.useWatch("country", pointForm);
+  const pointCity = Form.useWatch("city", pointForm);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.trips.detail(tripId),
     queryFn: () => apiRequest<TripDetail>(`/api/trips/${tripId}`),
+    enabled: Number.isFinite(tripId) && tripId > 0,
+  });
+
+  function fetchTripOrders() {
+    return apiRequest<PaginatedResponse<OrderListItem>>("/api/orders", {
+      query: {
+        ...ordersParams,
+        trip_id: tripId,
+      },
+    });
+  }
+
+  const ordersQuery = useQuery({
+    queryKey: queryKeys.trips.orders(tripId, ordersParams),
+    queryFn: fetchTripOrders,
     enabled: Number.isFinite(tripId) && tripId > 0,
   });
 
@@ -117,6 +160,15 @@ function TripDetailPageContent() {
       }),
   });
 
+  const countriesQuery = useQuery({
+    queryKey: queryKeys.countries.list({ page: 1, page_size: 250 }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Country>>("/api/countries", {
+        query: { page: 1, page_size: 250 },
+      }),
+    enabled: pointModalOpen && pointKind === "loading",
+  });
+
   const factoriesQuery = useQuery({
     queryKey: queryKeys.factories.list({ page: 1, page_size: 200 }),
     queryFn: () =>
@@ -125,25 +177,157 @@ function TripDetailPageContent() {
       }),
   });
 
-  const factories = factoriesQuery.data?.items ?? [];
-  const pathPoints = pathPointsCatalogQuery.data?.items ?? [];
+  const factoryCitiesQuery = useQuery({
+    queryKey: queryKeys.trips.lookupCities({
+      country_id: pointCountryId,
+      page: 1,
+      page_size: 50,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<TripCityLookupItem>>("/api/trips/lookups/cities", {
+        query: {
+          page: 1,
+          page_size: 50,
+          country_id: pointCountryId,
+        },
+      }),
+    enabled:
+      pointModalOpen &&
+      pointKind === "loading" &&
+      pointLoadingSource !== "forwarder" &&
+      Boolean(pointCountryId),
+  });
 
-  const pathPointOptions = useMemo(
-    () =>
-      (pathPointsCatalogQuery.data?.items ?? []).map((point) => ({
-        label: point.name_ru,
-        value: point.id,
-      })),
-    [pathPointsCatalogQuery.data?.items],
+  const countries = useMemo(() => countriesQuery.data?.items ?? [], [countriesQuery.data?.items]);
+  const selectedPointCountry = useMemo(
+    () => countries.find((country) => country.id === pointCountryId),
+    [countries, pointCountryId],
+  );
+  const selectedPointFactoryCountry = selectedPointCountry?.name_en || selectedPointCountry?.name_ru || pointCountryName;
+
+  const pointFactoriesQuery = useQuery({
+    queryKey: queryKeys.factories.list({
+      scope: "trip-point-factories",
+      country: selectedPointFactoryCountry,
+      city: pointCity,
+      page: 1,
+      page_size: 200,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+        query: {
+          page: 1,
+          page_size: 200,
+          country: selectedPointFactoryCountry,
+          city: pointCity,
+        },
+      }),
+    enabled:
+      pointModalOpen &&
+      pointKind === "loading" &&
+      pointLoadingSource !== "forwarder" &&
+      Boolean(selectedPointFactoryCountry) &&
+      Boolean(pointCity),
+  });
+
+  const forwarderCitiesQuery = useQuery({
+    queryKey: queryKeys.trips.lookupForwarderCities({
+      country_id: pointCountryId,
+      page: 1,
+      page_size: 50,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<TripCityLookupItem>>("/api/trips/lookups/forwarder-cities", {
+        query: {
+          page: 1,
+          page_size: 50,
+          country_id: pointCountryId,
+        },
+      }),
+    enabled:
+      pointModalOpen &&
+      pointKind === "loading" &&
+      pointLoadingSource === "forwarder" &&
+      Boolean(pointCountryId),
+  });
+
+  const pointForwardersQuery = useQuery({
+    queryKey: queryKeys.trips.lookupForwarders({
+      country_id: pointCountryId,
+      city: pointCity,
+      page: 1,
+      page_size: 250,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<TripForwarderLookupItem>>("/api/trips/lookups/forwarders", {
+        query: {
+          page: 1,
+          page_size: 250,
+          country_id: pointCountryId,
+          city: pointCity,
+        },
+      }),
+    enabled:
+      pointModalOpen &&
+      pointKind === "loading" &&
+      pointLoadingSource === "forwarder" &&
+      Boolean(pointCountryId) &&
+      Boolean(pointCity),
+  });
+
+  const trip = detailQuery.data;
+  const factories = useMemo(() => factoriesQuery.data?.items ?? [], [factoriesQuery.data?.items]);
+  const pointFactories = useMemo(() => pointFactoriesQuery.data?.items ?? [], [pointFactoriesQuery.data?.items]);
+  const factoryCityOptions = useMemo(() => uniqueSortedCities(factoryCitiesQuery.data?.items ?? []), [factoryCitiesQuery.data?.items]);
+  const forwarderCityOptions = useMemo(() => uniqueSortedCities(forwarderCitiesQuery.data?.items ?? []), [forwarderCitiesQuery.data?.items]);
+  const pointCityOptions = pointLoadingSource === "forwarder" ? forwarderCityOptions : factoryCityOptions;
+  const pointPayloadFactories = useMemo(() => {
+    const byId = new Map<number, Factory>();
+    for (const factory of [...factories, ...pointFactories]) {
+      byId.set(factory.id, factory);
+    }
+    return Array.from(byId.values());
+  }, [factories, pointFactories]);
+  const pathPoints = useMemo(() => pathPointsCatalogQuery.data?.items ?? [], [pathPointsCatalogQuery.data?.items]);
+  const pointForwarders = useMemo(() => pointForwardersQuery.data?.items ?? [], [pointForwardersQuery.data?.items]);
+  const selectedPointForwarder = useMemo<TripForwarderLookupItem | null>(() => {
+    if (!selectedPoint?.forwarder_user_id) return null;
+    return {
+      id: selectedPoint.forwarder_user_id,
+      full_name: selectedPoint.contact_name,
+      company_name: selectedPoint.name,
+      country: selectedPoint.country,
+      city: selectedPoint.city,
+      phone: selectedPoint.phone,
+      label: [selectedPoint.name, selectedPoint.contact_name].filter(Boolean).join(" / ") || selectedPoint.name,
+    };
+  }, [selectedPoint]);
+  const pointPayloadForwarders = useMemo(() => {
+    const byId = new Map<number, TripForwarderLookupItem>();
+    for (const forwarder of [...pointForwarders, ...(selectedPointForwarder ? [selectedPointForwarder] : [])]) {
+      byId.set(forwarder.id, forwarder);
+    }
+    return Array.from(byId.values());
+  }, [pointForwarders, selectedPointForwarder]);
+
+  const pointContext = useMemo(
+    () => ({ factories, pathPoints, forwarders: pointPayloadForwarders }),
+    [factories, pathPoints, pointPayloadForwarders],
   );
 
-  const pathPointNameById = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const point of pathPointsCatalogQuery.data?.items ?? []) {
-      map.set(point.id, point.name_ru);
+  useEffect(() => {
+    if (!pointModalOpen || pointKind !== "loading" || pointCountryId || !pointCountryName) return;
+    const matchedCountry = countries.find(
+      (country) =>
+        country.name_ru === pointCountryName ||
+        country.name_en === pointCountryName ||
+        country.iso2 === pointCountryName ||
+        country.iso3 === pointCountryName,
+    );
+    if (matchedCountry) {
+      pointForm.setFieldValue("country_id", matchedCountry.id);
     }
-    return map;
-  }, [pathPointsCatalogQuery.data?.items]);
+  }, [countries, pointCountryId, pointCountryName, pointForm, pointKind, pointModalOpen]);
 
   const updateTripMutation = useMutation({
     mutationFn: (payload: TripWritePayload) =>
@@ -161,85 +345,44 @@ function TripDetailPageContent() {
     },
   });
 
-  const savePathPointMutation = useMutation({
-    mutationFn: async (values: PathPointFormValues) => {
-      const sequence = selectedPathPoint?.sequence ?? (trip?.path_points.length ?? 0) + 1;
-      const actualAt = pathPointActualAtFromCompleted(
-        values.is_completed ?? false,
-        selectedPathPoint?.actual_at,
-      );
-      const payload = {
-        path_point_id: values.path_point_id,
-        sequence,
-        factory_id: null,
-        planned_at: null,
-        actual_at: actualAt,
-      };
+  const savePointMutation = useMutation({
+    mutationFn: async (values: TripPointFormValues) => {
+      const existingPoints = trip?.points ?? [];
+      const sequence = selectedPoint?.sequence ?? getNextTripPointSequence(existingPoints);
+      if (hasDuplicateTripPointSequence(sequence, existingPoints, selectedPoint?.id)) {
+        throw new Error("Sequence должен быть уникален внутри рейса");
+      }
 
-      if (selectedPathPoint) {
-        const updatePayload: TripPathPointUpdatePayload = payload;
-        return apiRequest<TripPathPoint>(`/api/trips/${tripId}/path-points/${selectedPathPoint.id}`, {
+      const payload = buildTripPointPayload(
+        { ...values, sequence },
+        { factories: pointPayloadFactories, forwarders: pointPayloadForwarders },
+      );
+
+      if (selectedPoint) {
+        const updatePayload: TripPointUpdatePayload = payload;
+        return apiRequest<TripPoint>(`/api/trips/${tripId}/points/${selectedPoint.id}`, {
           method: "PATCH",
           body: updatePayload,
         });
       }
 
-      return apiRequest<TripPathPoint>(`/api/trips/${tripId}/path-points`, {
+      return apiRequest<TripPoint>(`/api/trips/${tripId}/points`, {
         method: "POST",
         body: payload,
       });
     },
     onSuccess: async () => {
-      message.success(selectedPathPoint ? "Точка маршрута обновлена" : "Точка маршрута добавлена");
-      setPathPointModalOpen(false);
-      setSelectedPathPoint(null);
-      pathPointForm.resetFields();
+      message.success(selectedPoint ? "Точка рейса обновлена" : "Точка рейса добавлена");
+      setPointModalOpen(false);
+      setSelectedPoint(null);
+      pointForm.resetFields();
       await queryClient.invalidateQueries({ queryKey: queryKeys.trips.detail(tripId) });
+      await queryClient.invalidateQueries({ queryKey: ["trips"] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка сохранения точки маршрута");
+      message.error(error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка сохранения точки рейса");
     },
   });
-
-  const saveLoadingPointMutation = useMutation({
-    mutationFn: async (values: LoadingPointFormValues) => {
-      const payload = buildLoadingPointApiPayload(values, { factories, pathPoints });
-
-      if (selectedLoadingPoint) {
-        const updatePayload: TripLoadingPointUpdatePayload = payload;
-        return apiRequest<TripLoadingPoint>(
-          `/api/trips/${tripId}/loading-points/${selectedLoadingPoint.id}`,
-          {
-            method: "PATCH",
-            body: updatePayload,
-          },
-        );
-      }
-
-      return apiRequest<TripLoadingPoint>(`/api/trips/${tripId}/loading-points`, {
-        method: "POST",
-        body: payload,
-      });
-    },
-    onSuccess: async () => {
-      message.success(selectedLoadingPoint ? "Точка погрузки обновлена" : "Точка погрузки добавлена");
-      setLoadingPointModalOpen(false);
-      setSelectedLoadingPoint(null);
-      loadingPointForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: queryKeys.trips.detail(tripId) });
-    },
-    onError: (error) => {
-      message.error(
-        error instanceof ApiError
-          ? error.detail
-          : error instanceof Error
-            ? error.message
-            : "Ошибка сохранения точки погрузки",
-      );
-    },
-  });
-
-  const trip = detailQuery.data;
 
   function openEditTrip() {
     if (!trip) return;
@@ -255,98 +398,63 @@ function TripDetailPageContent() {
     setEditTripOpen(true);
   }
 
-  function openCreatePathPoint() {
-    setSelectedPathPoint(null);
-    pathPointForm.resetFields();
-    pathPointForm.setFieldsValue({ is_completed: false });
-    setPathPointModalOpen(true);
-  }
-
-  function openEditPathPoint(record: TripPathPoint) {
-    setSelectedPathPoint(record);
-    pathPointForm.setFieldsValue({
-      path_point_id: record.path_point_id,
-      is_completed: pathPointIsCompleted(record.actual_at),
-    });
-    setPathPointModalOpen(true);
-  }
-
-  function openCreateLoadingPoint() {
-    setSelectedLoadingPoint(null);
-    loadingPointForm.resetFields();
-    loadingPointForm.setFieldsValue({
-      loading_point_type: "factory",
+  function openCreatePoint() {
+    setSelectedPoint(null);
+    pointForm.resetFields();
+    pointForm.setFieldsValue({
+      point_kind: "path",
+      loading_source: "factory",
+      sequence: getNextTripPointSequence(trip?.points ?? []),
       is_completed: false,
     });
-    setLoadingPointModalOpen(true);
+    setPointModalOpen(true);
   }
 
-  function openEditLoadingPoint(record: TripLoadingPoint) {
-    setSelectedLoadingPoint(record);
-    loadingPointForm.setFieldsValue({
-      loading_point_type: record.type,
-      location_id: resolveLoadingPointLocationId(record, pathPoints),
-      planned_loading_at: record.planned_loading_at ? dayjs(record.planned_loading_at) : undefined,
-      actual_loading_at: record.actual_loading_at ? dayjs(record.actual_loading_at) : undefined,
-      is_completed: record.is_completed,
-    });
-    setLoadingPointModalOpen(true);
+  function openEditPoint(record: TripPoint) {
+    setSelectedPoint(record);
+    pointForm.setFieldsValue(buildTripPointInitialValues(record));
+    setPointModalOpen(true);
   }
 
-  const pathPointColumns: ColumnsType<TripPathPoint> = [
+  const pointColumns: ColumnsType<TripPoint> = [
     {
-      title: "Путевая точка",
-      key: "path_point",
-      render: (_, record) => pathPointNameById.get(record.path_point_id) ?? `#${record.path_point_id}`,
+      title: "Sequence",
+      dataIndex: "sequence",
+      width: 100,
     },
-    {
-      title: "Завершено",
-      key: "is_completed",
-      width: 120,
-      render: (_, record) => (pathPointIsCompleted(record.actual_at) ? "Да" : "Нет"),
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 120,
-      render: (_, record) =>
-        canMutate ? (
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditPathPoint(record)}>
-            Изменить
-          </Button>
-        ) : null,
-    },
-  ];
-
-  const loadingPointColumns: ColumnsType<TripLoadingPoint> = [
     {
       title: "Тип",
-      dataIndex: "type",
-      render: (value: LoadingPointType) => formatLoadingPointType(value),
-      width: 160,
+      key: "kind",
+      width: 130,
+      render: (_, record) => formatTripPointKind(record.is_loading_point ? "loading" : "path"),
     },
     {
-      title: "Фабрика / склад",
-      key: "location",
-      render: (_, record) => formatLoadingPointLocationLabel(record, factories, pathPoints),
+      title: "Точка",
+      key: "source",
+      render: (_, record) => formatTripPointSourceLabel(record, pointContext),
     },
     {
-      title: "Дата загрузки",
-      dataIndex: "planned_loading_at",
-      render: (value: string | null) => formatLoadingPointDate(value),
-      width: 140,
+      title: "Адрес",
+      key: "address",
+      render: (_, record) => [record.address, record.city, record.country].filter(Boolean).join(", ") || "—",
     },
     {
-      title: "Актуальная дата",
-      dataIndex: "actual_loading_at",
-      render: (value: string | null) => formatLoadingPointDate(value),
-      width: 140,
+      title: "План",
+      dataIndex: "planned_at",
+      render: (value: string | null) => formatTripPointDate(value),
+      width: 130,
+    },
+    {
+      title: "Факт",
+      dataIndex: "actual_at",
+      render: (value: string | null) => formatTripPointDate(value),
+      width: 130,
     },
     {
       title: "Завершено",
       dataIndex: "is_completed",
       render: (value: boolean) => (value ? "Да" : "Нет"),
-      width: 110,
+      width: 120,
     },
     {
       title: "",
@@ -354,12 +462,96 @@ function TripDetailPageContent() {
       width: 120,
       render: (_, record) =>
         canMutate ? (
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditLoadingPoint(record)}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditPoint(record)}>
             Изменить
           </Button>
         ) : null,
     },
   ];
+
+  const orderSortOrderFor = (field: string) => {
+    if (ordersParams.sort_by !== field) return null;
+    return ordersParams.sort_desc ? "descend" : "ascend";
+  };
+
+  const orderColumns: ColumnsType<OrderListItem> = [
+    { title: "ID", dataIndex: "id", key: "id", sorter: true, sortOrder: orderSortOrderFor("id"), width: 90 },
+    {
+      title: "Заказ",
+      dataIndex: "order_number",
+      key: "order_number",
+      sorter: true,
+      sortOrder: orderSortOrderFor("order_number"),
+      render: (value: string | null) => value ?? "—",
+    },
+    {
+      title: "Клиент",
+      dataIndex: "company_name",
+      key: "company_name",
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Фабрика",
+      dataIndex: "factory_name",
+      key: "factory_name",
+      render: (value: string | null | undefined) => value ?? "—",
+    },
+    {
+      title: "Статус",
+      dataIndex: "status_name",
+      key: "status_name",
+      sorter: true,
+      sortOrder: orderSortOrderFor("status_name"),
+      render: (value: OrderStatus | null) => (value ? formatEnumCode(value) : "—"),
+    },
+    {
+      title: "Ready date",
+      dataIndex: "ready_date",
+      key: "ready_date",
+      sorter: true,
+      sortOrder: orderSortOrderFor("ready_date"),
+      render: (value: string | null) => value ?? "—",
+    },
+    { title: "Страна", dataIndex: "country", key: "country", render: (value: string | null) => value ?? "—" },
+    {
+      title: "Экспедитор",
+      dataIndex: "forwarder_name",
+      key: "forwarder_name",
+      render: (value: string | null) => value ?? "—",
+    },
+    {
+      title: "Документы",
+      dataIndex: "documents_count",
+      key: "documents_count",
+      render: (value: number | undefined) => value ?? 0,
+      width: 120,
+    },
+    {
+      title: "Сертификат",
+      dataIndex: "has_certificate",
+      key: "has_certificate",
+      render: (value: boolean | undefined) => (value ? "Да" : "Нет"),
+      width: 120,
+    },
+  ];
+
+  function handleOrdersTableChange(
+    pagination: TablePaginationConfig,
+    _: unknown,
+    sorter: SorterResult<OrderListItem> | SorterResult<OrderListItem>[],
+  ) {
+    const currentSorter = Array.isArray(sorter)
+      ? (sorter[0] as SorterResult<OrderListItem> | undefined)
+      : (sorter as SorterResult<OrderListItem>);
+
+    setOrdersParams((current) => ({
+      ...current,
+      page: pagination.current ?? 1,
+      page_size: pagination.pageSize ?? current.page_size,
+      sort_by: (currentSorter?.field as string | undefined) || undefined,
+      sort_desc: currentSorter?.order === "descend",
+    }));
+  }
 
   if (!Number.isFinite(tripId) || tripId <= 0) {
     return <Typography.Text type="danger">Некорректный ID рейса</Typography.Text>;
@@ -395,16 +587,9 @@ function TripDetailPageContent() {
           <Card className="crm-panel">
             <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
               <Descriptions.Item label="Название">{trip.name}</Descriptions.Item>
-              <Descriptions.Item label="Статус">
-                {trip.status_name ? (
-                  <Tag color={tripStatusTagColors[trip.status_name] ?? "default"} className="crm-status-tag">
-                    {formatEnumCode(trip.status_name)}
-                  </Tag>
-                ) : (
-                  "—"
-                )}
-              </Descriptions.Item>
+              <Descriptions.Item label="Статус">{renderTripStatus(trip.status_name)}</Descriptions.Item>
               <Descriptions.Item label="Тип">{trip.type_name ? formatEnumCode(trip.type_name) : "—"}</Descriptions.Item>
+              <Descriptions.Item label="Текущий этап">{formatTripCurrentStage(trip.current_stage)}</Descriptions.Item>
               <Descriptions.Item label="Текущая точка">{trip.current_point_name ?? "—"}</Descriptions.Item>
               <Descriptions.Item label="Номер тягача">{trip.truck_plate ?? "—"}</Descriptions.Item>
               <Descriptions.Item label="Транспортная компания">{trip.truck_company_name ?? "—"}</Descriptions.Item>
@@ -414,43 +599,79 @@ function TripDetailPageContent() {
 
           <Card
             className="crm-panel crm-table-card"
-            title="Маршрут"
+            title="Точки рейса"
             extra={
               canMutate ? (
-                <Button size="small" icon={<PlusOutlined />} onClick={openCreatePathPoint}>
+                <Button size="small" icon={<PlusOutlined />} onClick={openCreatePoint}>
                   Добавить
                 </Button>
               ) : null
             }
           >
-            <Table<TripPathPoint>
+            <Table<TripPoint>
               rowKey="id"
               size="small"
               pagination={false}
-              dataSource={[...(trip.path_points ?? [])].sort((a, b) => a.sequence - b.sequence)}
-              columns={pathPointColumns}
-              locale={{ emptyText: "Точки маршрута не добавлены" }}
+              dataSource={trip.points ?? []}
+              columns={pointColumns}
+              scroll={{ x: 980 }}
+              locale={{ emptyText: "Точки рейса не добавлены" }}
             />
           </Card>
 
-          <Card
-            className="crm-panel crm-table-card"
-            title="Точки погрузки"
-            extra={
-              canMutate ? (
-                <Button size="small" icon={<PlusOutlined />} onClick={openCreateLoadingPoint}>
-                  Добавить
-                </Button>
-              ) : null
-            }
-          >
-            <Table<TripLoadingPoint>
+          <Card className="crm-panel crm-table-card" title="Заказы рейса">
+            {ordersQuery.error ? (
+              <Typography.Text type="danger">
+                {ordersQuery.error instanceof ApiError ? ordersQuery.error.detail : "Ошибка загрузки заказов рейса"}
+              </Typography.Text>
+            ) : null}
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Input.Search
+                allowClear
+                placeholder="Поиск по заказам"
+                style={{ width: 260 }}
+                onSearch={(value) => {
+                  setOrdersParams((current) => ({
+                    ...current,
+                    query: value || undefined,
+                    page: 1,
+                  }));
+                }}
+              />
+              <Select
+                allowClear
+                mode="multiple"
+                placeholder="Статусы"
+                style={{ minWidth: 260 }}
+                options={ORDER_STATUS_VALUES.map((value) => ({
+                  label: formatEnumCode(value),
+                  value,
+                }))}
+                onChange={(values: OrderStatus[]) => {
+                  setOrdersParams((current) => ({
+                    ...current,
+                    status_names: values.length ? values : undefined,
+                    page: 1,
+                  }));
+                }}
+              />
+            </Space>
+            <Table<OrderListItem>
               rowKey="id"
               size="small"
-              pagination={false}
-              dataSource={trip.loading_points ?? []}
-              columns={loadingPointColumns}
-              locale={{ emptyText: "Точки погрузки не добавлены" }}
+              loading={ordersQuery.isLoading}
+              dataSource={ordersQuery.data?.items ?? []}
+              columns={orderColumns}
+              scroll={{ x: 1180 }}
+              pagination={{
+                current: ordersParams.page,
+                pageSize: ordersParams.page_size,
+                total: ordersQuery.data?.meta.total ?? 0,
+                showSizeChanger: true,
+                pageSizeOptions: [20, 50, 100, 200],
+              }}
+              onChange={handleOrdersTableChange}
+              locale={{ emptyText: "Заказы рейса не найдены" }}
             />
           </Card>
         </>
@@ -506,51 +727,36 @@ function TripDetailPageContent() {
       </Modal>
 
       <Modal
-        title={selectedPathPoint ? "Редактировать точку маршрута" : "Добавить точку маршрута"}
-        open={pathPointModalOpen}
+        title={selectedPoint ? "Редактировать точку рейса" : "Добавить точку рейса"}
+        open={pointModalOpen}
         destroyOnHidden
         onCancel={() => {
-          setPathPointModalOpen(false);
-          setSelectedPathPoint(null);
+          setPointModalOpen(false);
+          setSelectedPoint(null);
         }}
-        onOk={() => pathPointForm.submit()}
-        confirmLoading={savePathPointMutation.isPending}
+        onOk={() => pointForm.submit()}
+        confirmLoading={savePointMutation.isPending}
       >
         <Form
-          form={pathPointForm}
+          form={pointForm}
           layout="vertical"
-          onFinish={(values) => savePathPointMutation.mutate(values)}
+          onFinish={(values) => savePointMutation.mutate(values)}
         >
-          <Form.Item name="path_point_id" label="Название путевой точки" rules={[{ required: true }]}>
-            <Select showSearch optionFilterProp="label" options={pathPointOptions} />
-          </Form.Item>
-          <Form.Item name="is_completed" valuePropName="checked">
-            <Checkbox>Завершено</Checkbox>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title={selectedLoadingPoint ? "Редактировать точку погрузки" : "Добавить точку погрузки"}
-        open={loadingPointModalOpen}
-        destroyOnHidden
-        onCancel={() => {
-          setLoadingPointModalOpen(false);
-          setSelectedLoadingPoint(null);
-        }}
-        onOk={() => loadingPointForm.submit()}
-        confirmLoading={saveLoadingPointMutation.isPending}
-      >
-        <Form
-          form={loadingPointForm}
-          layout="vertical"
-          onFinish={(values) => saveLoadingPointMutation.mutate(values)}
-        >
-          <LoadingPointFormFields
-            form={loadingPointForm}
-            factories={factories}
+          <TripPointFormFields
+            form={pointForm}
+            countries={countries}
+            cities={pointCityOptions}
+            factories={pointFactories}
+            forwarders={pointPayloadForwarders}
             pathPoints={pathPoints}
-            factoriesLoading={factoriesQuery.isLoading}
+            countriesLoading={countriesQuery.isLoading}
+            citiesLoading={
+              pointLoadingSource === "forwarder"
+                ? forwarderCitiesQuery.isLoading
+                : factoryCitiesQuery.isLoading
+            }
+            factoriesLoading={pointFactoriesQuery.isLoading}
+            forwardersLoading={pointForwardersQuery.isLoading}
             pathPointsLoading={pathPointsCatalogQuery.isLoading}
           />
         </Form>

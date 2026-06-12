@@ -429,7 +429,7 @@ const QUANTITY_UNIT_FALLBACK_OPTIONS = [
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
-const ORDER_TRIP_FACTORY_MISMATCH_CODE = "order-trip-factory-mismatch";
+const ORDER_TRIP_SOURCE_MISMATCH_CODE = "order-trip-source-mismatch";
 const REQUEST_DOCUMENT_TYPE_OPTIONS = [
   { label: "WORD", value: "word" },
   { label: "XLSX", value: "xlsx" },
@@ -456,13 +456,13 @@ function formatRatio(numerator: string | undefined, denominator: string | undefi
   }).format(nextNumerator / nextDenominator);
 }
 
-function isOrderTripFactoryMismatch(detail: string | undefined) {
+function isOrderTripSourceMismatch(detail: string | undefined) {
   if (!detail) return false;
-  return detail.toLowerCase().includes(ORDER_TRIP_FACTORY_MISMATCH_CODE);
+  return detail.toLowerCase().includes(ORDER_TRIP_SOURCE_MISMATCH_CODE);
 }
 
-function getOrderTripFactoryMismatchMessage() {
-  return "Выбранный рейс не содержит точку для фабрики заказа";
+function getOrderTripSourceMismatchMessage() {
+  return "Заказ не совпадает с точками выбранного рейса";
 }
 
 function normalizeCurrencyPayload(
@@ -2772,8 +2772,8 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      if (error instanceof ApiError && isOrderTripFactoryMismatch(error.detail)) {
-        message.error(getOrderTripFactoryMismatchMessage());
+      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
+        message.error(getOrderTripSourceMismatchMessage());
         return;
       }
       message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
@@ -2959,8 +2959,8 @@ function OrdersPageContent() {
       await invalidateOrdersQueries();
     },
     onError: (error) => {
-      if (error instanceof ApiError && isOrderTripFactoryMismatch(error.detail)) {
-        message.error(getOrderTripFactoryMismatchMessage());
+      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
+        message.error(getOrderTripSourceMismatchMessage());
         return;
       }
       message.error(error instanceof ApiError ? error.detail : "Ошибка массовой операции");
@@ -7082,6 +7082,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           </Form.Item>
         </Form>
       </Modal>
+
         </>
       ) : null}
     </Space>

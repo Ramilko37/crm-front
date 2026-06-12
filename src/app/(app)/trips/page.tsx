@@ -1,6 +1,13 @@
 "use client";
 
-import { EditOutlined, EyeOutlined } from "@ant-design/icons";
+import {
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  FileExcelOutlined,
+  FilePdfOutlined,
+} from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
@@ -41,6 +48,7 @@ import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { isBackOfficeRole } from "@/shared/lib/rbac";
+import { formatTripCurrentStage } from "@/shared/lib/trip-point-forms";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type { BulkMutationResponse, PaginatedResponse, Trip, TripFilterParams, TripWritePayload } from "@/shared/types/entities";
 
@@ -279,12 +287,12 @@ function TripsPageContent() {
       width: 120,
     },
     {
-      title: "Текущая точка",
-      dataIndex: "current_point_name",
-      key: "current_point_name",
+      title: "Текущий этап",
+      dataIndex: "current_stage",
+      key: "current_stage",
       sorter: true,
       sortOrder: sortOrderFor("current_point_name"),
-      render: (v) => v ?? "-",
+      render: (_, record) => formatTripCurrentStage(record.current_stage),
     },
     {
       title: "Номер тягача",
@@ -389,6 +397,15 @@ function TripsPageContent() {
         });
       },
     });
+  }
+
+  function runMockExport(format: "XLS" | "PDF") {
+    if (selectedRowKeys.length === 0) {
+      message.warning("Выберите рейсы для выгрузки");
+      return;
+    }
+
+    message.info(`Мок: выгрузка ${selectedRowKeys.length} рейсов в ${format}`);
   }
 
   return (
@@ -550,17 +567,60 @@ function TripsPageContent() {
         </div>
       </Card>
 
-      {canMutate && selectedRowKeys.length > 0 ? (
-        <Card className="crm-panel crm-bulk-card">
-          <Space wrap>
-            <Typography.Text strong>Выбрано рейсов: {selectedRowKeys.length}</Typography.Text>
-            <Button onClick={() => setBulkStatusOpen(true)}>Массово: статус</Button>
-            <Button onClick={() => setBulkTypeOpen(true)}>Массово: тип</Button>
-            <Button danger onClick={askBulkDeleteConfirm}>
+      {canMutate ? (
+        <Card className="crm-panel crm-actions-strip-bar">
+          <div className="crm-actions-strip">
+            <Typography.Text type="secondary">Выбрано: {selectedRowKeys.length}</Typography.Text>
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => setBulkStatusOpen(true)}
+            >
+              Сменить статус
+            </Button>
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => setBulkTypeOpen(true)}
+            >
+              Сменить тип
+            </Button>
+            <Button
+              type="text"
+              icon={<FileExcelOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => runMockExport("XLS")}
+            >
+              Выгрузить в XLS
+            </Button>
+            <Button
+              type="text"
+              icon={<FilePdfOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => runMockExport("PDF")}
+            >
+              Выгрузить в PDF
+            </Button>
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={askBulkDeleteConfirm}
+            >
               Удалить
             </Button>
-            <Button onClick={() => setSelectedRowKeys([])}>Снять выделение</Button>
-          </Space>
+            <Button
+              type="text"
+              icon={<CloseOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => setSelectedRowKeys([])}
+            >
+              Снять выделение
+            </Button>
+          </div>
         </Card>
       ) : null}
 
@@ -604,8 +664,8 @@ function TripsPageContent() {
                       <strong>{formatTripType(record.type_name)}</strong>
                     </div>
                     <div className="crm-row-meta-item">
-                      Точка
-                      <strong>{record.current_point_name ?? "-"}</strong>
+                      Этап
+                      <strong>{formatTripCurrentStage(record.current_stage)}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Тягач
