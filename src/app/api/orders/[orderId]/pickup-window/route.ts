@@ -7,5 +7,5 @@ export async function POST(
   { params }: { params: Promise<{ orderId: string }> },
 ) {
   const { orderId } = await params;
-  return proxyToBackend(request, `/orders/${orderId}/cancel-pickup`);
+  return proxyToBackend(request, `/orders/${orderId}/pickup-window`);
 }

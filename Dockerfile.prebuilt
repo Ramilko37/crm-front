@@ -1,0 +1,20 @@
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+ENV PNPM_VERSION=10.34.4
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate && pnpm install --prod --frozen-lockfile
+
+COPY deploy/standalone/server.js ./server.js
+COPY deploy/standalone_next ./.next
+COPY deploy/static ./.next/static
+COPY deploy/public ./public
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

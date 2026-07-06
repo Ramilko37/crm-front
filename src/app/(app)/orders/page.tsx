@@ -2,7 +2,11 @@
 
 import {
   ApartmentOutlined,
+  CheckCircleOutlined,
+  DownloadOutlined,
   EditOutlined,
+  FileTextOutlined,
+  InfoCircleOutlined,
   MessageOutlined,
   MoreOutlined,
   SwapOutlined,
@@ -21,10 +25,13 @@ import {
   InputNumber,
   Modal,
   Pagination,
+  Popover,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from "antd";
@@ -48,6 +55,7 @@ import {
   type QuoteStatus,
 } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
+import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
 import { toOrderWritePayload } from "@/shared/lib/order-dto";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
@@ -63,9 +71,14 @@ import type {
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
+  OrderCertificate,
+  OrderClientBlock,
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
   OrderDetail,
+  OrderDocument,
+  OrderFactoryBlock,
+  OrderGoodsLine,
   OrderFilterParams,
   OrderListItem,
   OrderWritePayload,
@@ -169,9 +182,205 @@ type OrderBulkEndpoint =
   | "delete"
   | "warehouse-comment"
   | "forwarder-comment"
-  | "pickup-date"
-  | "cancel-pickup"
+  | "pickup-window"
+  | "clear-pickup-window"
   | "special-tariff";
+
+type PickupWindowForm = {
+  pickup_date_from: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs | null;
+};
+
+type OrderDetailPreview = OrderDetail & {
+  order?: Partial<OrderListItem>;
+  card?: {
+    client?: OrderClientBlock | null;
+    assigned_forwarder?: (NonNullable<OrderDetail["assigned_forwarder"]> & { email?: string | null }) | null;
+    certificate?: OrderCertificate | null;
+  };
+  documents?: OrderDocument[];
+  goods_lines?: OrderGoodsLine[];
+};
+
+type PreviewRow = {
+  label: string;
+  value: React.ReactNode;
+};
+
+function isFilled(value: unknown): boolean {
+  return value !== null && value !== undefined && String(value).trim().length > 0;
+}
+
+function textOrDash(value: unknown): string {
+  if (!isFilled(value)) {
+    return "-";
+  }
+  return String(value);
+}
+
+function joinFilled(values: unknown[], separator = " · "): string {
+  return values.filter(isFilled).map(String).join(separator) || "-";
+}
+
+function getRawRecordValue(record: OrderListItem, keys: string[]): string | null {
+  const raw = record.raw_payload;
+  if (!raw) return null;
+
+  for (const key of keys) {
+    const value = raw[key];
+    if (isFilled(value) && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) {
+      return String(value);
+    }
+  }
+
+  return null;
+}
+
+function getPreviewOrder(detail?: OrderDetailPreview): Partial<OrderListItem & OrderDetail> {
+  if (!detail) return {};
+  return detail.order ?? detail;
+}
+
+function getPreviewClient(detail: OrderDetailPreview | undefined, record: OrderListItem): Partial<OrderClientBlock> {
+  return (
+    detail?.card?.client ??
+    detail?.client ?? {
+      company_id: record.company_id,
+      company_name: record.company_name ?? null,
+      user_id: record.user_id,
+      user_full_name: record.contact_name_snapshot ?? null,
+      user_email: record.contact_email_snapshot ?? record.email ?? null,
+      user_phone: record.contact_phone_snapshot ?? null,
+      invoice_company_name: null,
+    }
+  );
+}
+
+function getPreviewFactory(detail: OrderDetailPreview | undefined, record: OrderListItem): Partial<OrderFactoryBlock> {
+  return (
+    detail?.factory ?? {
+      factory_id: record.factory_id,
+      factory_name: record.factory_name ?? null,
+      country: record.country,
+      primary_email: record.email,
+      selected_loading_address: null,
+    }
+  );
+}
+
+function getPreviewForwarder(detail: OrderDetailPreview | undefined, record: OrderListItem) {
+  return (
+    detail?.card?.assigned_forwarder ??
+    detail?.assigned_forwarder ?? {
+      id: record.assigned_forwarder_user_id ?? 0,
+      full_name: record.forwarder_name,
+      login: null,
+      role_name: null,
+      email: null,
+    }
+  );
+}
+
+function getPreviewCertificate(detail: OrderDetailPreview | undefined): OrderCertificate | null | undefined {
+  return detail?.card?.certificate ?? detail?.certificate;
+}
+
+function getGoodsLineTitle(line: OrderGoodsLine): string {
+  return (
+    line.product_name ||
+    line.item_type ||
+    line.custom_item_type ||
+    line.description ||
+    (line.id ? `Строка #${line.id}` : "Строка товара")
+  );
+}
+
+function getGoodsLineQuantity(line: OrderGoodsLine): string {
+  return joinFilled([line.quantity ?? line.quantity_value, line.unit ?? line.quantity_unit], " ");
+}
+
+function InlineValue({
+  value,
+  max = 24,
+  muted = false,
+}: {
+  value: unknown;
+  max?: number;
+  muted?: boolean;
+}) {
+  const text = textOrDash(value);
+  const short = text.length > max ? `${text.slice(0, max - 1)}...` : text;
+
+  return (
+    <Typography.Text className={muted ? "crm-cell-muted" : undefined} title={text}>
+      {short}
+    </Typography.Text>
+  );
+}
+
+function PreviewRows({ rows }: { rows: PreviewRow[] }) {
+  const visibleRows = rows.filter((row) => isFilled(row.value));
+
+  if (!visibleRows.length) {
+    return <Typography.Text type="secondary">Нет данных</Typography.Text>;
+  }
+
+  return (
+    <div className="crm-preview-rows">
+      {visibleRows.map((row) => (
+        <div key={row.label} className="crm-preview-row">
+          <span>{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OrderPreviewPopover({
+  record,
+  title,
+  children,
+  render,
+}: {
+  record: OrderListItem;
+  title: string;
+  children: React.ReactNode;
+  render: (detail: OrderDetailPreview | undefined) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const detailQuery = useQuery({
+    queryKey: queryKeys.orders.detail(record.id),
+    queryFn: () => apiRequest<OrderDetailPreview>(`/api/orders/${record.id}`),
+    enabled: open,
+  });
+
+  return (
+    <Popover
+      trigger="click"
+      placement="bottomLeft"
+      open={open}
+      onOpenChange={setOpen}
+      title={title}
+      overlayClassName="crm-order-preview-popover"
+      content={
+        detailQuery.isLoading ? (
+          <div className="crm-preview-loading">
+            <Spin size="small" />
+          </div>
+        ) : detailQuery.error ? (
+          <Typography.Text type="danger">
+            {detailQuery.error instanceof ApiError ? detailQuery.error.detail : "Не удалось загрузить детали"}
+          </Typography.Text>
+        ) : (
+          render(detailQuery.data)
+        )
+      }
+    >
+      {children}
+    </Popover>
+  );
+}
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -206,6 +415,17 @@ function trimOrUndefined(value: string | null | undefined) {
 
 function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
+}
+
+function formatPickupWindow(order: Pick<OrderListItem, "pickup_date" | "pickup_date_from" | "pickup_date_to">) {
+  const from = order.pickup_date_from ?? order.pickup_date ?? null;
+  const to = order.pickup_date_to ?? null;
+
+  if (!from) {
+    return "-";
+  }
+
+  return to && to !== from ? `${from} - ${to}` : from;
 }
 
 const QUANTITY_UNIT_FALLBACK_OPTIONS = [
@@ -301,7 +521,7 @@ function OrdersPageContent() {
   const [statusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
-  const [pickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [pickupForm] = Form.useForm<PickupWindowForm>();
   const [specialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
   const [quotePriceForm] = Form.useForm<{ amount: number; currency?: string }>();
@@ -330,7 +550,7 @@ function OrdersPageContent() {
   }>();
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
-  const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [bulkPickupForm] = Form.useForm<PickupWindowForm>();
   const [bulkSpecialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
@@ -1023,34 +1243,42 @@ function OrdersPageContent() {
     },
   });
 
-  const pickupDateMutation = useMutation({
-    mutationFn: ({ id, pickup_date }: { id: number; pickup_date: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/pickup-date`, {
+  const pickupWindowMutation = useMutation({
+    mutationFn: ({
+      id,
+      pickup_date_from,
+      pickup_date_to,
+    }: {
+      id: number;
+      pickup_date_from: string;
+      pickup_date_to?: string | null;
+    }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/pickup-window`, {
         method: "POST",
-        body: { pickup_date },
+        body: { pickup_date_from, pickup_date_to: pickup_date_to ?? null },
       }),
     onSuccess: async (_, values) => {
-      message.success("Дата вывоза назначена");
+      message.success("Окно вывоза назначено");
       setPickupOpen(false);
       pickupForm.resetFields();
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения даты вывоза");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения окна вывоза");
     },
   });
 
-  const cancelPickupMutation = useMutation({
+  const clearPickupWindowMutation = useMutation({
     mutationFn: ({ id }: { id: number }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/cancel-pickup`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/clear-pickup-window`, {
         method: "POST",
       }),
     onSuccess: async (_, values) => {
-      message.success("Дата вывоза отменена");
+      message.success("Окно вывоза очищено");
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка отмены вывоза");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка очистки окна вывоза");
     },
   });
 
@@ -1203,7 +1431,11 @@ function OrdersPageContent() {
 
   function openPickup(record: OrderListItem) {
     setSelected(record);
-    pickupForm.setFieldsValue({ pickup_date: record.pickup_date ? dayjs(record.pickup_date) : undefined });
+    const pickupDateFrom = record.pickup_date_from ?? record.pickup_date ?? null;
+    pickupForm.setFieldsValue({
+      pickup_date_from: pickupDateFrom ? dayjs(pickupDateFrom) : undefined,
+      pickup_date_to: record.pickup_date_to ? dayjs(record.pickup_date_to) : undefined,
+    });
     setPickupOpen(true);
   }
 
@@ -1300,8 +1532,8 @@ function OrdersPageContent() {
           onClick: () => openAssignForwarder(record),
         },
         {
-          key: "pickup-date",
-          label: "Назначить дату вывоза",
+          key: "pickup-window",
+          label: "Назначить окно вывоза",
           icon: <SwapOutlined />,
           onClick: () => openPickup(record),
         },
@@ -1319,13 +1551,13 @@ function OrdersPageContent() {
         },
       );
 
-      if (record.pickup_date) {
+      if (record.pickup_date_from || record.pickup_date) {
         actions.push({
-          key: "cancel-pickup",
-          label: "Отменить вывоз",
+          key: "clear-pickup-window",
+          label: "Очистить окно вывоза",
           icon: <SwapOutlined />,
           onClick: () => {
-            cancelPickupMutation.mutate({ id: record.id });
+            clearPickupWindowMutation.mutate({ id: record.id });
           },
         });
       }
@@ -1355,44 +1587,327 @@ function OrdersPageContent() {
     return actions;
   }
 
+  async function handleListDocumentDownload(orderId: number, row: OrderDocument) {
+    const fallbackName = row.file_name || row.display_name || `order-${orderId}-document-${row.id}`;
+    try {
+      await downloadFileWithCredentials(`/api/orders/${orderId}/documents/${row.id}/download`, fallbackName);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания документа"));
+    }
+  }
+
+  async function handleListCertificateDownload(orderId: number) {
+    try {
+      await downloadFileWithCredentials(`/api/orders/${orderId}/certificate/download`, `order-${orderId}-certificate`);
+    } catch (error) {
+      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания сертификата"));
+    }
+  }
+
+  function renderDocumentsPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const documents = detail?.documents ?? [];
+
+    if (!documents.length) {
+      return (
+        <PreviewRows
+          rows={[
+            { label: "Документы", value: record.has_documents ? "Есть, список не пришел в деталке" : "Нет документов" },
+            { label: "Кол-во", value: record.documents_count ?? null },
+          ]}
+        />
+      );
+    }
+
+    return (
+      <div className="crm-preview-docs">
+        {documents.map((document) => (
+          <div key={document.id} className="crm-preview-doc">
+            <div>
+              <strong>{document.display_name || document.file_name || `Документ #${document.id}`}</strong>
+              <span>{document.document_type ?? "Без типа"}</span>
+            </div>
+            <Tooltip title="Скачать">
+              <Button
+                size="small"
+                type="text"
+                icon={<DownloadOutlined />}
+                onClick={() => {
+                  void handleListDocumentDownload(record.id, document);
+                }}
+              />
+            </Tooltip>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderClientPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const client = getPreviewClient(detail, record);
+    return (
+      <PreviewRows
+        rows={[
+          { label: "Компания", value: client.company_name ?? record.company_name ?? record.company_id },
+          { label: "Имя", value: client.contact_name ?? client.user_full_name ?? record.contact_name_snapshot },
+          { label: "Телефон", value: client.contact_phone ?? client.user_phone ?? record.contact_phone_snapshot },
+          { label: "Email", value: client.contact_email ?? client.user_email ?? record.contact_email_snapshot ?? record.email },
+          { label: "Инвойс на", value: client.invoice_company_name },
+        ]}
+      />
+    );
+  }
+
+  function renderFactoryPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const factory = getPreviewFactory(detail, record);
+    const address = factory.selected_loading_address;
+    return (
+      <PreviewRows
+        rows={[
+          { label: "Название", value: factory.factory_name ?? record.factory_name ?? record.factory_id },
+          { label: "Страна", value: factory.country ?? record.country },
+          { label: "Индекс", value: address?.postcode ?? getRawRecordValue(record, ["factory_postcode", "postcode"]) },
+          { label: "Адрес", value: address?.address ?? getRawRecordValue(record, ["factory_address", "loading_address"]) },
+          { label: "Телефон", value: address?.phone ?? getRawRecordValue(record, ["factory_phone"]) },
+          { label: "Email", value: factory.primary_email ?? record.email },
+        ]}
+      />
+    );
+  }
+
+  function renderForwarderPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const forwarder = getPreviewForwarder(detail, record);
+    return (
+      <PreviewRows
+        rows={[
+          { label: "Имя", value: forwarder.full_name ?? record.forwarder_name },
+          { label: "Email", value: forwarder.email },
+          { label: "Телефон", value: getRawRecordValue(record, ["forwarder_phone", "assigned_forwarder_phone"]) },
+          { label: "ID", value: forwarder.id || record.assigned_forwarder_user_id },
+        ]}
+      />
+    );
+  }
+
+  function renderInvoicePreview(record: OrderListItem) {
+    return (
+      <PreviewRows
+        rows={[
+          {
+            label: "Номер инвойса",
+            value: record.invoice_number ? <Typography.Text copyable>{record.invoice_number}</Typography.Text> : null,
+          },
+        ]}
+      />
+    );
+  }
+
+  function renderStatusPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const detailOrder = getPreviewOrder(detail);
+    return (
+      <PreviewRows
+        rows={[
+          { label: "Статус", value: record.status_name ? formatEnumCode(record.status_name) : null },
+          { label: "Специальный комментарий", value: detailOrder.booking_comment ?? record.booking_comment },
+          { label: "Причина / текст", value: detailOrder.comment ?? record.comment },
+          { label: "Рейс", value: record.trip_name ?? record.trip_id },
+          { label: "Дата статуса", value: detailOrder.status_date ?? record.status_date },
+        ]}
+      />
+    );
+  }
+
+  function renderGoodsPreview(record: OrderListItem, detail?: OrderDetailPreview) {
+    const detailOrder = getPreviewOrder(detail);
+    const goodsLines = detail?.goods_lines ?? [];
+    const description = detailOrder.additional_description ?? record.additional_description ?? record.comment;
+
+    return (
+      <div className="crm-preview-goods">
+        {description ? (
+          <Typography.Paragraph copyable className="crm-preview-copy-text">
+            {description}
+          </Typography.Paragraph>
+        ) : null}
+        {goodsLines.length ? (
+          <div className="crm-preview-goods-list">
+            {goodsLines.map((line) => (
+              <div key={line.id} className="crm-preview-good-line">
+                <strong>{getGoodsLineTitle(line)}</strong>
+                <span>
+                  {joinFilled([line.weight_kg ? `${line.weight_kg} кг` : null, getGoodsLineQuantity(line)], " / ")}
+                </span>
+                {line.description ? <small>{line.description}</small> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {!description && !goodsLines.length ? <Typography.Text type="secondary">Нет описания</Typography.Text> : null}
+      </div>
+    );
+  }
+
   const columns: ColumnsType<OrderListItem> = [
     {
-      title: "Id",
+      title: <FileTextOutlined />,
+      key: "documents",
+      width: 58,
+      align: "center",
+      render: (_, record) => {
+        const count = record.documents_count ?? (record.has_documents ? 1 : 0);
+        return (
+          <OrderPreviewPopover
+            record={record}
+            title="Документы в заказе"
+            render={(detail) => renderDocumentsPreview(record, detail)}
+          >
+            <Tooltip title="Документы">
+              <Button
+                size="small"
+                type={count ? "primary" : "default"}
+                ghost={Boolean(count)}
+                icon={<FileTextOutlined />}
+                className="crm-icon-cell-button"
+              >
+                {count || null}
+              </Button>
+            </Tooltip>
+          </OrderPreviewPopover>
+        );
+      },
+    },
+    {
+      title: "ID",
       dataIndex: "id",
       key: "id",
       sorter: true,
       sortOrder: sortOrderFor("id"),
-      width: 84,
+      width: 86,
+      render: (value: number, record) => {
+        const className = [
+          "crm-order-id-link",
+          record.is_factory_payment_completed ? "crm-order-id-paid" : "",
+          !record.is_factory_payment_completed && record.is_factory_payment_via_company ? "crm-order-id-via-company" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+        return (
+          <Tooltip
+            title={
+              record.is_factory_payment_completed
+                ? "Оплата фабрики завершена"
+                : record.is_factory_payment_via_company
+                  ? "Оплата фабрики через компанию"
+                  : "Открыть заказ"
+            }
+          >
+            <Link href={`/orders/${record.id}`} className={className}>
+              {value}
+              {record.is_factory_payment_completed ? <CheckCircleOutlined /> : null}
+            </Link>
+          </Tooltip>
+        );
+      },
     },
     {
-      title: "#",
+      title: "Номер",
       dataIndex: "order_number",
       key: "order_number",
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
-      width: 180,
-      render: (value: string | null, record) => <Link href={`/orders/${record.id}`}>{renderOrderNumber(value)}</Link>,
+      width: 150,
+      render: (value: string | null, record) => (
+        <Link href={`/orders/${record.id}`} className="crm-cell-strong-link">
+          {renderOrderNumber(value)}
+        </Link>
+      ),
     },
     {
-      title: "Компания",
+      title: "Клиент",
       dataIndex: "company_name",
       key: "company_name",
-      width: 180,
-      render: (value: string | null | undefined, record) => value || (record.company_id ? `ID ${record.company_id}` : "-"),
+      width: 170,
+      render: (value: string | null | undefined, record) => (
+        <OrderPreviewPopover record={record} title="Клиент" render={(detail) => renderClientPreview(record, detail)}>
+          <Button type="link" size="small" className="crm-cell-link">
+            <InlineValue value={value || record.contact_name_snapshot || (record.company_id ? `ID ${record.company_id}` : null)} />
+          </Button>
+        </OrderPreviewPopover>
+      ),
+    },
+    {
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      width: 112,
+      render: (value: string | null) => <InlineValue value={value} max={16} muted />,
     },
     {
       title: "Фабрика",
       dataIndex: "factory_name",
       key: "factory_name",
-      width: 180,
-      render: (value: string | null | undefined, record) => value || `ID ${record.factory_id}`,
+      width: 170,
+      render: (value: string | null | undefined, record) => (
+        <OrderPreviewPopover record={record} title="Фабрика" render={(detail) => renderFactoryPreview(record, detail)}>
+          <Button type="link" size="small" className="crm-cell-link">
+            <InlineValue value={value || `ID ${record.factory_id}`} />
+          </Button>
+        </OrderPreviewPopover>
+      ),
     },
     {
-      title: "Рейс",
-      dataIndex: "trip_name",
-      key: "trip_name",
-      width: 170,
-      render: (value: string | null | undefined, record) => value || (record.trip_id ? `ID ${record.trip_id}` : "-"),
+      title: "Экспедитор",
+      dataIndex: "forwarder_name",
+      key: "forwarder_name",
+      width: 150,
+      render: (value: string | null, record) => (
+        <OrderPreviewPopover
+          record={record}
+          title="Экспедитор"
+          render={(detail) => renderForwarderPreview(record, detail)}
+        >
+          <Button type="link" size="small" className="crm-cell-link">
+            <InlineValue value={value || (record.assigned_forwarder_user_id ? `ID ${record.assigned_forwarder_user_id}` : null)} />
+          </Button>
+        </OrderPreviewPopover>
+      ),
+    },
+    {
+      title: "Номер инвойса",
+      dataIndex: "invoice_number",
+      key: "invoice_number",
+      width: 150,
+      render: (value: string | null, record) => (
+        <OrderPreviewPopover record={record} title="Инвойс" render={() => renderInvoicePreview(record)}>
+          <Button type="link" size="small" className="crm-cell-link">
+            <InlineValue value={value} />
+          </Button>
+        </OrderPreviewPopover>
+      ),
+    },
+    {
+      title: "Объем м3",
+      dataIndex: "declared_volume_m3",
+      key: "declared_volume_m3",
+      width: 112,
+      align: "right",
+      render: (value: string | null | undefined) => <InlineValue value={value} max={12} muted />,
+    },
+    {
+      title: "Объем из инвойса",
+      dataIndex: "volume_m3",
+      key: "volume_m3",
+      width: 138,
+      align: "right",
+      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
+    },
+    {
+      title: "Актуальный объем",
+      dataIndex: "actual_volume_m3",
+      key: "actual_volume_m3",
+      width: 138,
+      align: "right",
+      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
     },
     {
       title: "Статус",
@@ -1400,85 +1915,149 @@ function OrdersPageContent() {
       key: "status_name",
       sorter: true,
       sortOrder: sortOrderFor("status_name"),
-      render: (value: OrderStatus | null) => renderOrderStatus(value),
-      width: 190,
+      render: (value: OrderStatus | null, record) => (
+        <OrderPreviewPopover record={record} title="Статус заказа" render={(detail) => renderStatusPreview(record, detail)}>
+          <Button type="link" size="small" className="crm-cell-link crm-status-cell-link">
+            {renderOrderStatus(value)}
+          </Button>
+        </OrderPreviewPopover>
+      ),
+      width: 172,
     },
     {
-      title: "Тип",
-      dataIndex: "order_type",
-      key: "order_type",
-      width: 150,
-      render: (value: OrderType | null) => (value ? formatEnumCode(value) : "-"),
+      title: "Дней в статусе",
+      key: "days_in_status",
+      width: 116,
+      align: "right",
+      render: (_, record) => <InlineValue value={record.days_in_current_status ?? record.days_same_status} max={8} muted />,
     },
     {
-      title: "Квота",
-      dataIndex: "quote_status",
-      key: "quote_status",
-      width: 160,
-      render: (value: QuoteStatus | null) => (value ? formatEnumCode(value) : "-"),
+      title: "Дата заказа",
+      dataIndex: "order_date",
+      key: "order_date",
+      sorter: true,
+      sortOrder: sortOrderFor("order_date"),
+      width: 124,
+      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
     },
     {
-      title: "Готовность",
+      title: "Дата готовности",
       dataIndex: "ready_date",
       key: "ready_date",
       sorter: true,
       sortOrder: sortOrderFor("ready_date"),
-      width: 130,
-      render: (value: string | null) => value ?? "-",
+      width: 136,
+      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
     },
     {
       title: "Вывоз",
-      dataIndex: "pickup_date",
-      key: "pickup_date",
-      sorter: true,
-      sortOrder: sortOrderFor("pickup_date"),
-      width: 120,
-      render: (value: string | null | undefined) => value ?? "-",
+      key: "pickup_window",
+      width: 142,
+      render: (_, record) => <InlineValue value={formatPickupWindow(record)} max={18} muted />,
     },
     {
-      title: "Флаги",
-      key: "flags",
-      width: 230,
+      title: "Описание",
+      key: "description",
+      width: 170,
       render: (_, record) => (
-        <Space size={4} wrap>
-          {record.has_documents ? <Tag color="blue">Док.</Tag> : null}
-          {record.has_certificate ? <Tag color="green">Серт.</Tag> : null}
-          {record.has_description ? <Tag color="gold">Описание</Tag> : null}
-          {record.is_checked ? <Tag color="purple">Проверен</Tag> : null}
-        </Space>
+        <OrderPreviewPopover record={record} title="Описание и товары" render={(detail) => renderGoodsPreview(record, detail)}>
+          <Button type="link" size="small" className="crm-cell-link">
+            <InlineValue value={record.additional_description || record.comment || (record.has_description ? "Описание" : null)} />
+          </Button>
+        </OrderPreviewPopover>
       ),
     },
     {
-      title: "Теги",
-      key: "tags",
-      width: 260,
+      title: "Комментарий клиента",
+      dataIndex: "user_comment",
+      key: "user_comment",
+      width: 178,
+      render: (value: string | null) => <InlineValue value={value} />,
+    },
+    {
+      title: "Комментарий экспедитора",
+      dataIndex: "forwarder_comment",
+      key: "forwarder_comment",
+      width: 190,
+      render: (value: string | null) => <InlineValue value={value} />,
+    },
+    {
+      title: "Спецтариф",
+      key: "special_tariff",
+      width: 128,
       render: (_, record) => (
-        <Space size={4} wrap>
-          {(record.priority_tags ?? []).slice(0, 2).map((tag) => (
-            <Tag key={`p-${tag.code}`} color="red">
-              {tag.label}
-            </Tag>
-          ))}
-          {(record.office_mark_tags ?? []).slice(0, 2).map((tag) => (
-            <Tag key={`o-${tag.code}`} color="orange">
-              {tag.label}
-            </Tag>
-          ))}
-        </Space>
+        <InlineValue
+          value={
+            record.special_tariff_amount
+              ? `${record.special_tariff_amount} ${record.special_tariff_currency_other_label || record.special_tariff_currency || ""}`
+              : null
+          }
+          max={14}
+          muted
+        />
       ),
     },
     {
-      title: "Коэф. цены",
-      dataIndex: "price_coefficient",
-      key: "price_coefficient",
-      width: 130,
-      render: (value: string | number | null | undefined) => (value ?? "-") as React.ReactNode,
+      title: "Комментарий склада",
+      dataIndex: "warehouse_comment",
+      key: "warehouse_comment",
+      width: 178,
+      render: (value: string | null) => <InlineValue value={value} />,
+    },
+    {
+      title: "Сертификаты",
+      key: "certificate",
+      width: 132,
+      render: (_, record) => (
+        <OrderPreviewPopover
+          record={record}
+          title="Сертификаты"
+          render={(detail) => {
+            const certificate = getPreviewCertificate(detail);
+            return (
+              <Space direction="vertical" size={8} className="crm-preview-cert">
+                <PreviewRows
+                  rows={[
+                    { label: "Наличие", value: record.has_certificate ? "Есть" : "Нет" },
+                    { label: "Обработан", value: record.certificate_processed === true ? "Да" : null },
+                    { label: "Номер", value: certificate?.number },
+                    { label: "Статус", value: certificate?.status ? formatEnumCode(certificate.status) : null },
+                    { label: "Выдан", value: certificate?.issued_date },
+                    { label: "Истекает", value: certificate?.expires_date },
+                  ]}
+                />
+                {record.has_certificate ? (
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => {
+                      void handleListCertificateDownload(record.id);
+                    }}
+                  >
+                    Скачать
+                  </Button>
+                ) : null}
+              </Space>
+            );
+          }}
+        >
+          <Button
+            size="small"
+            type={record.has_certificate ? "primary" : "default"}
+            ghost={record.has_certificate}
+            icon={<InfoCircleOutlined />}
+            className="crm-icon-cell-button"
+          >
+            {record.certificate_processed ? "OK" : record.has_certificate ? "Есть" : "-"}
+          </Button>
+        </OrderPreviewPopover>
+      ),
     },
     {
       title: "Действия",
       key: "actions",
       fixed: "right",
-      width: 190,
+      width: 156,
       render: (_, record) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => router.push(`/orders/${record.id}`)}>
@@ -1784,21 +2363,21 @@ function OrdersPageContent() {
               Назначить рейс
             </Button>
             <Button type="text" onClick={() => runBulkAction(() => setBulkPickupOpen(true))}>
-              Назначить дату вывоза
+              Назначить окно вывоза
             </Button>
             <Button
               type="text"
               onClick={() =>
                 runBulkAction(() => {
                   askBulkConfirm(
-                    "Отменить вывоз у выбранных заказов",
-                    "Дата вывоза будет очищена. Продолжить?",
-                    () => runBulkMutation("cancel-pickup", {}),
+                    "Очистить окно вывоза у выбранных заказов",
+                    "Окно вывоза будет очищено. Продолжить?",
+                    () => runBulkMutation("clear-pickup-window", {}),
                   );
                 })
               }
             >
-              Отменить вывоз
+              Очистить вывоз
             </Button>
             <Button type="text" onClick={() => runBulkAction(() => setBulkSpecialTariffOpen(true))}>
               Спецтариф
@@ -1917,7 +2496,7 @@ function OrdersPageContent() {
                     </div>
                     <div className="crm-row-meta-item">
                       Вывоз
-                      <strong>{record.pickup_date ?? "-"}</strong>
+                      <strong>{formatPickupWindow(record)}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Тип
@@ -2696,25 +3275,29 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={selected ? `Назначить дату вывоза #${selected.id}` : "Назначить дату вывоза"}
+        title={selected ? `Назначить окно вывоза #${selected.id}` : "Назначить окно вывоза"}
         open={pickupOpen}
         destroyOnHidden
         onCancel={() => setPickupOpen(false)}
         onOk={() => pickupForm.submit()}
-        confirmLoading={pickupDateMutation.isPending}
+        confirmLoading={pickupWindowMutation.isPending}
       >
         <Form
           form={pickupForm}
           layout="vertical"
-          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
+          onFinish={(values: PickupWindowForm) => {
             if (!selected) return;
-            pickupDateMutation.mutate({
+            pickupWindowMutation.mutate({
               id: selected.id,
-              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
+              pickup_date_from: values.pickup_date_from.format("YYYY-MM-DD"),
+              pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD") ?? null,
             });
           }}
         >
-          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
+          <Form.Item name="pickup_date_from" label="Вывоз: от" rules={[{ required: true }]}>
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item name="pickup_date_to" label="Вывоз: до">
             <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
         </Form>
@@ -2903,7 +3486,7 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title="Массово: назначить дату вывоза"
+        title="Массово: назначить окно вывоза"
         open={bulkPickupOpen}
         destroyOnHidden
         onCancel={() => setBulkPickupOpen(false)}
@@ -2913,13 +3496,17 @@ function OrdersPageContent() {
         <Form
           form={bulkPickupForm}
           layout="vertical"
-          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
-            runBulkMutation("pickup-date", {
-              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
+          onFinish={(values: PickupWindowForm) => {
+            runBulkMutation("pickup-window", {
+              pickup_date_from: values.pickup_date_from.format("YYYY-MM-DD"),
+              pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD") ?? null,
             });
           }}
         >
-          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
+          <Form.Item name="pickup_date_from" label="Вывоз: от" rules={[{ required: true }]}>
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item name="pickup_date_to" label="Вывоз: до">
             <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
         </Form>

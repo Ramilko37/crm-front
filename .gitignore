@@ -19,6 +19,9 @@
 /out/
 /.playwright-cli/
 /output/
+/deploy/
+/.tmp/
+/.playwright-mcp/
 
 # production
 /build

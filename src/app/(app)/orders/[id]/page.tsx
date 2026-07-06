@@ -45,6 +45,17 @@ function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
 }
 
+function formatPickupWindow(order: Pick<OrderDetail, "pickup_date" | "pickup_date_from" | "pickup_date_to">) {
+  const from = order.pickup_date_from ?? order.pickup_date ?? null;
+  const to = order.pickup_date_to ?? null;
+
+  if (!from) {
+    return "-";
+  }
+
+  return to && to !== from ? `${from} - ${to}` : from;
+}
+
 function renderOrderStatus(value: OrderStatus | null) {
   if (!value) {
     return <Tag className="crm-status-tag">-</Tag>;
@@ -68,7 +79,7 @@ export default function OrderDetailPage() {
   const [statusForm] = Form.useForm<{ status_name: OrderStatus }>();
   const [assignTripForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
-  const [pickupForm] = Form.useForm<{ pickup_date?: string }>();
+  const [pickupForm] = Form.useForm<{ pickup_date_from?: string; pickup_date_to?: string }>();
   const [specialTariffForm] = Form.useForm<{ amount?: number; currency?: string }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
   const [chatForm] = Form.useForm<{ message: string }>();
@@ -209,22 +220,25 @@ export default function OrderDetailPage() {
   });
 
   const pickupMutation = useMutation({
-    mutationFn: (payload: { pickup_date?: string }) =>
-      payload.pickup_date
-        ? apiRequest<OrderDetail>(`/api/orders/${orderId}/pickup-date`, {
+    mutationFn: (payload: { pickup_date_from?: string; pickup_date_to?: string }) =>
+      payload.pickup_date_from
+        ? apiRequest<OrderDetail>(`/api/orders/${orderId}/pickup-window`, {
             method: "POST",
-            body: { pickup_date: payload.pickup_date },
+            body: {
+              pickup_date_from: payload.pickup_date_from,
+              pickup_date_to: payload.pickup_date_to || null,
+            },
           })
-        : apiRequest<OrderDetail>(`/api/orders/${orderId}/cancel-pickup`, {
+        : apiRequest<OrderDetail>(`/api/orders/${orderId}/clear-pickup-window`, {
             method: "POST",
           }),
     onSuccess: async () => {
-      message.success("Дата вывоза обновлена");
+      message.success("Окно вывоза обновлено");
       await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(orderId) });
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления даты вывоза");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления окна вывоза");
     },
   });
 
@@ -377,7 +391,10 @@ export default function OrderDetailPage() {
     statusForm.setFieldsValue({ status_name: order.status_name ?? undefined });
     assignTripForm.setFieldsValue({ trip_id: order.trip_id ?? undefined });
     assignForwarderForm.setFieldsValue({ assigned_forwarder_user_id: order.assigned_forwarder_user_id ?? undefined });
-    pickupForm.setFieldsValue({ pickup_date: order.pickup_date ?? undefined });
+    pickupForm.setFieldsValue({
+      pickup_date_from: order.pickup_date_from ?? order.pickup_date ?? undefined,
+      pickup_date_to: order.pickup_date_to ?? undefined,
+    });
     specialTariffForm.setFieldsValue({
       amount: order.special_tariff_amount ? Number(order.special_tariff_amount) : undefined,
       currency: order.special_tariff_currency ?? "EUR",
@@ -525,7 +542,7 @@ export default function OrderDetailPage() {
           <Descriptions.Item label="Инвойс">{order.invoice_number ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Дата заказа">{order.order_date ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Дата готовности">{order.ready_date ?? "-"}</Descriptions.Item>
-          <Descriptions.Item label="Дата вывоза">{order.pickup_date ?? "-"}</Descriptions.Item>
+          <Descriptions.Item label="Окно вывоза">{formatPickupWindow(order)}</Descriptions.Item>
           <Descriptions.Item label="Активен дней">{order.days_active ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Дней в статусе">{order.days_in_current_status ?? "-"}</Descriptions.Item>
           <Descriptions.Item label="Коэф. цены">{order.price_coefficient ?? "-"}</Descriptions.Item>
@@ -614,12 +631,19 @@ export default function OrderDetailPage() {
 
           <Divider />
 
-          <Form form={pickupForm} layout="vertical" onFinish={(values: { pickup_date?: string }) => pickupMutation.mutate(values)}>
-            <Form.Item name="pickup_date" label="Дата вывоза (пусто = отменить)">
+          <Form
+            form={pickupForm}
+            layout="vertical"
+            onFinish={(values: { pickup_date_from?: string; pickup_date_to?: string }) => pickupMutation.mutate(values)}
+          >
+            <Form.Item name="pickup_date_from" label="Вывоз: от (пусто = очистить)">
+              <Input placeholder="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="pickup_date_to" label="Вывоз: до">
               <Input placeholder="YYYY-MM-DD" />
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={pickupMutation.isPending}>
-              Обновить дату вывоза
+              Обновить окно вывоза
             </Button>
           </Form>
 

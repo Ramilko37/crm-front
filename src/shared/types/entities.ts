@@ -158,6 +158,12 @@ export type OrderClientBlock = {
   user_full_name: string | null;
   user_email: string | null;
   user_phone: string | null;
+  contact_name?: string | null;
+  contact_job_title?: string | null;
+  contact_phone?: string | null;
+  contact_email?: string | null;
+  contact_messenger_type?: string | null;
+  contact_messenger_value?: string | null;
   invoice_company_name: string | null;
 };
 
@@ -173,17 +179,23 @@ export type AssignedForwarderBlock = {
   id: number;
   full_name: string | null;
   login: string | null;
+  email?: string | null;
   role_name: string | null;
 };
 
 export type OrderGoodsLine = {
   id: number;
   order_id: number;
+  sequence?: number | null;
+  item_type?: string | null;
+  custom_item_type?: string | null;
   product_name: string | null;
   description: string | null;
   weight_kg: string | null;
-  quantity: string | null;
-  unit: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+  quantity_value?: string | null;
+  quantity_unit?: string | null;
 };
 
 export type OrderListItem = {
@@ -199,6 +211,7 @@ export type OrderListItem = {
   quote_price_currency: string | null;
   special_tariff_amount: string | null;
   special_tariff_currency: string | null;
+  special_tariff_currency_other_label?: string | null;
   quote_priced_at: string | null;
   quote_client_decision_at: string | null;
   factory_id: number;
@@ -207,10 +220,13 @@ export type OrderListItem = {
   trip_id: number | null;
   trip_name?: string | null;
   invoice_number: string | null;
+  declared_volume_m3?: string | null;
   country: string | null;
   volume_m3: string | null;
   actual_volume_m3: string | null;
   shipped_m3: string | null;
+  pallet_qty?: number | null;
+  cargo_places_qty?: number | null;
   box_qty: number | null;
   common_qty: number | null;
   actual_qty: number | null;
@@ -218,6 +234,8 @@ export type OrderListItem = {
   actual_weight_kg: string | null;
   order_date: string | null;
   ready_date: string | null;
+  pickup_date_from?: string | null;
+  pickup_date_to?: string | null;
   pickup_date?: string | null;
   status_date: string | null;
   status_name: OrderStatus | null;
@@ -229,17 +247,25 @@ export type OrderListItem = {
   days_active?: number | null;
   days_in_current_status?: number | null;
   comment: string | null;
+  additional_description?: string | null;
   user_comment: string | null;
   forwarder_comment: string | null;
   warehouse_comment: string | null;
+  booking_comment?: string | null;
   email: string | null;
+  contact_name_snapshot?: string | null;
+  contact_phone_snapshot?: string | null;
+  contact_email_snapshot?: string | null;
   raw_payload: Record<string, unknown> | null;
+  documents_count?: number | null;
   has_documents?: boolean;
   has_certificate?: boolean;
   has_description?: boolean;
   is_checked?: boolean;
+  is_factory_payment_via_company?: boolean | null;
   factory_payment_via_label?: string | null;
   is_factory_payment_completed?: boolean | null;
+  certificate_processed?: boolean | null;
   client_goods_value_amount?: string | null;
   client_goods_value_currency?: string | null;
   price_coefficient?: string | number | null;
@@ -378,6 +404,9 @@ export type Trip = {
   truck_company_name: string | null;
   status_name: TripStatus | null;
   type_name: TripType | null;
+  created_at?: string | null;
+  current_stage?: TripCurrentStage | null;
+  points?: TripPoint[];
 };
 
 export type TripWritePayload = {
@@ -388,6 +417,65 @@ export type TripWritePayload = {
   truck_company_name?: string;
   status_name?: TripStatus;
   type_name?: TripType;
+};
+
+export type TripCurrentStage = {
+  point_id: number;
+  point_name: string | null;
+  point_kind: string | null;
+  is_completed: boolean;
+};
+
+export type TripPoint = {
+  id: number;
+  trip_id?: number;
+  sequence: number;
+  path_point_id: number | null;
+  factory_id: number | null;
+  forwarder_user_id: number | null;
+  is_loading_point: boolean;
+  name: string | null;
+  address: string | null;
+  postcode: string | null;
+  country: string | null;
+  city: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  planned_at: string | null;
+  actual_at: string | null;
+  is_completed: boolean;
+};
+
+export type TripPointWritePayload = {
+  sequence?: number;
+  path_point_id?: number | null;
+  factory_id?: number | null;
+  forwarder_user_id?: number | null;
+  is_loading_point?: boolean;
+  name?: string | null;
+  address?: string | null;
+  postcode?: string | null;
+  country?: string | null;
+  city?: string | null;
+  contact_name?: string | null;
+  phone?: string | null;
+  planned_at?: string | null;
+  actual_at?: string | null;
+  is_completed?: boolean;
+};
+
+export type TripCityLookupItem = {
+  city: string;
+};
+
+export type TripForwarderLookupItem = {
+  id: number;
+  full_name: string | null;
+  company_id: number | null;
+  company_name: string | null;
+  country: string | null;
+  city: string | null;
+  label: string;
 };
 
 export type ListParams = {
@@ -467,12 +555,15 @@ export type PostcodeCityWritePayload = {
 export type TripFilterParams = ListParams & {
   query?: string;
   ids?: number[];
+  quick_tab?: string;
   status_names?: TripStatus[];
   type_names?: TripType[];
   current_point_id?: number;
   truck_plate?: string;
   truck_company_name?: string;
   has_orders?: boolean;
+  created_at_from?: string;
+  created_at_to?: string;
 };
 
 export type UserAdmin = {

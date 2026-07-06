@@ -1,16 +1,9 @@
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 import type { Metadata } from "next";
-import { Manrope } from "next/font/google";
 
 import { AppProviders } from "@/shared/providers/app-providers";
 
 import "./globals.css";
-
-const manrope = Manrope({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-manrope",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "CRM Front",
@@ -20,7 +13,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ru">
-      <body className={manrope.variable}>
+      <body>
         <AntdRegistry>
           <AppProviders>{children}</AppProviders>
         </AntdRegistry>
