@@ -97,7 +97,7 @@ export default function ProfilePage() {
   const isSuperuser = Boolean(authContext?.is_superuser);
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
+    <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader title="Профиль" subtitle="Настройки персонального профиля и смена пароля." />
 
       <Card className="crm-panel" title="Контекст авторизации" loading={authQuery.isLoading}>

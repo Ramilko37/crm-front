@@ -96,6 +96,8 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
     order_number: pickString(body.order_number),
     company_id: pickNumber(body.company_id),
     ready_date: pickString(body.ready_date),
+    pickup_date_from: pickString(body.pickup_date_from),
+    pickup_date_to: pickString(body.pickup_date_to),
     order_type: pickString(body.order_type),
     company_contact_id: pickNumber(body.company_contact_id),
     invoice_on_other_company: pickBoolean(body.invoice_on_other_company),
@@ -112,9 +114,10 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
     forwarder_comment: pickString(body.forwarder_comment),
     warehouse_comment: pickString(body.warehouse_comment),
     assigned_forwarder_user_id: pickNumber(body.assigned_forwarder_user_id),
-    factory_payment_via_label: pickString(body.factory_payment_via_label),
+    is_factory_payment_via_company: pickBoolean(body.is_factory_payment_via_company),
     is_factory_payment_completed: pickBoolean(body.is_factory_payment_completed),
     is_checked: pickBoolean(body.is_checked),
+    is_1c: pickBoolean(body.is_1c),
     priority_codes: pickStringArray(body.priority_codes),
     office_mark_codes: pickStringArray(body.office_mark_codes),
     product_characteristic_codes: pickStringArray(body.product_characteristic_codes),
@@ -127,10 +130,15 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
   });
 
   const createFactory = pickObject(body.create_factory);
+  const createFactoryContact = pickObject(body.create_factory_contact);
   const factorySelection = compactObject({
+    factory_mode: pickString(body.factory_mode),
+    country_id: pickNumber(body.country_id),
     factory_id: pickNumber(body.factory_id),
     loading_address_id: pickNumber(body.loading_address_id),
     email_id: pickNumber(body.email_id),
+    factory_contact_id: pickNumber(body.factory_contact_id),
+    create_factory_contact: createFactoryContact,
     create_factory: createFactory,
   });
 
@@ -172,7 +180,10 @@ export function buildClientOrderMultipartPayload(payload: unknown) {
 
   const order = compactObject({
     order_number: pickString(body.order_number),
+    order_type: pickString(body.order_type),
     ready_date: pickString(body.ready_date),
+    pickup_date_from: pickString(body.pickup_date_from),
+    pickup_date_to: pickString(body.pickup_date_to),
     comment: pickString(body.comment),
     additional_description: pickString(body.additional_description),
     invoice_number: pickString(body.invoice_number),
@@ -183,12 +194,20 @@ export function buildClientOrderMultipartPayload(payload: unknown) {
     cargo_places_qty: pickNumber(body.cargo_places_qty),
     client_goods_value_amount: pickString(body.client_goods_value_amount),
     client_goods_value_currency: pickString(body.client_goods_value_currency),
+    client_goods_value_currency_other_label: pickString(body.client_goods_value_currency_other_label),
+    is_1c: pickBoolean(body.is_1c),
   });
 
   const createFactory = pickObject(body.create_factory);
+  const createFactoryContact = pickObject(body.create_factory_contact);
   const factorySelection = compactObject({
+    factory_mode: pickString(body.factory_mode),
+    country_id: pickNumber(body.country_id),
     factory_id: pickNumber(body.factory_id),
     loading_address_id: pickNumber(body.loading_address_id),
+    email_id: pickNumber(body.email_id),
+    factory_contact_id: pickNumber(body.factory_contact_id),
+    create_factory_contact: createFactoryContact,
     create_factory: createFactory,
   });
 

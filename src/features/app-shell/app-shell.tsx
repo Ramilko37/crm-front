@@ -199,7 +199,7 @@ export function AppShell({ children }: Props) {
       <Drawer
         title="Навигация"
         placement="left"
-        width={270}
+        size={270}
         open={!screens.md && mobileMenuOpen}
         onClose={() => setMobileMenuOpen(false)}
         styles={{ body: { padding: 0 } }}

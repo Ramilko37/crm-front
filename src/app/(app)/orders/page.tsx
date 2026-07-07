@@ -2,11 +2,8 @@
 
 import {
   ApartmentOutlined,
-  CheckCircleOutlined,
-  DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
-  InfoCircleOutlined,
   MessageOutlined,
   MoreOutlined,
   SwapOutlined,
@@ -18,6 +15,7 @@ import {
   Card,
   Checkbox,
   DatePicker,
+  Descriptions,
   Dropdown,
   Form,
   Grid,
@@ -25,23 +23,21 @@ import {
   InputNumber,
   Modal,
   Pagination,
-  Popover,
   Select,
   Space,
-  Spin,
+  Steps,
   Table,
   Tag,
-  Tooltip,
   Typography,
   Upload,
 } from "antd";
-import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
+import type { NamePath } from "antd/es/form/interface";
+import type { ColumnType, ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import type { UploadFile } from "antd/es/upload/interface";
 import dayjs from "dayjs";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
@@ -56,40 +52,49 @@ import {
 } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
-import { toOrderWritePayload } from "@/shared/lib/order-dto";
+import {
+  clampOrderCreateWizardStep,
+  getOrderCreateWizardSteps,
+} from "@/shared/lib/order-create-wizard";
+import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
+import { CREATE_ORDER_DRAFT_DEFAULTS, useOrderCreateDraftStore } from "@/shared/stores/order-create-draft-store";
+import { useOrderEditDraftStore } from "@/shared/stores/order-edit-draft-store";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
   ClientOrderCreateMetadata,
+  Postcode,
+  PostcodeCity,
   DictionaryOption,
-  FactoryEmail,
   ClientFactoryDetail,
   ClientFactoryListItem,
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
-  OrderCertificate,
-  OrderClientBlock,
+  OrderEditFactorySelection,
   OrderClientCompanyLookupItem,
   OrderCreateMetadata,
   OrderDetail,
   OrderDocument,
-  OrderFactoryBlock,
-  OrderGoodsLine,
   OrderFilterParams,
+  OrderInternalEditRead,
   OrderListItem,
-  OrderWritePayload,
   PaginatedResponse,
-  Postcode,
-  PostcodeCity,
   Trip,
   UserAdmin,
 } from "@/shared/types/entities";
 
 type CreateMode = "existing" | "create";
+type FactoryContactOption = {
+  id: number;
+  full_name: string;
+  phone: string;
+  email: string | null;
+  is_primary?: boolean;
+};
 
 type OrderCreateGoodsLineForm = {
   item_type?: string;
@@ -102,7 +107,6 @@ type OrderCreateGoodsLineForm = {
 
 type OrderCreateDocumentForm = {
   document_type?: string;
-  display_name?: string;
   file_list?: UploadFile[];
 };
 
@@ -111,16 +115,25 @@ type OrderCreateForm = {
   company_id?: number;
   company_contact_id?: number;
   ready_date?: dayjs.Dayjs;
+  pickup_date_from?: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs;
   order_type?: OrderType;
   factory_mode?: CreateMode;
+  factory_country_id?: number;
   factory_id?: number;
   loading_address_id?: number;
   email_id?: number;
+  factory_contact_id?: number;
+  create_factory_contact?: {
+    full_name?: string;
+    phone?: string;
+    email?: string;
+  };
   create_factory?: {
     factory_name?: string;
-    country_id?: number;
     primary_email?: string;
     loading_address?: {
+      name?: string;
       country_id?: number;
       postcode_id?: number;
       city_id?: number;
@@ -131,6 +144,7 @@ type OrderCreateForm = {
         city?: string;
       };
       address?: string;
+      contact_name?: string;
       phone?: string;
       fax?: string;
       messenger_type?: string;
@@ -146,15 +160,17 @@ type OrderCreateForm = {
   cargo_places_qty?: number;
   client_goods_value_amount?: string;
   client_goods_value_currency?: string;
+  client_goods_value_currency_other_label?: string;
   comment?: string;
   user_comment?: string;
   forwarder_comment?: string;
   warehouse_comment?: string;
   assigned_forwarder_user_id?: number;
-  factory_payment_via_label?: string;
+  is_factory_payment_via_company?: boolean;
   is_factory_payment_completed?: boolean;
   is_checked?: boolean;
-  priority_codes?: string[];
+  is_1c?: boolean;
+  is_priority?: boolean;
   office_mark_codes?: string[];
   product_characteristic_codes?: string[];
   self_delivery?: boolean;
@@ -166,13 +182,103 @@ type OrderCreateForm = {
   request_payload_json?: string;
   goods_lines?: OrderCreateGoodsLineForm[];
   documents?: OrderCreateDocumentForm[];
+  certificate_intent?: string | null;
+  certificate_intent_enabled?: boolean;
+  new_factory_email_contact_name?: string;
+  new_factory_email_contact_phone?: string;
+  client_measurement_ui?: string;
+  client_weighing_ui?: string;
+  loading_postcode_id_ui?: number;
+  loading_city_id_ui?: number;
 };
 
 type OrderEditForm = {
-  order_number?: string;
-  trip_id?: number;
-  comment?: string;
+  order_date?: dayjs.Dayjs;
   status_name?: OrderStatus;
+  status_date?: dayjs.Dayjs;
+  order_number?: string;
+  company_id?: number;
+  company_contact_id?: number;
+  invoice_on_other_company?: boolean;
+  invoice_company_name?: string;
+
+  self_delivery?: boolean;
+  assigned_forwarder_user_id?: number;
+  self_delivery_forwarder_user_id?: number;
+  factory_mode?: CreateMode;
+  factory_country_id?: number;
+  factory_id?: number;
+  loading_address_id?: number;
+  loading_postcode_id_ui?: number;
+  loading_city_id_ui?: number;
+  loading_address_line?: string;
+  loading_address_fax?: string;
+  factory_contact_id?: number;
+  factory_contact_email?: string;
+  factory_contact_name?: string;
+  factory_contact_phone?: string;
+  create_factory_contact?: {
+    full_name?: string;
+    phone?: string;
+    email?: string;
+  };
+  create_factory?: {
+    factory_name?: string;
+    primary_email?: string;
+    loading_address?: {
+      name?: string;
+      country_id?: number;
+      postcode_id?: number;
+      city_id?: number;
+      create_postcode?: {
+        postcode?: string;
+      };
+      create_city?: {
+        city?: string;
+      };
+      address?: string;
+      contact_name?: string;
+      phone?: string;
+      fax?: string;
+      messenger_type?: string;
+      messenger_value?: string;
+    };
+  };
+
+  ready_date?: dayjs.Dayjs;
+  pickup_date_from?: dayjs.Dayjs;
+  pickup_date_to?: dayjs.Dayjs;
+  certificate_intent_enabled?: boolean;
+  certificate_intent?: string;
+
+  invoice_number?: string;
+  client_goods_value_amount?: string;
+  client_goods_value_currency?: string;
+  client_goods_value_currency_other_label?: string;
+  goods_lines?: OrderCreateGoodsLineForm[];
+  declared_volume_m3?: string;
+  volume_m3?: string;
+  declared_total_weight_kg?: string;
+  cargo_places_qty?: number;
+  measurement_status?: MeasurementPayload["status"];
+  actual_volume_m3?: string;
+  weighing_status?: MeasurementPayload["status"];
+  actual_weight_kg?: string;
+  actual_qty?: number;
+  quantity_whs?: number;
+
+  product_characteristic_codes?: string[];
+  office_mark_codes?: string[];
+  additional_description?: string;
+  comment?: string;
+  is_1c?: boolean;
+  is_factory_payment_via_company?: boolean;
+  is_checked?: boolean;
+  is_factory_payment_completed?: boolean;
+  mrn?: string;
+  trip_id?: number;
+
+  documents?: OrderCreateDocumentForm[];
 };
 
 type OrderBulkEndpoint =
@@ -182,205 +288,9 @@ type OrderBulkEndpoint =
   | "delete"
   | "warehouse-comment"
   | "forwarder-comment"
-  | "pickup-window"
-  | "clear-pickup-window"
+  | "pickup-date"
+  | "cancel-pickup"
   | "special-tariff";
-
-type PickupWindowForm = {
-  pickup_date_from: dayjs.Dayjs;
-  pickup_date_to?: dayjs.Dayjs | null;
-};
-
-type OrderDetailPreview = OrderDetail & {
-  order?: Partial<OrderListItem>;
-  card?: {
-    client?: OrderClientBlock | null;
-    assigned_forwarder?: (NonNullable<OrderDetail["assigned_forwarder"]> & { email?: string | null }) | null;
-    certificate?: OrderCertificate | null;
-  };
-  documents?: OrderDocument[];
-  goods_lines?: OrderGoodsLine[];
-};
-
-type PreviewRow = {
-  label: string;
-  value: React.ReactNode;
-};
-
-function isFilled(value: unknown): boolean {
-  return value !== null && value !== undefined && String(value).trim().length > 0;
-}
-
-function textOrDash(value: unknown): string {
-  if (!isFilled(value)) {
-    return "-";
-  }
-  return String(value);
-}
-
-function joinFilled(values: unknown[], separator = " · "): string {
-  return values.filter(isFilled).map(String).join(separator) || "-";
-}
-
-function getRawRecordValue(record: OrderListItem, keys: string[]): string | null {
-  const raw = record.raw_payload;
-  if (!raw) return null;
-
-  for (const key of keys) {
-    const value = raw[key];
-    if (isFilled(value) && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) {
-      return String(value);
-    }
-  }
-
-  return null;
-}
-
-function getPreviewOrder(detail?: OrderDetailPreview): Partial<OrderListItem & OrderDetail> {
-  if (!detail) return {};
-  return detail.order ?? detail;
-}
-
-function getPreviewClient(detail: OrderDetailPreview | undefined, record: OrderListItem): Partial<OrderClientBlock> {
-  return (
-    detail?.card?.client ??
-    detail?.client ?? {
-      company_id: record.company_id,
-      company_name: record.company_name ?? null,
-      user_id: record.user_id,
-      user_full_name: record.contact_name_snapshot ?? null,
-      user_email: record.contact_email_snapshot ?? record.email ?? null,
-      user_phone: record.contact_phone_snapshot ?? null,
-      invoice_company_name: null,
-    }
-  );
-}
-
-function getPreviewFactory(detail: OrderDetailPreview | undefined, record: OrderListItem): Partial<OrderFactoryBlock> {
-  return (
-    detail?.factory ?? {
-      factory_id: record.factory_id,
-      factory_name: record.factory_name ?? null,
-      country: record.country,
-      primary_email: record.email,
-      selected_loading_address: null,
-    }
-  );
-}
-
-function getPreviewForwarder(detail: OrderDetailPreview | undefined, record: OrderListItem) {
-  return (
-    detail?.card?.assigned_forwarder ??
-    detail?.assigned_forwarder ?? {
-      id: record.assigned_forwarder_user_id ?? 0,
-      full_name: record.forwarder_name,
-      login: null,
-      role_name: null,
-      email: null,
-    }
-  );
-}
-
-function getPreviewCertificate(detail: OrderDetailPreview | undefined): OrderCertificate | null | undefined {
-  return detail?.card?.certificate ?? detail?.certificate;
-}
-
-function getGoodsLineTitle(line: OrderGoodsLine): string {
-  return (
-    line.product_name ||
-    line.item_type ||
-    line.custom_item_type ||
-    line.description ||
-    (line.id ? `Строка #${line.id}` : "Строка товара")
-  );
-}
-
-function getGoodsLineQuantity(line: OrderGoodsLine): string {
-  return joinFilled([line.quantity ?? line.quantity_value, line.unit ?? line.quantity_unit], " ");
-}
-
-function InlineValue({
-  value,
-  max = 24,
-  muted = false,
-}: {
-  value: unknown;
-  max?: number;
-  muted?: boolean;
-}) {
-  const text = textOrDash(value);
-  const short = text.length > max ? `${text.slice(0, max - 1)}...` : text;
-
-  return (
-    <Typography.Text className={muted ? "crm-cell-muted" : undefined} title={text}>
-      {short}
-    </Typography.Text>
-  );
-}
-
-function PreviewRows({ rows }: { rows: PreviewRow[] }) {
-  const visibleRows = rows.filter((row) => isFilled(row.value));
-
-  if (!visibleRows.length) {
-    return <Typography.Text type="secondary">Нет данных</Typography.Text>;
-  }
-
-  return (
-    <div className="crm-preview-rows">
-      {visibleRows.map((row) => (
-        <div key={row.label} className="crm-preview-row">
-          <span>{row.label}</span>
-          <strong>{row.value}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function OrderPreviewPopover({
-  record,
-  title,
-  children,
-  render,
-}: {
-  record: OrderListItem;
-  title: string;
-  children: React.ReactNode;
-  render: (detail: OrderDetailPreview | undefined) => React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const detailQuery = useQuery({
-    queryKey: queryKeys.orders.detail(record.id),
-    queryFn: () => apiRequest<OrderDetailPreview>(`/api/orders/${record.id}`),
-    enabled: open,
-  });
-
-  return (
-    <Popover
-      trigger="click"
-      placement="bottomLeft"
-      open={open}
-      onOpenChange={setOpen}
-      title={title}
-      overlayClassName="crm-order-preview-popover"
-      content={
-        detailQuery.isLoading ? (
-          <div className="crm-preview-loading">
-            <Spin size="small" />
-          </div>
-        ) : detailQuery.error ? (
-          <Typography.Text type="danger">
-            {detailQuery.error instanceof ApiError ? detailQuery.error.detail : "Не удалось загрузить детали"}
-          </Typography.Text>
-        ) : (
-          render(detailQuery.data)
-        )
-      }
-    >
-      {children}
-    </Popover>
-  );
-}
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -417,23 +327,167 @@ function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
 }
 
-function formatPickupWindow(order: Pick<OrderListItem, "pickup_date" | "pickup_date_from" | "pickup_date_to">) {
-  const from = order.pickup_date_from ?? order.pickup_date ?? null;
-  const to = order.pickup_date_to ?? null;
+function parseDayjsValue(value: string | null | undefined) {
+  if (!value) return undefined;
+  const next = dayjs(value);
+  return next.isValid() ? next : undefined;
+}
 
-  if (!from) {
-    return "-";
+function toOptionalInteger(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
   }
+  return undefined;
+}
 
-  return to && to !== from ? `${from} - ${to}` : from;
+function toOptionalBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return undefined;
+}
+
+function normalizeGoodsLineFromDetail(line: unknown): OrderCreateGoodsLineForm {
+  if (!line || typeof line !== "object" || Array.isArray(line)) {
+    return {};
+  }
+  const source = line as Record<string, unknown>;
+  const itemType = trimOrUndefined(typeof source.item_type === "string" ? source.item_type : undefined);
+  const customItemType = trimOrUndefined(typeof source.custom_item_type === "string" ? source.custom_item_type : undefined);
+  const description = trimOrUndefined(typeof source.description === "string" ? source.description : undefined);
+  const weight = trimOrUndefined(
+    typeof source.weight_kg === "string"
+      ? source.weight_kg
+      : typeof source.weight_kg === "number"
+        ? String(source.weight_kg)
+        : undefined,
+  );
+  const quantityValue = trimOrUndefined(
+    typeof source.quantity_value === "string"
+      ? source.quantity_value
+      : typeof source.quantity_value === "number"
+        ? String(source.quantity_value)
+        : typeof source.quantity === "string"
+          ? source.quantity
+          : typeof source.quantity === "number"
+            ? String(source.quantity)
+            : undefined,
+  );
+  const quantityUnit = trimOrUndefined(
+    typeof source.quantity_unit === "string"
+      ? source.quantity_unit
+      : typeof source.unit === "string"
+        ? source.unit
+        : undefined,
+  );
+  return {
+    item_type: itemType,
+    custom_item_type: itemType === "other" ? customItemType : undefined,
+    description,
+    weight_kg: weight,
+    quantity_value: quantityValue,
+    quantity_unit: quantityUnit,
+  };
+}
+
+const ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY = "crm-orders-column-widths-v1";
+const ORDER_TABLE_MIN_COLUMN_WIDTH = 72;
+
+type ResizableHeaderCellProps = React.ThHTMLAttributes<HTMLTableCellElement> & {
+  onResizeStart?: (event: React.MouseEvent<HTMLSpanElement>) => void;
+  resizable?: boolean;
+};
+
+function ResizableHeaderCell({ onResizeStart, resizable, className, children, ...rest }: ResizableHeaderCellProps) {
+  const nextClassName = `${className ?? ""}${resizable ? " crm-resizable-th" : ""}`.trim();
+
+  return (
+    <th {...rest} className={nextClassName}>
+      {children}
+      {resizable ? (
+        <span
+          className="crm-column-resize-handle"
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+            onResizeStart?.(event);
+          }}
+        />
+      ) : null}
+    </th>
+  );
 }
 
 const QUANTITY_UNIT_FALLBACK_OPTIONS = [
   { label: "Шт", value: "pcs" },
-  { label: "Кв. м", value: "sqm" },
+  { label: "Кв. м", value: "m2" },
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
+const ORDER_TRIP_SOURCE_MISMATCH_CODE = "order-trip-source-mismatch";
+const REQUEST_DOCUMENT_TYPE_OPTIONS = [
+  { label: "WORD", value: "word" },
+  { label: "XLSX", value: "xlsx" },
+  { label: "XLS", value: "xls" },
+  { label: "PDF", value: "pdf" },
+  { label: "ZIP", value: "zip" },
+];
+const REQUEST_BACKEND_DOCUMENT_TYPE = "goods_description_docs";
+const COMPACT_CREATE_MODAL_WIDTH = 720;
+function formatRatio(numerator: string | undefined, denominator: string | undefined) {
+  const nextNumerator = Number(numerator);
+  const nextDenominator = Number(denominator);
+  if (
+    !Number.isFinite(nextNumerator) ||
+    !Number.isFinite(nextDenominator) ||
+    nextNumerator <= 0 ||
+    nextDenominator <= 0
+  ) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 2,
+  }).format(nextNumerator / nextDenominator);
+}
+
+function isOrderTripSourceMismatch(detail: string | undefined) {
+  if (!detail) return false;
+  return detail.toLowerCase().includes(ORDER_TRIP_SOURCE_MISMATCH_CODE);
+}
+
+function getOrderTripSourceMismatchMessage() {
+  return "Заказ не совпадает с точками выбранного рейса";
+}
+
+function normalizeCurrencyPayload(
+  currency: string | undefined,
+  otherLabel: string | undefined,
+  otherLabelFieldName: string,
+) {
+  const normalizedCurrency = (currency || "EUR").toUpperCase();
+  if (!["USD", "EUR", "RUB", "OTHER"].includes(normalizedCurrency)) {
+    throw new Error("Валюта должна быть USD, EUR, RUB или OTHER");
+  }
+
+  const normalizedOtherLabel = trimOrUndefined(otherLabel);
+  if (normalizedCurrency === "OTHER" && !normalizedOtherLabel) {
+    throw new Error(`Для валюты OTHER укажите ${otherLabelFieldName}`);
+  }
+  if (normalizedCurrency !== "OTHER" && normalizedOtherLabel) {
+    throw new Error(`${otherLabelFieldName} допускается только для валюты OTHER`);
+  }
+
+  return {
+    currency: normalizedCurrency,
+    otherLabel: normalizedCurrency === "OTHER" ? normalizedOtherLabel : undefined,
+  };
+}
 
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
   return {
@@ -468,11 +522,13 @@ function getParams(searchParams: URLSearchParams): OrderFilterParams {
 
 function OrdersPageContent() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
-  const isMobile = !screens.md;
+  const [isHydrated, setIsHydrated] = useState(false);
+  const isMobile = isHydrated ? !screens.md : false;
 
   const meQuery = useCurrentUser(true);
   const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
@@ -486,14 +542,22 @@ function OrdersPageContent() {
     ["administrator", "manager", "logist", "forwarder"].includes(normalizedRole);
   const canRunOperationalActions =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
+  const canQuotePrice = meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager";
+  const permissionsReady = isHydrated && meQuery.isSuccess;
+  const canCreateUi = permissionsReady && canCreate;
+  const canWriteOrderUi = permissionsReady && canWriteOrder;
+  const canRunOperationalActionsUi = permissionsReady && canRunOperationalActions;
+  const canQuotePriceUi = permissionsReady && canQuotePrice;
+  const isClientRoleUi = permissionsReady && isClientRole;
   const canEditRestrictedCreateFields =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
-  const canManageFactoryEmails = canEditRestrictedCreateFields;
   const canInlineCreatePostcodeCity = canEditRestrictedCreateFields && !isClientRole;
   const canUseMessengerFields = canEditRestrictedCreateFields && !isClientRole;
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createStep, setCreateStep] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignForwarderOpen, setAssignForwarderOpen] = useState(false);
@@ -509,22 +573,76 @@ function OrdersPageContent() {
   const [bulkCommentOpen, setBulkCommentOpen] = useState(false);
   const [bulkCommentTarget, setBulkCommentTarget] = useState<"warehouse" | "forwarder">("warehouse");
   const [selected, setSelected] = useState<OrderListItem | null>(null);
+  const [documentsOrder, setDocumentsOrder] = useState<OrderListItem | null>(null);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [downloadingDocumentId, setDownloadingDocumentId] = useState<number | null>(null);
+  const [clientOrder, setClientOrder] = useState<OrderListItem | null>(null);
+  const [clientOpen, setClientOpen] = useState(false);
+  const [factoryOrder, setFactoryOrder] = useState<OrderListItem | null>(null);
+  const [factoryOpen, setFactoryOpen] = useState(false);
+  const [forwarderOrder, setForwarderOrder] = useState<OrderListItem | null>(null);
+  const [forwarderOpen, setForwarderOpen] = useState(false);
+  const [invoiceOrder, setInvoiceOrder] = useState<OrderListItem | null>(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [descriptionOrder, setDescriptionOrder] = useState<OrderListItem | null>(null);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
-  const [postcodeQueryText, setPostcodeQueryText] = useState("");
-  const [newFactoryEmail, setNewFactoryEmail] = useState("");
-  const [inlinePostcodeValue, setInlinePostcodeValue] = useState("");
-  const [inlineCityValue, setInlineCityValue] = useState("");
+  const [factoryContactModalOpen, setFactoryContactModalOpen] = useState(false);
+  const [factoryLoadingAddressModalOpen, setFactoryLoadingAddressModalOpen] = useState(false);
+  const [editFactoryLoadingAddressModalOpen, setEditFactoryLoadingAddressModalOpen] = useState(false);
+  const [goodsLineModalOpen, setGoodsLineModalOpen] = useState(false);
+  const [goodsLineEditIndex, setGoodsLineEditIndex] = useState<number | null>(null);
+  const [editFactoryContactModalOpen, setEditFactoryContactModalOpen] = useState(false);
+  const [editGoodsLineModalOpen, setEditGoodsLineModalOpen] = useState(false);
+  const [editGoodsLineEditIndex, setEditGoodsLineEditIndex] = useState<number | null>(null);
+  const [editCompanyQueryText, setEditCompanyQueryText] = useState("");
+  const [editPostcodeQuery, setEditPostcodeQuery] = useState("");
+  const [editPostcodeQueryDebounced, setEditPostcodeQueryDebounced] = useState("");
+  const [editContactEmailOptions, setEditContactEmailOptions] = useState<FactoryContactOption[]>([]);
+  const [factoryCreateConfirmed, setFactoryCreateConfirmed] = useState(false);
+  const [factoryCreateConfirmShown, setFactoryCreateConfirmShown] = useState(false);
+  const factoryCreateConfirmOpenRef = useRef(false);
+  const [editFactoryCreateConfirmed, setEditFactoryCreateConfirmed] = useState(false);
+  const [editFactoryCreateConfirmShown, setEditFactoryCreateConfirmShown] = useState(false);
+  const editFactoryCreateConfirmOpenRef = useRef(false);
+  const [postcodeQuery, setPostcodeQuery] = useState("");
+  const [factorySearchTerm, setFactorySearchTerm] = useState("");
+  const [editFactorySearchTerm, setEditFactorySearchTerm] = useState("");
+  const [createdFactoryOption, setCreatedFactoryOption] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  const [createdLoadingAddressOption, setCreatedLoadingAddressOption] = useState<FactoryLoadingAddress | null>(null);
+  const [editCreatedFactoryOption, setEditCreatedFactoryOption] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  const [editCreatedLoadingAddressOption, setEditCreatedLoadingAddressOption] = useState<FactoryLoadingAddress | null>(null);
+  const [postcodeQueryDebounced, setPostcodeQueryDebounced] = useState("");
+  const createDraft = useOrderCreateDraftStore((state) => state.draft);
+  const setCreateDraft = useOrderCreateDraftStore((state) => state.setDraft);
+  const mergeCreateDraft = useOrderCreateDraftStore((state) => state.mergeDraft);
+  const resetCreateDraft = useOrderCreateDraftStore((state) => state.resetDraft);
+  const editDraftsByOrderId = useOrderEditDraftStore((state) => state.draftsByOrderId);
+  const setEditDraft = useOrderEditDraftStore((state) => state.setDraft);
+  const mergeEditDraft = useOrderEditDraftStore((state) => state.mergeDraft);
+  const resetEditDraft = useOrderEditDraftStore((state) => state.resetDraft);
+  const isRehydratingCreateFormRef = useRef(false);
+  const isRehydratingEditFormRef = useRef(false);
+  const hydratedEditOrderIdRef = useRef<number | null>(null);
 
   const [createForm] = Form.useForm<OrderCreateForm>();
   const [editForm] = Form.useForm<OrderEditForm>();
   const [statusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
-  const [pickupForm] = Form.useForm<PickupWindowForm>();
-  const [specialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
+  const [pickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [specialTariffForm] = Form.useForm<{
+    amount?: number | null;
+    currency?: string;
+    special_tariff_currency_other_label?: string;
+  }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
-  const [quotePriceForm] = Form.useForm<{ amount: number; currency?: string }>();
+  const [quotePriceForm] = Form.useForm<{
+    amount: number;
+    currency?: string;
+    quote_price_currency_other_label?: string;
+  }>();
   const [quoteDecisionForm] = Form.useForm<{ decision: "agree" | "decline" | "request_again" }>();
   const [filterForm] = Form.useForm<{
     id?: number;
@@ -550,23 +668,75 @@ function OrdersPageContent() {
   }>();
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
-  const [bulkPickupForm] = Form.useForm<PickupWindowForm>();
-  const [bulkSpecialTariffForm] = Form.useForm<{ amount?: number | null; currency?: string }>();
+  const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
+  const [bulkSpecialTariffForm] = Form.useForm<{
+    amount?: number | null;
+    currency?: string;
+    special_tariff_currency_other_label?: string;
+  }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
-  const [createFactoryEmailForm] = Form.useForm<{ email: string }>();
+  const [factoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
+  const [editFactoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
+  const [factoryLoadingAddressQuickForm] = Form.useForm<{ name?: string; address?: string; postcode_id?: number; city_id?: number }>();
+  const [editFactoryLoadingAddressQuickForm] = Form.useForm<{ name?: string; address?: string; postcode_id?: number; city_id?: number }>();
+  const [goodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
+  const [editGoodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
+  const loadingAddressQuickPostcodeId = Form.useWatch("postcode_id", factoryLoadingAddressQuickForm) as number | undefined;
+  const editLoadingAddressQuickPostcodeId = Form.useWatch("postcode_id", editFactoryLoadingAddressQuickForm) as number | undefined;
   const createFactoryId = Form.useWatch("factory_id", createForm);
   const createFactoryMode = (Form.useWatch("factory_mode", createForm) as CreateMode | undefined) ?? "existing";
+  const goodsLineRows = useMemo(
+    () => ((createDraft.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
+    [createDraft.goods_lines],
+  );
+  const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
   const createOrderType = Form.useWatch("order_type", createForm);
+  const createSelfDelivery = Boolean(Form.useWatch("self_delivery", createForm));
+  const createCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", createForm));
+  const createClientGoodsValueAmount = Form.useWatch("client_goods_value_amount", createForm);
+  const createDeclaredVolumeM3 = Form.useWatch("declared_volume_m3", createForm);
+  const createDeclaredTotalWeightKg = Form.useWatch("declared_total_weight_kg", createForm);
   const createCompanyId = Form.useWatch("company_id", createForm);
-  const createFactoryCountryId = Form.useWatch(["create_factory", "country_id"], createForm) as number | undefined;
-  const createFactoryPostcodeId = Form.useWatch(
-    ["create_factory", "loading_address", "postcode_id"],
-    createForm,
-  ) as number | undefined;
+  const createFactoryCountryId = Form.useWatch("factory_country_id", createForm) as number | undefined;
   const createLoadingAddressId = Form.useWatch("loading_address_id", createForm);
-  const isRequestCreate = !isClientRole && createOrderType === "request";
+  const createFactoryContactId = Form.useWatch("factory_contact_id", createForm) as number | undefined;
+  const currentCreateOrderType = (createOrderType ??
+    (createDraft.order_type as OrderType | undefined) ??
+    "delivery") as OrderType;
+  const isRequestCreate = currentCreateOrderType === "request";
+  const createWizardSteps = useMemo(() => getOrderCreateWizardSteps(currentCreateOrderType), [currentCreateOrderType]);
+  const createWizardLastStep = createWizardSteps.length - 1;
+  const createWizardStepKey = createWizardSteps[createStep]?.key ?? createWizardSteps[createWizardLastStep]?.key;
+  const selectedOrderId = selected?.id;
+  const editFactoryId = Form.useWatch("factory_id", editForm) as number | undefined;
+  const editFactoryMode = (Form.useWatch("factory_mode", editForm) as CreateMode | undefined) ?? "existing";
+  const editCompanyId = Form.useWatch("company_id", editForm) as number | undefined;
+  const editFactoryCountryId = Form.useWatch("factory_country_id", editForm) as number | undefined;
+  const editLoadingAddressId = Form.useWatch("loading_address_id", editForm) as number | undefined;
+  const editLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", editForm) as number | undefined;
+  const editLoadingCityIdUi = Form.useWatch("loading_city_id_ui", editForm) as number | undefined;
+  const editSelfDelivery = Boolean(Form.useWatch("self_delivery", editForm));
+  const editCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", editForm));
+  const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
+  const editMeasurementStatus = Form.useWatch("measurement_status", editForm);
+  const editWeighingStatus = Form.useWatch("weighing_status", editForm);
+  const editDraftRecord = selectedOrderId ? editDraftsByOrderId[selectedOrderId] : undefined;
+  const editGoodsLineRowsFromForm = Form.useWatch("goods_lines", editForm) as OrderCreateGoodsLineForm[] | undefined;
+  const editGoodsLineRows = useMemo(
+    () => editGoodsLineRowsFromForm ?? ((editDraftRecord?.values.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
+    [editDraftRecord?.values.goods_lines, editGoodsLineRowsFromForm],
+  );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const pathnameOrderId = useMemo(() => {
+    const matched = pathname.match(/^\/orders\/(\d+)$/);
+    if (!matched) return undefined;
+    const parsed = Number(matched[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }, [pathname]);
+  const deepLinkEditOrderId = pathnameOrderId ?? parseNumber(searchParams.get("edit_order_id"));
+  const standaloneOrderView = pathnameOrderId !== undefined || searchParams.get("single_order_view") === "1";
+  const deepLinkedOrderIdRef = useRef<number | null>(null);
   const hasActiveFilters = Boolean(
     params.id ||
       params.query ||
@@ -579,6 +749,80 @@ function OrdersPageContent() {
       (params.office_mark_codes?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+
+  useEffect(() => {
+    if (columnWidthsHydrated || typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY);
+      if (!raw) {
+        setColumnWidthsHydrated(true);
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const next = Object.entries(parsed).reduce<Record<string, number>>((acc, [key, value]) => {
+        if (typeof value === "number" && Number.isFinite(value) && value >= ORDER_TABLE_MIN_COLUMN_WIDTH) {
+          acc[key] = Math.round(value);
+        }
+        return acc;
+      }, {});
+      setColumnWidths(next);
+    } catch {
+      // ignore storage parse issues
+    } finally {
+      setColumnWidthsHydrated(true);
+    }
+  }, [columnWidthsHydrated]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!columnWidthsHydrated) return;
+    try {
+      window.localStorage.setItem(ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // no-op: ignore storage write issues
+    }
+  }, [columnWidths, columnWidthsHydrated]);
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    const nextStep = clampOrderCreateWizardStep(createStep, currentCreateOrderType);
+    if (nextStep !== createStep) {
+      setCreateStep(nextStep);
+    }
+  }, [createStep, currentCreateOrderType]);
+
+  const startColumnResize = useCallback(
+    (columnKey: string, initialWidth: number, event: React.MouseEvent<HTMLSpanElement>) => {
+      if (typeof window === "undefined") return;
+
+      const startX = event.clientX;
+      document.body.classList.add("crm-column-resizing");
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const nextWidth = Math.max(ORDER_TABLE_MIN_COLUMN_WIDTH, Math.round(initialWidth + delta));
+        setColumnWidths((prev) => {
+          if (prev[columnKey] === nextWidth) return prev;
+          return { ...prev, [columnKey]: nextWidth };
+        });
+      };
+
+      const handleMouseUp = () => {
+        document.body.classList.remove("crm-column-resizing");
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    },
+    [],
+  );
 
   useEffect(() => {
     filterForm.setFieldsValue({
@@ -613,6 +857,66 @@ function OrdersPageContent() {
       }),
   });
 
+  const editDetailQuery = useQuery({
+    queryKey: selectedOrderId ? queryKeys.orders.detail(selectedOrderId) : ["orders", "detail", "none"],
+    queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${selectedOrderId}`),
+    enabled: editOpen && Boolean(selectedOrderId),
+  });
+
+  const documentsQuery = useQuery({
+    queryKey: documentsOrder ? queryKeys.orders.documents(documentsOrder.id) : ["orders", "documents", "idle"],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderDocument>>(`/api/orders/${documentsOrder?.id}/documents`, {
+        query: { page: 1, page_size: 100 },
+      }),
+    enabled: documentsOpen && Boolean(documentsOrder),
+  });
+
+  const clientDetailQuery = useQuery({
+    queryKey: clientOrder ? queryKeys.orders.detail(clientOrder.id) : ["orders", "client-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${clientOrder?.id}`),
+    enabled: clientOpen && Boolean(clientOrder),
+  });
+
+  const factoryDetailQuery = useQuery({
+    queryKey: factoryOrder ? queryKeys.orders.detail(factoryOrder.id) : ["orders", "factory-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${factoryOrder?.id}`),
+    enabled: factoryOpen && Boolean(factoryOrder),
+  });
+
+  const forwarderDetailQuery = useQuery({
+    queryKey: forwarderOrder ? queryKeys.orders.detail(forwarderOrder.id) : ["orders", "forwarder-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${forwarderOrder?.id}`),
+    enabled: forwarderOpen && Boolean(forwarderOrder),
+  });
+
+  const forwarderUserId = forwarderDetailQuery.data?.assigned_forwarder_user_id ?? forwarderOrder?.assigned_forwarder_user_id;
+  const personalManagerId = forwarderDetailQuery.data?.personal_manager_id ?? forwarderOrder?.personal_manager_id;
+
+  const forwarderUserQuery = useQuery({
+    queryKey: forwarderUserId ? queryKeys.users.detail(forwarderUserId) : ["users", "forwarder-detail", "idle"],
+    queryFn: () => apiRequest<UserAdmin>(`/api/users/${forwarderUserId}`),
+    enabled: forwarderOpen && Boolean(forwarderUserId),
+  });
+
+  const personalManagerQuery = useQuery({
+    queryKey: personalManagerId ? queryKeys.users.detail(personalManagerId) : ["users", "personal-manager-detail", "idle"],
+    queryFn: () => apiRequest<UserAdmin>(`/api/users/${personalManagerId}`),
+    enabled: forwarderOpen && Boolean(personalManagerId),
+  });
+
+  const descriptionDetailQuery = useQuery({
+    queryKey: descriptionOrder ? queryKeys.orders.detail(descriptionOrder.id) : ["orders", "description-detail", "idle"],
+    queryFn: () => apiRequest<OrderDetail>(`/api/orders/${descriptionOrder?.id}`),
+    enabled: descriptionOpen && Boolean(descriptionOrder),
+  });
+
+  const deepLinkOrderQuery = useQuery({
+    queryKey: deepLinkEditOrderId ? queryKeys.orders.detail(deepLinkEditOrderId) : ["orders", "deep-link", "none"],
+    queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${deepLinkEditOrderId}`),
+    enabled: standaloneOrderView && Boolean(deepLinkEditOrderId) && canWriteOrder,
+  });
+
   const createMetadataQuery = useQuery({
     queryKey: ["orders", "create-metadata", isClientRole],
     queryFn: () =>
@@ -620,6 +924,12 @@ function OrdersPageContent() {
         ? apiRequest<ClientOrderCreateMetadata>("/api/client/orders/create-metadata")
         : apiRequest<OrderCreateMetadata>("/api/orders/create-metadata"),
     enabled: createOpen && canCreate,
+  });
+
+  const editMetadataQuery = useQuery({
+    queryKey: ["orders", "edit-metadata"],
+    queryFn: () => apiRequest<OrderCreateMetadata>("/api/orders/create-metadata"),
+    enabled: editOpen && canWriteOrder,
   });
 
   const clientCompaniesQuery = useQuery({
@@ -638,6 +948,27 @@ function OrdersPageContent() {
   const selectedClientCompany = useMemo(
     () => (clientCompaniesQuery.data?.items ?? []).find((item) => item.company_id === createCompanyId),
     [clientCompaniesQuery.data?.items, createCompanyId],
+  );
+
+  const editClientCompaniesQuery = useQuery({
+    queryKey: ["orders", "edit-client-companies", editCompanyQueryText],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderClientCompanyLookupItem>>("/api/orders/client-companies", {
+        query: {
+          page: 1,
+          page_size: 50,
+          query: editCompanyQueryText || undefined,
+        },
+      }),
+    enabled: editOpen && !isClientRole && canWriteOrder,
+  });
+
+  const selectedEditCompany = useMemo(
+    () =>
+      (editClientCompaniesQuery.data?.items ?? []).find(
+        (item) => item.company_id === editCompanyId,
+      ),
+    [editClientCompaniesQuery.data?.items, editCompanyId],
   );
 
   const tripsQuery = useQuery({
@@ -659,11 +990,20 @@ function OrdersPageContent() {
   });
 
   const factoryOptionsQuery = useQuery({
-    queryKey: [isClientRole ? "client-factories" : "factories", "order-create-options", createOpen],
+    queryKey: [
+      isClientRole ? "client-factories" : "factories",
+      "order-create-options",
+      createFactoryMode,
+      createFactoryCountryId,
+    ],
     queryFn: async () => {
+      if (!createFactoryCountryId) {
+        return [] as Array<{ id: number; name: string; subtitle: string }>;
+      }
+
       if (isClientRole) {
         const response = await apiRequest<PaginatedResponse<ClientFactoryListItem>>("/api/client/factories", {
-          query: { page: 1, page_size: 200, sort_desc: false },
+          query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
         });
         return response.items.map((factory) => ({
           id: factory.id,
@@ -673,7 +1013,7 @@ function OrdersPageContent() {
       }
 
       const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
-        query: { page: 1, page_size: 200, sort_desc: false },
+        query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
       });
       return response.items.map((factory) => ({
         id: factory.id,
@@ -681,69 +1021,69 @@ function OrdersPageContent() {
         subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
       }));
     },
-    enabled: createOpen && canCreate,
+    enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
   });
 
-  const factoryEmailsQuery = useQuery({
-    queryKey: ["orders", "create-factory-emails", createFactoryId],
+  const editFactoryOptionsQuery = useQuery({
+    queryKey: ["factories", "order-edit-options", editFactoryCountryId],
+    queryFn: async () => {
+      if (!editFactoryCountryId) {
+        return [] as Array<{ id: number; name: string; subtitle: string }>;
+      }
+      const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+        query: { page: 1, page_size: 200, sort_desc: false, country_id: editFactoryCountryId },
+      });
+      return response.items.map((factory) => ({
+        id: factory.id,
+        name: factory.name,
+        subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+      }));
+    },
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
+  });
+
+  const factoryContactsQuery = useQuery({
+    queryKey: ["orders", "create-factory-contacts", createFactoryId],
     queryFn: () =>
-      apiRequest<PaginatedResponse<FactoryEmail>>(`/api/factories/${createFactoryId}/emails`, {
+      apiRequest<PaginatedResponse<FactoryContactOption>>(`/api/factories/${createFactoryId}/contacts`, {
         query: { page: 1, page_size: 200 },
       }),
     enabled: createOpen && !isClientRole && canCreate && createFactoryMode === "existing" && Boolean(createFactoryId),
   });
 
-  const countriesQuery = useQuery({
+  const editFactoryContactsQuery = useQuery({
+    queryKey: ["orders", "edit-factory-contacts", editFactoryId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryContactOption>>(`/api/factories/${editFactoryId}/contacts`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
+  });
+
+  const createCountriesQuery = useQuery({
     queryKey: ["orders", "create-countries", isClientRole],
     queryFn: () =>
       isClientRole
         ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
-            query: { page: 1, page_size: 300 },
+            query: { page: 1, page_size: 200 },
           })
         : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
-            query: { page: 1, page_size: 300 },
-          }),
-    enabled: createOpen && canCreate && createFactoryMode === "create",
-  });
-
-  const postcodesQuery = useQuery({
-    queryKey: ["orders", "create-postcodes", isClientRole, createFactoryCountryId, postcodeQueryText],
-    queryFn: () =>
-      isClientRole
-        ? apiRequest<PaginatedResponse<Postcode>>("/api/client/postcodes", {
-            query: { page: 1, page_size: 100, country_id: createFactoryCountryId, query: postcodeQueryText || undefined },
-          })
-        : apiRequest<PaginatedResponse<Postcode>>("/api/postcodes", {
-            query: { page: 1, page_size: 100, country_id: createFactoryCountryId, query: postcodeQueryText || undefined },
-          }),
-    enabled: createOpen && canCreate && createFactoryMode === "create" && Boolean(createFactoryCountryId),
-  });
-
-  const postcodeCitiesQuery = useQuery({
-    queryKey: ["orders", "create-postcode-cities", isClientRole, createFactoryPostcodeId],
-    queryFn: () =>
-      isClientRole
-        ? apiRequest<PaginatedResponse<PostcodeCity>>(`/api/client/postcodes/${createFactoryPostcodeId}/cities`, {
-            query: { page: 1, page_size: 200 },
-          })
-        : apiRequest<PaginatedResponse<PostcodeCity>>(`/api/postcodes/${createFactoryPostcodeId}/cities`, {
             query: { page: 1, page_size: 200 },
           }),
-    enabled: createOpen && canCreate && createFactoryMode === "create" && Boolean(createFactoryPostcodeId),
+    enabled: createOpen && canCreate,
   });
 
-  const messengerTypesQuery = useQuery({
-    queryKey: ["orders", "create-messenger-types"],
-    queryFn: async () => {
-      const payload = await apiRequest<
-        PaginatedResponse<{ code: string; label: string }> | { code: string; label: string }[]
-      >("/api/messenger-types");
-      if (Array.isArray(payload)) {
-        return payload;
-      }
-      return payload.items ?? [];
-    },
-    enabled: createOpen && canCreate && createFactoryMode === "create" && canUseMessengerFields,
+  const editCountriesQuery = useQuery({
+    queryKey: ["orders", "edit-countries", isClientRole],
+    queryFn: () =>
+      isClientRole
+        ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
+            query: { page: 1, page_size: 200 },
+          })
+        : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
+            query: { page: 1, page_size: 200 },
+          }),
+    enabled: editOpen && canWriteOrder,
   });
 
   const loadingAddressesQuery = useQuery({
@@ -769,6 +1109,180 @@ function OrdersPageContent() {
     enabled: createOpen && createFactoryMode === "existing" && Boolean(createFactoryId) && canCreate,
   });
 
+  const editLoadingAddressesQuery = useQuery({
+    queryKey: ["orders", "edit-loading-addresses", editFactoryId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${editFactoryId}/loading-addresses`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
+  });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPostcodeQueryDebounced(postcodeQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [postcodeQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setEditPostcodeQueryDebounced(editPostcodeQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [editPostcodeQuery]);
+
+  const postcodeOptionsQuery = useQuery({
+    queryKey: ["orders", "create-postcodes", isClientRole, createFactoryCountryId, postcodeQueryDebounced],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Postcode>>(isClientRole ? "/api/client/postcodes" : "/api/postcodes", {
+        query: {
+          page: 1,
+          page_size: 200,
+          country_id: createFactoryCountryId,
+          query: postcodeQueryDebounced || undefined,
+        },
+      }),
+    enabled: createOpen && canCreate && Boolean(createFactoryCountryId),
+  });
+
+  const editPostcodeOptionsQuery = useQuery({
+    queryKey: ["orders", "edit-postcodes", editFactoryCountryId, editPostcodeQueryDebounced],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Postcode>>("/api/postcodes", {
+        query: {
+          page: 1,
+          page_size: 200,
+          country_id: editFactoryCountryId,
+          query: editPostcodeQueryDebounced || undefined,
+        },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
+  });
+
+  const createLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", createForm) as number | undefined;
+  const createLoadingCityIdUi = Form.useWatch("loading_city_id_ui", createForm) as number | undefined;
+
+  const postcodeCitiesQuery = useQuery({
+    queryKey: ["orders", "create-postcode-cities", isClientRole, createLoadingPostcodeIdUi],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(
+        isClientRole
+          ? `/api/client/postcodes/${createLoadingPostcodeIdUi}/cities`
+          : `/api/postcodes/${createLoadingPostcodeIdUi}/cities`,
+        {
+          query: { page: 1, page_size: 200 },
+        },
+      ),
+    enabled: createOpen && canCreate && Boolean(createLoadingPostcodeIdUi),
+  });
+
+  const editPostcodeCitiesQuery = useQuery({
+    queryKey: ["orders", "edit-postcode-cities", editLoadingPostcodeIdUi],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(`/api/postcodes/${editLoadingPostcodeIdUi}/cities`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && canWriteOrder && Boolean(editLoadingPostcodeIdUi),
+  });
+
+  const loadingAddressQuickCitiesQuery = useQuery({
+    queryKey: ["orders", "create-loading-address-quick-cities", isClientRole, loadingAddressQuickPostcodeId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(
+        isClientRole
+          ? `/api/client/postcodes/${loadingAddressQuickPostcodeId}/cities`
+          : `/api/postcodes/${loadingAddressQuickPostcodeId}/cities`,
+        { query: { page: 1, page_size: 200 } },
+      ),
+    enabled: createOpen && factoryLoadingAddressModalOpen && Boolean(loadingAddressQuickPostcodeId),
+  });
+
+  const editLoadingAddressQuickCitiesQuery = useQuery({
+    queryKey: ["orders", "edit-loading-address-quick-cities", editLoadingAddressQuickPostcodeId],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<PostcodeCity>>(`/api/postcodes/${editLoadingAddressQuickPostcodeId}/cities`, {
+        query: { page: 1, page_size: 200 },
+      }),
+    enabled: editOpen && editFactoryLoadingAddressModalOpen && Boolean(editLoadingAddressQuickPostcodeId),
+  });
+
+  const toEditFormValues = useCallback(
+    (detail: OrderInternalEditRead): OrderEditForm => {
+      const order = detail.order;
+      const factorySelection = (detail.factory_selection ?? {}) as OrderEditFactorySelection;
+      const loadingAddress = factorySelection.loading_address ?? null;
+      const factoryContact = factorySelection.factory_contact ?? null;
+      const rawCertificateIntent = order.raw_payload?.certificate_intent;
+      const certificateIntent = typeof rawCertificateIntent === "string" ? rawCertificateIntent : undefined;
+      const goodsLines = (detail.goods_lines ?? []).map((line) => normalizeGoodsLineFromDetail(line));
+
+      return {
+        order_date: parseDayjsValue(order.order_date ?? undefined),
+        status_name: order.status_name ?? undefined,
+        status_date: parseDayjsValue(order.status_date ?? undefined),
+        order_number: order.order_number ?? undefined,
+        company_id: order.company_id ?? undefined,
+        company_contact_id: undefined,
+        invoice_on_other_company: toOptionalBoolean(order.raw_payload?.invoice_on_other_company),
+        invoice_company_name: (order.raw_payload?.invoice_company_name as string | undefined) ?? undefined,
+        self_delivery: toOptionalBoolean(order.raw_payload?.self_delivery),
+        assigned_forwarder_user_id: order.assigned_forwarder_user_id ?? undefined,
+        self_delivery_forwarder_user_id: toOptionalInteger(order.raw_payload?.self_delivery_forwarder_user_id),
+        factory_mode: "existing",
+        factory_country_id: factorySelection.country_id ?? undefined,
+        factory_id: factorySelection.factory_id ?? undefined,
+        loading_address_id: factorySelection.loading_address_id ?? undefined,
+        loading_postcode_id_ui: loadingAddress?.postcode_id ?? undefined,
+        loading_city_id_ui: loadingAddress?.city_id ?? undefined,
+        loading_address_line: loadingAddress?.address ?? undefined,
+        loading_address_fax: loadingAddress?.fax ?? undefined,
+        factory_contact_id: factorySelection.factory_contact_id ?? undefined,
+        factory_contact_email: factoryContact?.email ?? undefined,
+        factory_contact_name: factoryContact?.full_name ?? undefined,
+        factory_contact_phone: factoryContact?.phone ?? undefined,
+        ready_date: parseDayjsValue(order.ready_date ?? undefined),
+        pickup_date_from: parseDayjsValue((order.raw_payload?.pickup_date_from as string | undefined) ?? undefined),
+        pickup_date_to: parseDayjsValue((order.raw_payload?.pickup_date_to as string | undefined) ?? undefined),
+        certificate_intent_enabled: Boolean(certificateIntent),
+        certificate_intent: certificateIntent,
+        invoice_number: order.invoice_number ?? undefined,
+        client_goods_value_amount:
+          typeof order.client_goods_value_amount === "number"
+            ? String(order.client_goods_value_amount)
+            : (order.client_goods_value_amount ?? undefined),
+        client_goods_value_currency: order.client_goods_value_currency ?? "EUR",
+        client_goods_value_currency_other_label:
+          (order.raw_payload?.client_goods_value_currency_other_label as string | undefined) ?? undefined,
+        goods_lines: goodsLines,
+        declared_volume_m3:
+          typeof order.declared_volume_m3 === "number" ? String(order.declared_volume_m3) : (order.declared_volume_m3 ?? undefined),
+        volume_m3: typeof order.volume_m3 === "number" ? String(order.volume_m3) : (order.volume_m3 ?? undefined),
+        declared_total_weight_kg:
+          (order.raw_payload?.declared_total_weight_kg as string | undefined) ??
+          (typeof order.actual_weight_kg === "number" ? String(order.actual_weight_kg) : (order.actual_weight_kg ?? undefined)),
+        cargo_places_qty: order.box_qty ?? undefined,
+        measurement_status: order.measurement_payload?.status ?? undefined,
+        actual_volume_m3: order.actual_volume_m3 ?? undefined,
+        weighing_status: order.weighing_payload?.status ?? undefined,
+        actual_weight_kg: order.actual_weight_kg ?? undefined,
+        actual_qty: order.actual_qty ?? undefined,
+        quantity_whs: order.quantity_whs ?? undefined,
+        product_characteristic_codes: order.product_characteristic_tags?.map((tag) => tag.code) ?? undefined,
+        office_mark_codes: order.office_mark_tags?.map((tag) => tag.code) ?? undefined,
+        additional_description: order.additional_description ?? undefined,
+        comment: order.comment ?? undefined,
+        is_1c: toOptionalBoolean(order.raw_payload?.is_1c),
+        is_factory_payment_via_company: toOptionalBoolean(order.raw_payload?.is_factory_payment_via_company),
+        is_checked: order.is_checked ?? undefined,
+        is_factory_payment_completed: order.is_factory_payment_completed ?? undefined,
+        mrn: order.mrn ?? undefined,
+        trip_id: order.trip_id ?? undefined,
+      };
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!createOpen || !createFactoryId || createFactoryMode !== "existing") {
       return;
@@ -792,31 +1306,378 @@ function OrdersPageContent() {
   useEffect(() => {
     if (!createOpen) return;
     if (createFactoryMode === "create") {
+      setFactoryCreateConfirmed(false);
+      setFactoryCreateConfirmShown(false);
       createForm.setFieldValue("factory_id", undefined);
       createForm.setFieldValue("loading_address_id", undefined);
-      createForm.setFieldValue("email_id", undefined);
+      createForm.setFieldValue("factory_contact_id", undefined);
       return;
     }
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
     createForm.setFieldValue(["create_factory"], undefined);
   }, [createFactoryMode, createForm, createOpen]);
 
   useEffect(() => {
-    if (!createOpen || createFactoryMode !== "create") {
+    if (factoryCreateConfirmOpenRef.current) {
       return;
     }
-    createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
-    createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-  }, [createFactoryCountryId, createFactoryMode, createForm, createOpen]);
+    if (!createOpen || createFactoryMode !== "create" || factoryCreateConfirmed || factoryCreateConfirmShown) {
+      return;
+    }
+    const factoryName = createForm.getFieldValue(["create_factory", "factory_name"]);
+    const loadingAddress = createForm.getFieldValue(["create_factory", "loading_address", "address"]);
+    const postcodeId = createForm.getFieldValue("loading_postcode_id_ui");
+    const cityId = createForm.getFieldValue("loading_city_id_ui");
+    if (!factoryName || !loadingAddress || !postcodeId || !cityId) {
+      return;
+    }
+    setFactoryCreateConfirmShown(true);
+    factoryCreateConfirmOpenRef.current = true;
+    Modal.confirm({
+      title: "Вы готовы создать фабрику?",
+      okText: "Да",
+      cancelText: "Нет",
+      onOk: async () => {
+        try {
+          const values = createForm.getFieldsValue(true) as OrderCreateForm;
+          const factoryName = trimOrUndefined(values.create_factory?.factory_name);
+          const countryId = values.factory_country_id;
+          const address = trimOrUndefined(values.create_factory?.loading_address?.address);
+          const loadingAddressName =
+            trimOrUndefined(values.create_factory?.loading_address?.name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.address) ??
+            trimOrUndefined(values.create_factory?.factory_name) ??
+            "Основной адрес";
+          const postcodeId = values.loading_postcode_id_ui;
+          const cityId = values.loading_city_id_ui;
+          const primaryContactName =
+            trimOrUndefined(values.create_factory_contact?.full_name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
+            "Primary Contact";
+          const primaryContactPhone =
+            trimOrUndefined(values.create_factory_contact?.phone) ??
+            trimOrUndefined(values.create_factory?.loading_address?.phone) ??
+            "+70000000000";
+          const primaryContactEmail =
+            trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+          if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
+            throw new Error("missing-factory-fields");
+          }
+
+          const createdFactory = await apiRequest<Factory>("/api/factories", {
+            method: "POST",
+            body: {
+              name: factoryName,
+              country_id: countryId,
+              country: createCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+              city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
+              address,
+              postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
+              phone: trimOrUndefined(values.create_factory_contact?.phone),
+              primary_contact: {
+                full_name: primaryContactName,
+                phone: primaryContactPhone,
+                email: primaryContactEmail,
+              },
+            },
+          });
+
+          const createdAddress = await apiRequest<FactoryLoadingAddress>(`/api/factories/${createdFactory.id}/loading-addresses`, {
+            method: "POST",
+            body: {
+              name: loadingAddressName,
+              country_id: countryId,
+              postcode_id: postcodeId,
+              city_id: cityId,
+              address,
+              contact_name:
+                trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
+              phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+            },
+          });
+
+          createForm.setFieldValue("factory_mode", "existing");
+          setCreatedFactoryOption({
+            id: createdFactory.id,
+            name: createdFactory.name,
+            subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+          });
+          setCreatedLoadingAddressOption(createdAddress);
+          createForm.setFieldValue("factory_id", createdFactory.id);
+          createForm.setFieldValue("loading_address_id", createdAddress.id);
+          setFactoryCreateConfirmed(true);
+          setFactoryCreateConfirmShown(false);
+          factoryCreateConfirmOpenRef.current = false;
+          await queryClient.invalidateQueries({ queryKey: ["factories"] });
+          await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createdFactory.id] });
+          message.success("Фабрика создана");
+        } catch {
+          setFactoryCreateConfirmShown(false);
+          factoryCreateConfirmOpenRef.current = false;
+          message.error("Произошла ошибка");
+          return;
+        }
+      },
+      onCancel: () => {
+        setFactoryCreateConfirmShown(false);
+        factoryCreateConfirmOpenRef.current = false;
+      },
+    });
+  }, [
+    createCountriesQuery.data?.items,
+    queryClient,
+    createFactoryMode,
+    createForm,
+    createOpen,
+    createLoadingCityIdUi,
+    createLoadingPostcodeIdUi,
+    factoryCreateConfirmed,
+    factoryCreateConfirmShown,
+    message,
+    postcodeCitiesQuery.data?.items,
+    postcodeOptionsQuery.data?.items,
+  ]);
 
   useEffect(() => {
-    if (!createOpen || createFactoryMode !== "create") {
+    if (!createOpen) return;
+    if (!createLoadingPostcodeIdUi) {
+      createForm.setFieldValue("loading_city_id_ui", undefined);
+      if (createFactoryMode === "create") {
+        createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+      }
       return;
     }
-    const cities = postcodeCitiesQuery.data?.items ?? [];
-    if (cities.length === 1) {
-      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], cities[0].id);
+
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], createLoadingPostcodeIdUi);
     }
-  }, [createFactoryMode, createForm, createOpen, postcodeCitiesQuery.data?.items]);
+  }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen || !createLoadingPostcodeIdUi) return;
+    const cities = postcodeCitiesQuery.data?.items ?? [];
+    if (cities.length !== 1) return;
+    const onlyCityId = cities[0]?.id;
+    if (!onlyCityId) return;
+    createForm.setFieldValue("loading_city_id_ui", onlyCityId);
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], onlyCityId);
+    }
+  }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen, postcodeCitiesQuery.data?.items]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    if (createClientGoodsValueCurrency !== "OTHER") {
+      createForm.setFieldValue("client_goods_value_currency_other_label", undefined);
+    }
+  }, [createClientGoodsValueCurrency, createForm, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    if (!createCertificateIntentEnabled) {
+      createForm.setFieldValue("certificate_intent", undefined);
+    }
+  }, [createCertificateIntentEnabled, createForm, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    const assignedForwarder = createForm.getFieldValue("assigned_forwarder_user_id");
+    const selfDeliveryForwarder = createForm.getFieldValue("self_delivery_forwarder_user_id");
+    if (createSelfDelivery) {
+      if (!selfDeliveryForwarder && assignedForwarder) {
+        createForm.setFieldValue("self_delivery_forwarder_user_id", assignedForwarder);
+      }
+      return;
+    }
+    if (!assignedForwarder && selfDeliveryForwarder) {
+      createForm.setFieldValue("assigned_forwarder_user_id", selfDeliveryForwarder);
+    }
+  }, [createForm, createOpen, createSelfDelivery]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (editFactoryMode === "create") {
+      setEditFactoryCreateConfirmed(false);
+      setEditFactoryCreateConfirmShown(false);
+      editForm.setFieldValue("factory_id", undefined);
+      editForm.setFieldValue("loading_address_id", undefined);
+      editForm.setFieldValue("factory_contact_id", undefined);
+      editForm.setFieldValue("factory_contact_email", undefined);
+      editForm.setFieldValue("factory_contact_name", undefined);
+      editForm.setFieldValue("factory_contact_phone", undefined);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, {
+          factory_id: undefined,
+          loading_address_id: undefined,
+          factory_contact_id: undefined,
+          factory_contact_email: undefined,
+          factory_contact_name: undefined,
+          factory_contact_phone: undefined,
+        });
+      }
+      return;
+    }
+    setEditFactoryCreateConfirmed(false);
+    setEditFactoryCreateConfirmShown(false);
+    editForm.setFieldValue(["create_factory"], undefined);
+  }, [editFactoryMode, editForm, editOpen, mergeEditDraft, selectedOrderId]);
+
+  useEffect(() => {
+    if (editFactoryCreateConfirmOpenRef.current) {
+      return;
+    }
+    if (!editOpen || editFactoryMode !== "create" || editFactoryCreateConfirmed || editFactoryCreateConfirmShown) {
+      return;
+    }
+    const factoryName = editForm.getFieldValue(["create_factory", "factory_name"]);
+    const loadingAddress = editForm.getFieldValue(["create_factory", "loading_address", "address"]);
+    const postcodeId = editForm.getFieldValue("loading_postcode_id_ui");
+    const cityId = editForm.getFieldValue("loading_city_id_ui");
+    if (!factoryName || !loadingAddress || !postcodeId || !cityId) {
+      return;
+    }
+    setEditFactoryCreateConfirmShown(true);
+    editFactoryCreateConfirmOpenRef.current = true;
+    Modal.confirm({
+      title: "Вы готовы создать фабрику?",
+      okText: "Да",
+      cancelText: "Нет",
+      onOk: async () => {
+        try {
+          const values = editForm.getFieldsValue(true) as OrderEditForm;
+          const factoryName = trimOrUndefined(values.create_factory?.factory_name);
+          const countryId = values.factory_country_id;
+          const address = trimOrUndefined(values.create_factory?.loading_address?.address);
+          const loadingAddressName =
+            trimOrUndefined(values.create_factory?.loading_address?.name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.address) ??
+            trimOrUndefined(values.create_factory?.factory_name) ??
+            "Основной адрес";
+          const postcodeId = values.loading_postcode_id_ui;
+          const cityId = values.loading_city_id_ui;
+          const primaryContactName =
+            trimOrUndefined(values.create_factory_contact?.full_name) ??
+            trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
+            "Primary Contact";
+          const primaryContactPhone =
+            trimOrUndefined(values.create_factory_contact?.phone) ??
+            trimOrUndefined(values.create_factory?.loading_address?.phone) ??
+            "+70000000000";
+          const primaryContactEmail =
+            trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+          if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
+            throw new Error("missing-factory-fields");
+          }
+
+          const createdFactory = await apiRequest<Factory>("/api/factories", {
+            method: "POST",
+            body: {
+              name: factoryName,
+              country_id: countryId,
+              country: editCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+              city: editPostcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
+              address,
+              postcode: editPostcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
+              phone: trimOrUndefined(values.create_factory_contact?.phone),
+              primary_contact: {
+                full_name: primaryContactName,
+                phone: primaryContactPhone,
+                email: primaryContactEmail,
+              },
+            },
+          });
+
+          const createdAddress = await apiRequest<FactoryLoadingAddress>(`/api/factories/${createdFactory.id}/loading-addresses`, {
+            method: "POST",
+            body: {
+              name: loadingAddressName,
+              country_id: countryId,
+              postcode_id: postcodeId,
+              city_id: cityId,
+              address,
+              contact_name:
+                trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
+              phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+            },
+          });
+
+          const nextPatch = {
+            factory_mode: "existing" as const,
+            factory_id: createdFactory.id,
+            loading_address_id: createdAddress.id,
+          };
+          editForm.setFieldsValue(nextPatch);
+          setEditCreatedFactoryOption({
+            id: createdFactory.id,
+            name: createdFactory.name,
+            subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+          });
+          setEditCreatedLoadingAddressOption(createdAddress);
+          setEditFactoryCreateConfirmed(true);
+          setEditFactoryCreateConfirmShown(false);
+          editFactoryCreateConfirmOpenRef.current = false;
+          if (selectedOrderId) {
+            mergeEditDraft(selectedOrderId, nextPatch);
+          }
+          await queryClient.invalidateQueries({ queryKey: ["factories"] });
+          await queryClient.invalidateQueries({ queryKey: ["orders", "edit-factory-contacts", createdFactory.id] });
+          message.success("Фабрика создана");
+        } catch {
+          setEditFactoryCreateConfirmShown(false);
+          editFactoryCreateConfirmOpenRef.current = false;
+          message.error("Произошла ошибка");
+          return;
+        }
+      },
+      onCancel: () => {
+        setEditFactoryCreateConfirmShown(false);
+        editFactoryCreateConfirmOpenRef.current = false;
+      },
+    });
+  }, [
+    editCountriesQuery.data?.items,
+    editFactoryCreateConfirmed,
+    editFactoryCreateConfirmShown,
+    editFactoryMode,
+    editForm,
+    editLoadingCityIdUi,
+    editLoadingPostcodeIdUi,
+    editOpen,
+    editPostcodeCitiesQuery.data?.items,
+    editPostcodeOptionsQuery.data?.items,
+    mergeEditDraft,
+    message,
+    queryClient,
+    selectedOrderId,
+  ]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (!editLoadingPostcodeIdUi) {
+      editForm.setFieldValue("loading_city_id_ui", undefined);
+      if (editFactoryMode === "create") {
+        editForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+      }
+      return;
+    }
+
+    if (editFactoryMode === "create") {
+      editForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], editLoadingPostcodeIdUi);
+    }
+  }, [editFactoryMode, editForm, editLoadingPostcodeIdUi, editOpen]);
+
+  useEffect(() => {
+    if (!editOpen || !editLoadingPostcodeIdUi) return;
+    const cities = editPostcodeCitiesQuery.data?.items ?? [];
+    if (cities.length !== 1) return;
+    const onlyCityId = cities[0]?.id;
+    if (!onlyCityId) return;
+    editForm.setFieldValue("loading_city_id_ui", onlyCityId);
+    if (editFactoryMode === "create") {
+      editForm.setFieldValue(["create_factory", "loading_address", "city_id"], onlyCityId);
+    }
+  }, [editFactoryMode, editForm, editLoadingPostcodeIdUi, editOpen, editPostcodeCitiesQuery.data?.items]);
 
   function invalidateOrdersQueries(orderId?: number) {
     return Promise.all([
@@ -825,58 +1686,124 @@ function OrdersPageContent() {
     ]);
   }
 
-  const createFactoryEmailMutation = useMutation({
-    mutationFn: (payload: { factoryId: number; email: string }) =>
-      apiRequest<FactoryEmail>(`/api/factories/${payload.factoryId}/emails`, {
+  const createFactoryContactMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; full_name: string; phone: string; email: string }) =>
+      apiRequest<FactoryContactOption>(`/api/factories/${payload.factoryId}/contacts`, {
         method: "POST",
-        body: { email: payload.email },
+        body: {
+          full_name: payload.full_name,
+          phone: payload.phone,
+          email: payload.email,
+          is_primary: false,
+        },
       }),
     onSuccess: async (result) => {
-      message.success("Email фабрики добавлен");
-      setNewFactoryEmail("");
-      createFactoryEmailForm.resetFields();
-      await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-emails", createFactoryId] });
+      message.success("Контакт фабрики добавлен");
+      setFactoryContactModalOpen(false);
+      factoryContactQuickForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createFactoryId] });
       if (result?.id) {
-        createForm.setFieldValue("email_id", result.id);
+        createForm.setFieldValue("factory_contact_id", result.id);
+        createForm.setFieldValue(["create_factory_contact", "full_name"], result.full_name);
+        createForm.setFieldValue(["create_factory_contact", "phone"], result.phone);
+        createForm.setFieldValue(["create_factory_contact", "email"], result.email ?? undefined);
       }
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления email");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления контакта");
     },
   });
 
-  const createPostcodeMutation = useMutation({
-    mutationFn: (payload: { country_id: number; postcode: string }) =>
-      apiRequest<Postcode>("/api/postcodes", {
+  const editFactoryContactMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; full_name: string; phone: string; email: string }) =>
+      apiRequest<FactoryContactOption>(`/api/factories/${payload.factoryId}/contacts`, {
         method: "POST",
-        body: payload,
+        body: {
+          full_name: payload.full_name,
+          phone: payload.phone,
+          email: payload.email,
+          is_primary: false,
+        },
       }),
     onSuccess: async (result) => {
-      message.success("Индекс создан");
-      setInlinePostcodeValue("");
-      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], result.id);
-      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-      await queryClient.invalidateQueries({ queryKey: ["orders", "create-postcodes"] });
+      message.success("Контакт фабрики добавлен");
+      setEditFactoryContactModalOpen(false);
+      editFactoryContactQuickForm.resetFields();
+      await queryClient.invalidateQueries({ queryKey: ["orders", "edit-factory-contacts", editFactoryId] });
+      const updatedOptions = [result, ...(editContactEmailOptions.filter((item) => item.id !== result.id))];
+      setEditContactEmailOptions(updatedOptions);
+      editForm.setFieldValue("factory_contact_id", result.id);
+      editForm.setFieldValue("factory_contact_email", result.email ?? undefined);
+      editForm.setFieldValue("factory_contact_name", result.full_name ?? undefined);
+      editForm.setFieldValue("factory_contact_phone", result.phone ?? undefined);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, {
+          factory_contact_id: result.id,
+          factory_contact_email: result.email ?? undefined,
+          factory_contact_name: result.full_name ?? undefined,
+          factory_contact_phone: result.phone ?? undefined,
+        });
+      }
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка создания индекса");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления контакта");
     },
   });
 
-  const createPostcodeCityMutation = useMutation({
-    mutationFn: (payload: { postcodeId: number; city: string }) =>
-      apiRequest<PostcodeCity>(`/api/postcodes/${payload.postcodeId}/cities`, {
+  const createFactoryLoadingAddressMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; countryId: number; name: string; address: string; postcode_id: number; city_id: number }) =>
+      apiRequest<FactoryLoadingAddress>(`/api/factories/${payload.factoryId}/loading-addresses`, {
         method: "POST",
-        body: { city: payload.city },
+        body: {
+          name: payload.name,
+          country_id: payload.countryId,
+          postcode_id: payload.postcode_id,
+          city_id: payload.city_id,
+          address: payload.address,
+          contact_name: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "full_name"])) ?? "Contact",
+          phone: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "phone"])) ?? "+70000000000",
+        },
       }),
     onSuccess: async (result) => {
-      message.success("Город создан");
-      setInlineCityValue("");
-      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], result.id);
-      await queryClient.invalidateQueries({ queryKey: ["orders", "create-postcode-cities"] });
+      message.success("Адрес добавлен");
+      setFactoryLoadingAddressModalOpen(false);
+      factoryLoadingAddressQuickForm.resetFields();
+      setCreatedLoadingAddressOption(result);
+      createForm.setFieldValue("loading_address_id", result.id);
+      await queryClient.invalidateQueries({ queryKey: ["orders", "create-loading-addresses", isClientRole, "existing", createFactoryId] });
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка создания города");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления адреса");
+    },
+  });
+
+  const editFactoryLoadingAddressMutation = useMutation({
+    mutationFn: (payload: { factoryId: number; countryId: number; name: string; address: string; postcode_id: number; city_id: number }) =>
+      apiRequest<FactoryLoadingAddress>(`/api/factories/${payload.factoryId}/loading-addresses`, {
+        method: "POST",
+        body: {
+          name: payload.name,
+          country_id: payload.countryId,
+          postcode_id: payload.postcode_id,
+          city_id: payload.city_id,
+          address: payload.address,
+          contact_name: trimOrUndefined(editForm.getFieldValue("factory_contact_name")) ?? "Contact",
+          phone: trimOrUndefined(editForm.getFieldValue("factory_contact_phone")) ?? "+70000000000",
+        },
+      }),
+    onSuccess: async (result) => {
+      message.success("Адрес добавлен");
+      setEditFactoryLoadingAddressModalOpen(false);
+      editFactoryLoadingAddressQuickForm.resetFields();
+      setEditCreatedLoadingAddressOption(result);
+      editForm.setFieldValue("loading_address_id", result.id);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, { loading_address_id: result.id });
+      }
+      await queryClient.invalidateQueries({ queryKey: ["orders", "edit-loading-addresses", editFactoryId] });
+    },
+    onError: (error) => {
+      message.error(error instanceof ApiError ? error.detail : "Ошибка добавления адреса");
     },
   });
 
@@ -892,13 +1819,27 @@ function OrdersPageContent() {
       mark("invoice_company_name", "Укажите название компании для инвойса");
     }
 
+    if (text.includes("company_contact_id")) {
+      mark("company_contact_id", "Выберите контакт компании");
+    }
+
+    if (text.includes("email_id") || text.includes("factory_contact_id")) {
+      mark("factory_contact_id", "Выберите email контакта фабрики");
+    }
+
     if (text.includes("self_delivery_forwarder_user_id")) {
       mark("self_delivery_forwarder_user_id", "Выберите экспедитора для self-delivery");
     }
 
-    if (text.includes("assigned_forwarder_user_id") && text.includes("self_delivery")) {
-      mark("assigned_forwarder_user_id", "Экспедитор должен совпадать с self-delivery");
-      mark("self_delivery_forwarder_user_id", "Экспедитор должен совпадать с assigned_forwarder_user_id");
+    if (text.includes("pickup_date_from") || text.includes("pickup_date_to")) {
+      mark("pickup_date_from", "Проверьте диапазон дат вывоза");
+      mark("pickup_date_to", "Проверьте диапазон дат вывоза");
+    }
+
+    if (
+      text.includes("factory_contact_id") || text.includes("create_factory_contact") || text.includes("xor")
+    ) {
+      mark("factory_contact_id", "Выберите контакт фабрики");
     }
 
     if (text.includes("primary_email")) {
@@ -907,6 +1848,16 @@ function OrdersPageContent() {
 
     if (text.includes("loading_address.phone")) {
       mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
+    }
+
+    if (text.includes("loading_address.contact_name")) {
+      mark(["create_factory", "loading_address", "contact_name"], "Укажите контактное лицо");
+    }
+    if (text.includes("selected loading address must have contact_name")) {
+      mark("loading_address_id", "Выбранный адрес погрузки должен содержать контактное лицо");
+    }
+    if (text.includes("selected loading address has invalid phone")) {
+      mark("loading_address_id", "Телефон в выбранном адресе погрузки невалиден");
     }
 
     if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
@@ -921,6 +1872,29 @@ function OrdersPageContent() {
       mark("additional_description", "Если строки товара пустые, заполните описание груза");
     }
 
+    if (text.includes("ready_date")) {
+      mark("ready_date", "Дата готовности не может быть в прошлом");
+    }
+
+    if (text.includes("client_goods_value_currency_other_label")) {
+      mark(
+        "client_goods_value_currency_other_label",
+        "Для валюты OTHER укажите текстовое обозначение валюты",
+      );
+    }
+
+    if (text.includes("maximum of 10 documents")) {
+      mark("documents", "Можно загрузить максимум 10 документов");
+    }
+
+    if (
+      text.includes("factory_id must belong to the selected country_id") ||
+      text.includes("loading_address_id must belong to the selected country_id") ||
+      text.includes("country_id")
+    ) {
+      mark("factory_country_id", "Проверьте страну фабрики и соответствие выбранных данных");
+    }
+
     if (!fieldErrors.length) {
       return false;
     }
@@ -929,8 +1903,426 @@ function OrdersPageContent() {
     return true;
   }
 
+  function applyEdit422FieldErrors(detail: string) {
+    const text = detail.toLowerCase();
+    const fieldErrors: Array<{ name: (string | number)[]; errors: string[] }> = [];
+    const mark = (name: (string | number)[] | string, messageText: string) => {
+      fieldErrors.push({ name: Array.isArray(name) ? name : [name], errors: [messageText] });
+    };
+
+    if (text.includes("company_contact_id")) {
+      mark("company_contact_id", "Выберите клиента");
+    }
+    if (text.includes("loading_address_id")) {
+      mark("loading_address_id", "Выберите адрес погрузки");
+    }
+    if (text.includes("factory_contact_id") || text.includes("email_id")) {
+      mark("factory_contact_id", "Выберите email контакта фабрики");
+    }
+    if (text.includes("primary_email")) {
+      mark(["create_factory", "primary_email"], "Введите корректный email");
+    }
+    if (text.includes("loading_address.phone")) {
+      mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
+    }
+    if (text.includes("loading_address.contact_name")) {
+      mark(["create_factory", "loading_address", "contact_name"], "Укажите контактное лицо");
+    }
+    if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
+      mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
+      mark("loading_postcode_id_ui", "Выберите индекс");
+    }
+    if (text.includes("loading_address.city_id") || text.includes("create_city")) {
+      mark(["create_factory", "loading_address", "city_id"], "Выберите город");
+      mark("loading_city_id_ui", "Выберите город");
+    }
+    if (text.includes("pickup_date_from") || text.includes("pickup_date_to")) {
+      mark("pickup_date_from", "Проверьте диапазон дат вывоза");
+      mark("pickup_date_to", "Проверьте диапазон дат вывоза");
+    }
+    if (text.includes("certificate_intent")) {
+      mark("certificate_intent", "Проверьте значение сертификата");
+    }
+    if (text.includes("client_goods_value_currency_other_label")) {
+      mark("client_goods_value_currency_other_label", "Для OTHER укажите валюту");
+    }
+    if (text.includes("goods_lines")) {
+      mark("goods_lines", "Проверьте строки товаров");
+    }
+
+    if (!fieldErrors.length) return false;
+    editForm.setFields(fieldErrors as Parameters<typeof editForm.setFields>[0]);
+    return true;
+  }
+
+  function closeAndResetCreateModal() {
+    setCreateOpen(false);
+    setCreateStep(0);
+    setFactoryContactModalOpen(false);
+    setFactoryLoadingAddressModalOpen(false);
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
+    factoryCreateConfirmOpenRef.current = false;
+    resetCreateDraft();
+    createForm.resetFields();
+    createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
+    factoryContactQuickForm.resetFields();
+    factoryLoadingAddressQuickForm.resetFields();
+    goodsLineQuickForm.resetFields();
+    setClientCompaniesQueryText("");
+    setPostcodeQuery("");
+    setPostcodeQueryDebounced("");
+  }
+
+  function openCreateModal() {
+    setCreateStep(0);
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    setFactoryCreateConfirmed(false);
+    setFactoryCreateConfirmShown(false);
+    factoryCreateConfirmOpenRef.current = false;
+    resetCreateDraft();
+    setCreateOpen(true);
+    createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
+  }
+
+  useEffect(() => {
+    if (!createOpen) return;
+    isRehydratingCreateFormRef.current = true;
+    createForm.setFieldsValue(createDraft);
+    queueMicrotask(() => {
+      isRehydratingCreateFormRef.current = false;
+    });
+  }, [createDraft, createForm, createOpen]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId) {
+      hydratedEditOrderIdRef.current = null;
+      return;
+    }
+    if (hydratedEditOrderIdRef.current === selectedOrderId) return;
+
+    const existingDraftValues = editDraftsByOrderId[selectedOrderId]?.values;
+    if (existingDraftValues) {
+      isRehydratingEditFormRef.current = true;
+      editForm.setFieldsValue(existingDraftValues as Partial<OrderEditForm>);
+      queueMicrotask(() => {
+        isRehydratingEditFormRef.current = false;
+      });
+      hydratedEditOrderIdRef.current = selectedOrderId;
+      return;
+    }
+
+    if (!editDetailQuery.data) return;
+    const nextValues = toEditFormValues(editDetailQuery.data);
+    setEditDraft(selectedOrderId, nextValues as Record<string, unknown>, {
+      dirty: false,
+      hydratedAt: new Date().toISOString(),
+    });
+    isRehydratingEditFormRef.current = true;
+    editForm.setFieldsValue(nextValues);
+    queueMicrotask(() => {
+      isRehydratingEditFormRef.current = false;
+    });
+    hydratedEditOrderIdRef.current = selectedOrderId;
+  }, [editDetailQuery.data, editDraftsByOrderId, editForm, editOpen, selectedOrderId, setEditDraft, toEditFormValues]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (!editCertificateIntentEnabled) {
+      editForm.setFieldValue("certificate_intent", undefined);
+    }
+  }, [editCertificateIntentEnabled, editForm, editOpen]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (editClientGoodsCurrency !== "OTHER") {
+      editForm.setFieldValue("client_goods_value_currency_other_label", undefined);
+    }
+  }, [editClientGoodsCurrency, editForm, editOpen]);
+
+  useEffect(() => {
+    if (!standaloneOrderView || !editOpen || !selectedOrderId) return;
+    if (!editDraftsByOrderId[selectedOrderId]?.dirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editDraftsByOrderId, editOpen, selectedOrderId, standaloneOrderView]);
+
+  useEffect(() => {
+    if (!standaloneOrderView || !editOpen || !selectedOrderId) return;
+    if (!editDraftsByOrderId[selectedOrderId]?.dirty) return;
+
+    const confirmLeave = () => window.confirm("Уверены, что хотите отменить изменения?");
+
+    const handleAnchorNavigation = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const anchor = target?.closest("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#")) return;
+
+      const nextUrl = new URL(href, window.location.href);
+      const sameLocation =
+        nextUrl.pathname === window.location.pathname &&
+        nextUrl.search === window.location.search &&
+        nextUrl.hash === window.location.hash;
+      if (sameLocation) return;
+
+      if (confirmLeave()) {
+        resetEditDraft(selectedOrderId);
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    const handlePopState = () => {
+      if (confirmLeave()) {
+        resetEditDraft(selectedOrderId);
+        return;
+      }
+      window.history.pushState(null, "", window.location.href);
+    };
+
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("click", handleAnchorNavigation, true);
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("click", handleAnchorNavigation, true);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [editDraftsByOrderId, editOpen, resetEditDraft, selectedOrderId, standaloneOrderView]);
+
+  useEffect(() => {
+    if (!editOpen) return;
+    if (editSelfDelivery) {
+      const assigned = editForm.getFieldValue("assigned_forwarder_user_id");
+      const self = editForm.getFieldValue("self_delivery_forwarder_user_id");
+      if (!self && assigned) {
+        editForm.setFieldValue("self_delivery_forwarder_user_id", assigned);
+      }
+      return;
+    }
+    editForm.setFieldValue("self_delivery_forwarder_user_id", undefined);
+  }, [editForm, editOpen, editSelfDelivery]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId || !editFactoryContactsQuery.data?.items) return;
+    const items = editFactoryContactsQuery.data.items;
+    setEditContactEmailOptions(items);
+    const selectedContactId = editForm.getFieldValue("factory_contact_id") as number | undefined;
+    const byId = items.find((contact) => contact.id === selectedContactId);
+    if (!byId) return;
+    editForm.setFieldValue("factory_contact_email", byId.email ?? undefined);
+    editForm.setFieldValue("factory_contact_name", byId.full_name ?? undefined);
+    editForm.setFieldValue("factory_contact_phone", byId.phone ?? undefined);
+  }, [editFactoryContactsQuery.data?.items, editForm, editOpen, selectedOrderId]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId || !editLoadingAddressId) return;
+    const selectedAddress = (editLoadingAddressesQuery.data?.items ?? []).find((item) => item.id === editLoadingAddressId);
+    if (!selectedAddress) return;
+    editForm.setFieldValue("loading_postcode_id_ui", selectedAddress.postcode_id ?? undefined);
+    editForm.setFieldValue("loading_city_id_ui", selectedAddress.city_id ?? undefined);
+    editForm.setFieldValue("loading_address_line", selectedAddress.address ?? undefined);
+    editForm.setFieldValue("loading_address_fax", selectedAddress.fax ?? undefined);
+  }, [editForm, editLoadingAddressId, editLoadingAddressesQuery.data?.items, editOpen, selectedOrderId]);
+
+  function getCreateStepFieldNames(step: number): NamePath[] {
+    const values = createForm.getFieldsValue(true) as OrderCreateForm;
+    const stepKey = getOrderCreateWizardSteps(values.order_type)[step]?.key;
+
+    if (stepKey === "base") {
+      if (isClientRole) {
+        return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json"];
+      }
+
+      return ["order_number", "order_type", "invoice_on_other_company", "invoice_company_name", "request_payload_json", "company_id", "company_contact_id"];
+    }
+
+    if (stepKey === "factory") {
+      if (isClientRole) {
+        return ["factory_mode", "factory_country_id", "factory_id", "loading_address_id", "ready_date", "pickup_date_from", "pickup_date_to"];
+      }
+
+      const names: NamePath[] = [
+        "self_delivery",
+        "ready_date",
+        "pickup_date_from",
+        "pickup_date_to",
+        "factory_mode",
+        "factory_country_id",
+        "factory_contact_id",
+      ];
+
+      names.push("assigned_forwarder_user_id");
+      if (values.self_delivery) {
+        names.push("self_delivery_forwarder_user_id");
+      }
+
+      if (values.factory_mode === "create") {
+        names.push(
+          ["create_factory", "factory_name"],
+          ["create_factory", "primary_email"],
+          ["create_factory", "loading_address", "address"],
+          ["create_factory", "loading_address", "postcode_id"],
+          ["create_factory", "loading_address", "city_id"],
+          ["create_factory", "loading_address", "phone"],
+          ["create_factory", "loading_address", "contact_name"],
+          ["create_factory", "loading_address", "fax"],
+          ["create_factory", "loading_address", "messenger_type"],
+          ["create_factory", "loading_address", "messenger_value"],
+        );
+      } else {
+        names.push("factory_id", "loading_address_id");
+      }
+
+      return names;
+    }
+
+    if (stepKey === "order_data") {
+      const names: NamePath[] = [
+        "invoice_number",
+        "client_goods_value_currency",
+        "client_goods_value_currency_other_label",
+        "client_goods_value_amount",
+        "declared_volume_m3",
+        "declared_total_weight_kg",
+        "cargo_places_qty",
+      ];
+      if (!isClientRole) {
+        names.push("certificate_intent_enabled");
+        if (values.certificate_intent_enabled) {
+          names.push("certificate_intent");
+        }
+        names.push("measurement_status", "weighing_status");
+      }
+      return names;
+    }
+
+    if (stepKey === "goods") {
+      const names: NamePath[] = ["additional_description", "comment", "product_characteristic_codes", "goods_lines"];
+      if (!isClientRole && canEditRestrictedCreateFields) {
+        names.push("user_comment", "forwarder_comment", "warehouse_comment");
+      }
+      if (canEditRestrictedCreateFields && !isClientRole) {
+        names.push(
+          "office_mark_codes",
+          "is_1c",
+          "is_factory_payment_via_company",
+          "is_checked",
+          "is_factory_payment_completed",
+        );
+      }
+
+      (values.goods_lines ?? []).forEach((_, index) => {
+        names.push(
+          ["goods_lines", index, "item_type"],
+          ["goods_lines", index, "custom_item_type"],
+          ["goods_lines", index, "description"],
+          ["goods_lines", index, "weight_kg"],
+          ["goods_lines", index, "quantity_unit"],
+          ["goods_lines", index, "quantity_value"],
+        );
+      });
+
+      return names;
+    }
+
+    const names: NamePath[] = values.order_type === "request" ? ["additional_description", "documents"] : ["documents"];
+    (values.documents ?? []).forEach((_, index) => {
+      names.push(
+        ["documents", index, "document_type"],
+        ["documents", index, "file_list"],
+      );
+    });
+    return names;
+  }
+
+  async function validateCreateStep(step: number) {
+    const names = getCreateStepFieldNames(step);
+    if (!names.length) return;
+    await createForm.validateFields(names);
+  }
+
+  async function goToCreateStep(nextStep: number) {
+    const latestValues = createForm.getFieldsValue(true) as OrderCreateForm;
+    const latestLastStep = getOrderCreateWizardSteps(latestValues.order_type ?? currentCreateOrderType).length - 1;
+    const clampedNextStep = Math.min(nextStep, latestLastStep);
+    if (nextStep === createStep) return;
+    if (nextStep < createStep) {
+      setCreateStep(clampedNextStep);
+      return;
+    }
+
+    try {
+      await validateCreateStep(createStep);
+      setCreateStep(clampedNextStep);
+    } catch {
+      // Form validation messages are shown inline by antd.
+    }
+  }
+
+  async function goToNextCreateStep() {
+    if (createStep >= createWizardLastStep) return;
+    await goToCreateStep(createStep + 1);
+  }
+
+  async function resolveRequestFactorySelection(values: OrderCreateForm) {
+    if (values.factory_country_id && values.factory_id && values.loading_address_id && values.factory_contact_id) {
+      return {
+        factory_mode: "existing",
+        country_id: values.factory_country_id,
+        factory_id: values.factory_id,
+        loading_address_id: values.loading_address_id,
+        factory_contact_id: values.factory_contact_id,
+      };
+    }
+
+    const factories = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+      query: { page: 1, page_size: 20 },
+    });
+
+    for (const factory of factories.items) {
+      if (!factory.id || !factory.country_id) continue;
+
+      const [addresses, contacts] = await Promise.all([
+        apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${factory.id}/loading-addresses`, {
+          query: { page: 1, page_size: 1 },
+        }),
+        apiRequest<PaginatedResponse<FactoryContactOption> | FactoryContactOption[]>(`/api/factories/${factory.id}/contacts`, {
+          query: { page: 1, page_size: 1 },
+        }),
+      ]);
+
+      const address = addresses.items[0];
+      const contactItems = Array.isArray(contacts) ? contacts : contacts.items;
+      const contact = contactItems[0];
+      if (!address?.id || !contact?.id) continue;
+
+      return {
+        factory_mode: "existing",
+        country_id: factory.country_id,
+        factory_id: factory.id,
+        loading_address_id: address.id,
+        factory_contact_id: contact.id,
+      };
+    }
+
+    throw new Error("Для создания заявки нужна фабрика с адресом погрузки и контактом");
+  }
+
   const createMutation = useMutation({
     mutationFn: async (values: OrderCreateForm) => {
+      const isRequestOrder = (values.order_type ?? "delivery") === "request";
       const docs = values.documents ?? [];
       if (docs.length > 10) {
         throw new Error("Можно загрузить максимум 10 документов");
@@ -942,79 +2334,78 @@ function OrdersPageContent() {
         if (!(file instanceof File)) {
           throw new Error(`Документ #${index + 1}: выберите файл`);
         }
-        const slot = `create_file_${index + 1}`;
+        const slot = `doc_${index + 1}`;
         filesToUpload.push({ slot, file });
+        const resolvedDocumentType = isRequestOrder
+          ? REQUEST_BACKEND_DOCUMENT_TYPE
+          : trimOrUndefined(document.document_type) ?? createMetadataQuery.data?.document_type_options?.[0]?.code;
+        if (!resolvedDocumentType) {
+          throw new Error(`Документ #${index + 1}: не найден доступный тип документа`);
+        }
         return {
-          document_type:
-            trimOrUndefined(document.document_type) ??
-            createMetadataQuery.data?.document_type_options?.[0]?.code ??
-            "attachment",
+          document_type: resolvedDocumentType,
           file_slot: slot,
-          display_name: trimOrUndefined(document.display_name) ?? file.name,
+          display_name: file.name,
         };
       });
-
-      if (isRequestCreate) {
-        if (!values.company_id) {
-          throw new Error("Выберите компанию для заявки");
-        }
-
-        let parsedPayloadJson: Record<string, unknown> | undefined;
-        if (trimOrUndefined(values.request_payload_json)) {
-          parsedPayloadJson = JSON.parse(values.request_payload_json as string) as Record<string, unknown>;
-        }
-
-        const requestPayload = {
-          request: {
-            company_id: values.company_id,
-            company_contact_id: values.company_contact_id,
-            comment: trimOrUndefined(values.comment),
-            payload_json: parsedPayloadJson,
-          },
-          documents: documentsPayload,
-        };
-
-        const formData = new FormData();
-        formData.set("payload", JSON.stringify(requestPayload));
-        filesToUpload.forEach(({ slot, file }) => formData.append(slot, file));
-
-        return apiRequest<unknown>("/api/requests", {
-          method: "POST",
-          body: formData,
-        });
-      }
 
       if (!isClientRole && !values.company_id) {
         throw new Error("Выберите клиента");
       }
 
-      if (!values.ready_date) {
+      if (!isClientRole && !values.company_contact_id) {
+        throw new Error("Выберите контакт компании");
+      }
+
+      if (!isRequestOrder && !values.factory_mode) {
+        throw new Error("Выберите режим фабрики");
+      }
+
+      if (!isRequestOrder && !values.ready_date) {
         throw new Error("Укажите дату готовности");
+      }
+
+      const today = dayjs().startOf("day");
+      if (!isRequestOrder && values.ready_date?.startOf("day").isBefore(today)) {
+        throw new Error("Дата готовности не может быть в прошлом");
       }
 
       if (values.invoice_on_other_company && !trimOrUndefined(values.invoice_company_name)) {
         throw new Error("Для инвойса на другую компанию заполните название компании");
       }
 
-      if (values.self_delivery && !values.self_delivery_forwarder_user_id) {
+      if (!isRequestOrder && !isClientRole && values.self_delivery && !values.assigned_forwarder_user_id && !values.self_delivery_forwarder_user_id) {
         throw new Error("Для self-delivery выберите экспедитора");
+      }
+
+      if (values.pickup_date_from && values.pickup_date_to && values.pickup_date_from.isAfter(values.pickup_date_to, "day")) {
+        throw new Error("Дата вывоза 'От' не может быть позже даты 'До'");
       }
 
       const goodsLines = (values.goods_lines ?? [])
         .map((line) => {
           const itemTypeRaw = trimOrUndefined(line.item_type);
-          const itemType = itemTypeRaw === "other" ? trimOrUndefined(line.custom_item_type) : itemTypeRaw;
+          const customItemType = trimOrUndefined(line.custom_item_type);
           const description = trimOrUndefined(line.description);
           const weight_kg = trimOrUndefined(line.weight_kg);
           const quantity_value = trimOrUndefined(line.quantity_value);
           const quantity_unit = trimOrUndefined(line.quantity_unit);
 
-          if (!itemType && !description && !weight_kg && !quantity_value && !quantity_unit) {
+          if (!itemTypeRaw && !customItemType && !description && !weight_kg && !quantity_value && !quantity_unit) {
             return null;
           }
 
+          if (itemTypeRaw === "other" && !customItemType) {
+            throw new Error("Для типа позиции 'other' заполните custom тип");
+          }
+
+          if (quantity_unit && !["pcs", "m2"].includes(quantity_unit)) {
+            throw new Error("Ед. изм. должна быть одной из: pcs, m2");
+          }
+
           return {
-            item_type: itemType,
+            item_type: itemTypeRaw,
+            custom_item_type: itemTypeRaw === "other" ? customItemType : undefined,
             description,
             weight_kg,
             quantity_value,
@@ -1023,48 +2414,105 @@ function OrdersPageContent() {
         })
         .filter((line): line is NonNullable<typeof line> => Boolean(line));
 
-      if (!goodsLines.length && !trimOrUndefined(values.additional_description)) {
+      if (isRequestOrder && !trimOrUndefined(values.additional_description)) {
+        throw new Error("Заполните описание");
+      }
+
+      if (!isRequestOrder && !goodsLines.length && !trimOrUndefined(values.additional_description)) {
         throw new Error("Если строки товара пустые, заполните описание груза");
       }
 
+      let requestRawPayload: Record<string, unknown> | undefined;
+      if (isRequestOrder && trimOrUndefined(values.request_payload_json)) {
+        requestRawPayload = JSON.parse(values.request_payload_json as string) as Record<string, unknown>;
+      }
+
       let factorySelection: Record<string, unknown>;
-      if (values.factory_mode === "create") {
-        const loadingAddress = values.create_factory?.loading_address;
-        const createFactoryCountryId = values.create_factory?.country_id;
-        const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
-        const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
-        const createFactoryPayload: Record<string, unknown> = {
-          factory_name: trimOrUndefined(values.create_factory?.factory_name),
-          country_id: createFactoryCountryId,
-          primary_email: trimOrUndefined(values.create_factory?.primary_email),
-          loading_address: {
-            country_id: createFactoryCountryId,
-            postcode_id: loadingAddress?.postcode_id,
-            city_id: loadingAddress?.city_id,
-            address: trimOrUndefined(loadingAddress?.address),
-            phone: trimOrUndefined(loadingAddress?.phone),
-            fax: trimOrUndefined(loadingAddress?.fax),
-            messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
-            messenger_value: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_value) : undefined,
-            create_postcode: canInlineCreatePostcodeCity && inlinePostcode ? { postcode: inlinePostcode } : undefined,
-            create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
-          },
-        };
-        factorySelection = { create_factory: createFactoryPayload };
-      } else {
-        if (!values.factory_id || !values.loading_address_id) {
-          throw new Error("Выберите фабрику и адрес загрузки");
+      if (isRequestOrder) {
+        factorySelection = await resolveRequestFactorySelection(values);
+      } else if (isClientRole) {
+        if (values.factory_mode === "create") {
+          throw new Error("Для client create в этой версии доступен только existing сценарий фабрики");
+        }
+        if (!values.factory_country_id || !values.factory_id || !values.loading_address_id) {
+          throw new Error("Выберите страну, фабрику и адрес загрузки");
         }
         factorySelection = {
+          factory_mode: "existing",
+          country_id: values.factory_country_id,
           factory_id: values.factory_id,
           loading_address_id: values.loading_address_id,
-          email_id: !isClientRole ? values.email_id ?? undefined : undefined,
         };
+      } else {
+        if (!values.factory_contact_id) {
+          throw new Error("Выберите контакт фабрики");
+        }
+
+        if (values.factory_mode === "create") {
+          const loadingAddress = values.create_factory?.loading_address;
+          if (!values.factory_country_id) {
+            throw new Error("Выберите страну фабрики");
+          }
+          const inlinePostcode = trimOrUndefined(loadingAddress?.create_postcode?.postcode);
+          const inlineCity = trimOrUndefined(loadingAddress?.create_city?.city);
+          const createFactoryPayload: Record<string, unknown> = {
+            factory_name: trimOrUndefined(values.create_factory?.factory_name),
+            country_id: values.factory_country_id,
+            primary_email: trimOrUndefined(values.create_factory?.primary_email),
+            loading_address: {
+              country_id: values.factory_country_id,
+              postcode_id: loadingAddress?.postcode_id,
+              city_id: loadingAddress?.city_id,
+              address: trimOrUndefined(loadingAddress?.address),
+              contact_name: trimOrUndefined(loadingAddress?.contact_name),
+              phone: trimOrUndefined(loadingAddress?.phone),
+              fax: trimOrUndefined(loadingAddress?.fax),
+              messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,
+              messenger_value: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_value) : undefined,
+              create_postcode: canInlineCreatePostcodeCity && inlinePostcode ? { postcode: inlinePostcode } : undefined,
+              create_city: canInlineCreatePostcodeCity && inlineCity ? { city: inlineCity } : undefined,
+            },
+          };
+          factorySelection = {
+            factory_mode: "create",
+            country_id: values.factory_country_id,
+            create_factory: createFactoryPayload,
+            factory_contact_id: values.factory_contact_id,
+          };
+        } else {
+          if (!values.factory_country_id || !values.factory_id || !values.loading_address_id) {
+            throw new Error("Выберите фабрику и адрес загрузки");
+          }
+          factorySelection = {
+            factory_mode: "existing",
+            country_id: values.factory_country_id,
+            factory_id: values.factory_id,
+            loading_address_id: values.loading_address_id,
+            factory_contact_id: values.factory_contact_id,
+          };
+        }
       }
+
+      const clientGoodsValueCurrency = trimOrUndefined(values.client_goods_value_currency);
+      if (clientGoodsValueCurrency && !["USD", "EUR", "RUB", "OTHER"].includes(clientGoodsValueCurrency)) {
+        throw new Error("Валюта стоимости товара должна быть USD, EUR, RUB или OTHER");
+      }
+      const clientGoodsValueCurrencyOtherLabel = trimOrUndefined(values.client_goods_value_currency_other_label);
+      if (clientGoodsValueCurrency === "OTHER" && !clientGoodsValueCurrencyOtherLabel) {
+        throw new Error("Для валюты OTHER укажите текстовое обозначение валюты");
+      }
+      if (clientGoodsValueCurrency && clientGoodsValueCurrency !== "OTHER" && clientGoodsValueCurrencyOtherLabel) {
+        throw new Error("Текстовое обозначение валюты допустимо только для OTHER");
+        }
 
       const orderPayload: Record<string, unknown> = {
         order_number: trimOrUndefined(values.order_number),
-        ready_date: values.ready_date.format("YYYY-MM-DD"),
+        order_type: values.order_type ?? "delivery",
+        ready_date: isRequestOrder
+          ? (values.ready_date ?? dayjs()).format("YYYY-MM-DD")
+          : values.ready_date?.format("YYYY-MM-DD"),
+        pickup_date_from: values.pickup_date_from?.format("YYYY-MM-DD"),
+        pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
         invoice_company_name: trimOrUndefined(values.invoice_company_name),
         invoice_number: trimOrUndefined(values.invoice_number),
@@ -1072,33 +2520,33 @@ function OrdersPageContent() {
         declared_total_weight_kg: trimOrUndefined(values.declared_total_weight_kg),
         cargo_places_qty: values.cargo_places_qty,
         client_goods_value_amount: trimOrUndefined(values.client_goods_value_amount),
-        client_goods_value_currency: trimOrUndefined(values.client_goods_value_currency),
+        client_goods_value_currency: clientGoodsValueCurrency,
+        client_goods_value_currency_other_label:
+          clientGoodsValueCurrency === "OTHER" ? clientGoodsValueCurrencyOtherLabel : undefined,
+        product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
+        certificate_intent:
+          values.certificate_intent_enabled && trimOrUndefined(values.certificate_intent ?? undefined)
+            ? String(trimOrUndefined(values.certificate_intent ?? undefined)).toLowerCase()
+            : undefined,
+        raw_payload: requestRawPayload,
       };
 
       if (!isClientRole) {
+        const resolvedSelfDeliveryForwarderId = values.self_delivery
+          ? values.assigned_forwarder_user_id ?? values.self_delivery_forwarder_user_id
+          : undefined;
         const assignedForwarderUserId = canEditRestrictedCreateFields ? values.assigned_forwarder_user_id : undefined;
-        if (
-          values.self_delivery &&
-          values.self_delivery_forwarder_user_id &&
-          assignedForwarderUserId &&
-          values.self_delivery_forwarder_user_id !== assignedForwarderUserId
-        ) {
-          throw new Error(
-            "Для self-delivery выбранный экспедитор должен совпадать с назначенным экспедитором в заказе",
-          );
-        }
-
         Object.assign(orderPayload, {
           company_id: values.company_id,
           company_contact_id: values.company_contact_id,
-          order_type: values.order_type ?? "delivery",
           user_comment: trimOrUndefined(values.user_comment),
           forwarder_comment: trimOrUndefined(values.forwarder_comment),
           warehouse_comment: trimOrUndefined(values.warehouse_comment),
-          self_delivery: Boolean(values.self_delivery),
-          self_delivery_forwarder_user_id: values.self_delivery_forwarder_user_id,
+          self_delivery: isRequestOrder ? undefined : Boolean(values.self_delivery),
+          self_delivery_forwarder_user_id: isRequestOrder ? undefined : resolvedSelfDeliveryForwarderId,
+          is_1c: values.is_1c,
           measurement_payload: values.measurement_status
             ? {
                 status: values.measurement_status,
@@ -1111,15 +2559,10 @@ function OrdersPageContent() {
                 comment: trimOrUndefined(values.weighing_comment) ?? null,
               }
             : undefined,
-          priority_codes: canEditRestrictedCreateFields ? values.priority_codes : undefined,
+          is_priority: canEditRestrictedCreateFields ? Boolean(values.is_priority) : undefined,
           office_mark_codes: canEditRestrictedCreateFields ? values.office_mark_codes : undefined,
-          product_characteristic_codes: canEditRestrictedCreateFields
-            ? values.product_characteristic_codes
-            : undefined,
-          assigned_forwarder_user_id: assignedForwarderUserId,
-          factory_payment_via_label: canEditRestrictedCreateFields
-            ? trimOrUndefined(values.factory_payment_via_label)
-            : undefined,
+          assigned_forwarder_user_id: isRequestOrder ? undefined : assignedForwarderUserId,
+          is_factory_payment_via_company: canEditRestrictedCreateFields ? values.is_factory_payment_via_company : undefined,
           is_factory_payment_completed: canEditRestrictedCreateFields ? values.is_factory_payment_completed : undefined,
           is_checked: canEditRestrictedCreateFields ? values.is_checked : undefined,
         });
@@ -1141,17 +2584,10 @@ function OrdersPageContent() {
         body: formData,
       });
     },
-    onSuccess: async () => {
-      message.success(isRequestCreate ? "Заявка создана" : "Заказ создан");
-      setCreateOpen(false);
-      createForm.resetFields();
-      setClientCompaniesQueryText("");
-      setPostcodeQueryText("");
-      setNewFactoryEmail("");
-      setInlinePostcodeValue("");
-      setInlineCityValue("");
+    onSuccess: async (_, values) => {
+      message.success(values.order_type === "request" ? "Заявка создана" : "Заказ создан");
+      closeAndResetCreateModal();
       await invalidateOrdersQueries();
-      await queryClient.invalidateQueries({ queryKey: ["requests"] });
     },
     onError: (error) => {
       if (error instanceof SyntaxError) {
@@ -1174,18 +2610,132 @@ function OrdersPageContent() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: OrderEditForm }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}`, {
+    mutationFn: async ({ id, payload }: { id: number; payload: OrderEditForm }) => {
+      const compact = <T extends Record<string, unknown>>(source: T) =>
+        Object.fromEntries(
+          Object.entries(source).filter(([, value]) => value !== undefined),
+        ) as Partial<T>;
+
+      const normalizedCurrency = normalizeCurrencyPayload(
+        payload.client_goods_value_currency,
+        payload.client_goods_value_currency_other_label,
+        "client_goods_value_currency_other_label",
+      );
+
+      const orderPayload = compact({
+        order_date: payload.order_date?.format("YYYY-MM-DD"),
+        status_name: payload.status_name,
+        status_date: payload.status_date?.format("YYYY-MM-DD"),
+        order_number: trimOrUndefined(payload.order_number),
+        company_contact_id: payload.company_contact_id,
+        invoice_on_other_company: payload.invoice_on_other_company,
+        invoice_company_name: trimOrUndefined(payload.invoice_company_name),
+        self_delivery: payload.self_delivery,
+        assigned_forwarder_user_id: payload.assigned_forwarder_user_id,
+        self_delivery_forwarder_user_id: payload.self_delivery ? payload.self_delivery_forwarder_user_id : undefined,
+        ready_date: payload.ready_date?.format("YYYY-MM-DD"),
+        pickup_date_from: payload.pickup_date_from?.format("YYYY-MM-DD"),
+        pickup_date_to: payload.pickup_date_to?.format("YYYY-MM-DD"),
+        certificate_intent: payload.certificate_intent_enabled
+          ? trimOrUndefined(payload.certificate_intent) ?? null
+          : null,
+        invoice_number: trimOrUndefined(payload.invoice_number),
+        client_goods_value_amount: trimOrUndefined(payload.client_goods_value_amount),
+        client_goods_value_currency: normalizedCurrency.currency,
+        client_goods_value_currency_other_label: normalizedCurrency.otherLabel ?? null,
+        declared_volume_m3: trimOrUndefined(payload.declared_volume_m3),
+        volume_m3: trimOrUndefined(payload.volume_m3),
+        declared_total_weight_kg: trimOrUndefined(payload.declared_total_weight_kg),
+        cargo_places_qty: payload.cargo_places_qty,
+        measurement_payload: payload.measurement_status ? { status: payload.measurement_status } : undefined,
+        actual_volume_m3: trimOrUndefined(payload.actual_volume_m3),
+        weighing_payload: payload.weighing_status ? { status: payload.weighing_status } : undefined,
+        actual_weight_kg: trimOrUndefined(payload.actual_weight_kg),
+        actual_qty: payload.actual_qty,
+        quantity_whs: payload.quantity_whs,
+        product_characteristic_codes: payload.product_characteristic_codes,
+        office_mark_codes: payload.office_mark_codes,
+        additional_description: trimOrUndefined(payload.additional_description),
+        comment: trimOrUndefined(payload.comment),
+        is_1c: payload.is_1c,
+        is_factory_payment_via_company: payload.is_factory_payment_via_company,
+        is_checked: payload.is_checked,
+        is_factory_payment_completed: payload.is_factory_payment_completed,
+        mrn: trimOrUndefined(payload.mrn),
+        trip_id: payload.trip_id ?? null,
+      });
+
+      const factorySelection = buildOrderFactorySelectionPayload(payload);
+
+      const goodsLines = (payload.goods_lines ?? [])
+        .map((line) =>
+          compact({
+            item_type: trimOrUndefined(line.item_type),
+            custom_item_type: trimOrUndefined(line.custom_item_type),
+            description: trimOrUndefined(line.description),
+            weight_kg: trimOrUndefined(line.weight_kg),
+            quantity_value: trimOrUndefined(line.quantity_value),
+            quantity_unit: trimOrUndefined(line.quantity_unit),
+          }),
+        )
+        .filter((line) => Object.keys(line).length > 0);
+
+      const filesToUpload: Array<{ slot: string; file: File }> = [];
+      const documentsPayload = (payload.documents ?? []).flatMap((entry, index) => {
+        const docType = trimOrUndefined(entry.document_type);
+        const file = entry.file_list?.[0]?.originFileObj;
+        if (!docType || !file) return [];
+        const slot = `edit_doc_${Date.now()}_${index}`;
+        filesToUpload.push({ slot, file });
+        return [
+          compact({
+            document_type: docType,
+            display_name: file.name,
+            file_slot: slot,
+          }),
+        ];
+      });
+
+      const multipartPayload = {
+        order: orderPayload,
+        factory_selection: factorySelection,
+        goods_lines: goodsLines,
+        documents: documentsPayload,
+      };
+
+      const formData = new FormData();
+      formData.set("payload", JSON.stringify(multipartPayload));
+      filesToUpload.forEach(({ slot, file }) => formData.append(slot, file));
+
+      return apiRequest<OrderDetail>(`/api/orders/${id}`, {
         method: "PATCH",
-        body: toOrderWritePayload(payload as OrderWritePayload),
-      }),
+        body: formData,
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Заказ обновлен");
-      setEditOpen(false);
+      if (values?.id) {
+        resetEditDraft(values.id);
+      }
+      if (selected?.id) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
+        await editDetailQuery.refetch();
+      }
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления заказа");
+      if (error instanceof ApiError) {
+        if (error.status === 422) {
+          applyEdit422FieldErrors(error.detail);
+        }
+        message.error(error.detail);
+        return;
+      }
+      if (error instanceof Error) {
+        message.error(error.message);
+        return;
+      }
+      message.error("Ошибка обновления заказа");
     },
   });
 
@@ -1222,6 +2772,10 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
+      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
+        message.error(getOrderTripSourceMismatchMessage());
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
     },
   });
@@ -1243,54 +2797,63 @@ function OrdersPageContent() {
     },
   });
 
-  const pickupWindowMutation = useMutation({
-    mutationFn: ({
-      id,
-      pickup_date_from,
-      pickup_date_to,
-    }: {
-      id: number;
-      pickup_date_from: string;
-      pickup_date_to?: string | null;
-    }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/pickup-window`, {
+  const pickupDateMutation = useMutation({
+    mutationFn: ({ id, pickup_date }: { id: number; pickup_date: string }) =>
+      apiRequest<OrderDetail>(`/api/orders/${id}/pickup-date`, {
         method: "POST",
-        body: { pickup_date_from, pickup_date_to: pickup_date_to ?? null },
+        body: { pickup_date },
       }),
     onSuccess: async (_, values) => {
-      message.success("Окно вывоза назначено");
+      message.success("Дата вывоза назначена");
       setPickupOpen(false);
       pickupForm.resetFields();
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения окна вывоза");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения даты вывоза");
     },
   });
 
-  const clearPickupWindowMutation = useMutation({
+  const cancelPickupMutation = useMutation({
     mutationFn: ({ id }: { id: number }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/clear-pickup-window`, {
+      apiRequest<OrderDetail>(`/api/orders/${id}/cancel-pickup`, {
         method: "POST",
       }),
     onSuccess: async (_, values) => {
-      message.success("Окно вывоза очищено");
+      message.success("Дата вывоза отменена");
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка очистки окна вывоза");
+      message.error(error instanceof ApiError ? error.detail : "Ошибка отмены вывоза");
     },
   });
 
   const specialTariffMutation = useMutation({
-    mutationFn: ({ id, amount, currency }: { id: number; amount?: number | null; currency: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
+    mutationFn: ({
+      id,
+      amount,
+      currency,
+      special_tariff_currency_other_label,
+    }: {
+      id: number;
+      amount?: number | null;
+      currency?: string;
+      special_tariff_currency_other_label?: string;
+    }) => {
+      const normalized = normalizeCurrencyPayload(
+        currency,
+        special_tariff_currency_other_label,
+        "special_tariff_currency_other_label",
+      );
+      return apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
         method: "POST",
         body: {
           amount: amount ?? null,
-          currency,
+          currency: normalized.currency,
+          special_tariff_currency_other_label: normalized.otherLabel,
         },
-      }),
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Спецтариф обновлен");
       setSpecialTariffOpen(false);
@@ -1298,7 +2861,7 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка спецтарифа");
+      message.error(error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка спецтарифа");
     },
   });
 
@@ -1323,14 +2886,27 @@ function OrdersPageContent() {
   });
 
   const quotePriceMutation = useMutation({
-    mutationFn: ({ id, amount, currency }: { id: number; amount: number; currency?: string }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/quote-price`, {
+    mutationFn: ({
+      id,
+      amount,
+      currency,
+      quote_price_currency_other_label,
+    }: {
+      id: number;
+      amount: number;
+      currency?: string;
+      quote_price_currency_other_label?: string;
+    }) => {
+      const normalized = normalizeCurrencyPayload(currency, quote_price_currency_other_label, "quote_price_currency_other_label");
+      return apiRequest<OrderDetail>(`/api/orders/${id}/quote-price`, {
         method: "POST",
         body: {
           amount,
-          currency: currency || "EUR",
+          currency: normalized.currency,
+          quote_price_currency_other_label: normalized.otherLabel,
         },
-      }),
+      });
+    },
     onSuccess: async (_, values) => {
       message.success("Цена квоты обновлена");
       setQuotePriceOpen(false);
@@ -1338,7 +2914,9 @@ function OrdersPageContent() {
       await invalidateOrdersQueries(values.id);
     },
     onError: (error) => {
-      message.error(error instanceof ApiError ? error.detail : "Ошибка обновления цены квоты");
+      message.error(
+        error instanceof ApiError ? error.detail : error instanceof Error ? error.message : "Ошибка обновления цены квоты",
+      );
     },
   });
 
@@ -1381,6 +2959,10 @@ function OrdersPageContent() {
       await invalidateOrdersQueries();
     },
     onError: (error) => {
+      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
+        message.error(getOrderTripSourceMismatchMessage());
+        return;
+      }
       message.error(error instanceof ApiError ? error.detail : "Ошибка массовой операции");
     },
   });
@@ -1398,15 +2980,47 @@ function OrdersPageContent() {
   }
 
   function openEdit(record: OrderListItem) {
-    setSelected(record);
-    editForm.setFieldsValue({
-      order_number: record.order_number ?? undefined,
-      comment: record.comment ?? undefined,
-      status_name: record.status_name ?? undefined,
-      trip_id: record.trip_id ?? undefined,
-    });
-    setEditOpen(true);
+    router.push(`/orders/${record.id}`);
   }
+
+  function openView(record: OrderListItem) {
+    router.push(`/orders/${record.id}`);
+  }
+
+  useEffect(() => {
+    if (!standaloneOrderView || !deepLinkEditOrderId) {
+      deepLinkedOrderIdRef.current = null;
+      return;
+    }
+    if (deepLinkedOrderIdRef.current === deepLinkEditOrderId) return;
+    if (!deepLinkOrderQuery.data?.order) return;
+    const order = deepLinkOrderQuery.data.order;
+    setSelected(order);
+    setEditCompanyQueryText(order.company_name ?? "");
+    const existingDraft = editDraftsByOrderId[order.id]?.values;
+    if (existingDraft) {
+      editForm.setFieldsValue(existingDraft as Partial<OrderEditForm>);
+    } else {
+      editForm.setFieldsValue({
+        order_number: order.order_number ?? undefined,
+        comment: order.comment ?? undefined,
+        status_name: order.status_name ?? undefined,
+        trip_id: order.trip_id ?? undefined,
+        order_date: parseDayjsValue(order.order_date ?? undefined),
+        status_date: parseDayjsValue(order.status_date ?? undefined),
+      });
+    }
+    setEditOpen(true);
+    setIsEditMode(false);
+    deepLinkedOrderIdRef.current = deepLinkEditOrderId;
+  }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, editDraftsByOrderId, editForm, standaloneOrderView]);
+
+  useEffect(() => {
+    if (!standaloneOrderView || !deepLinkEditOrderId) return;
+    if (!deepLinkOrderQuery.isError) return;
+    message.error(deepLinkOrderQuery.error instanceof ApiError ? deepLinkOrderQuery.error.detail : "Заказ не найден");
+    router.replace("/orders");
+  }, [deepLinkEditOrderId, deepLinkOrderQuery.error, deepLinkOrderQuery.isError, message, router, standaloneOrderView]);
 
   function openStatus(record: OrderListItem) {
     setSelected(record);
@@ -1431,11 +3045,7 @@ function OrdersPageContent() {
 
   function openPickup(record: OrderListItem) {
     setSelected(record);
-    const pickupDateFrom = record.pickup_date_from ?? record.pickup_date ?? null;
-    pickupForm.setFieldsValue({
-      pickup_date_from: pickupDateFrom ? dayjs(pickupDateFrom) : undefined,
-      pickup_date_to: record.pickup_date_to ? dayjs(record.pickup_date_to) : undefined,
-    });
+    pickupForm.setFieldsValue({ pickup_date: record.pickup_date ? dayjs(record.pickup_date) : undefined });
     setPickupOpen(true);
   }
 
@@ -1444,6 +3054,7 @@ function OrdersPageContent() {
     specialTariffForm.setFieldsValue({
       amount: record.special_tariff_amount ? Number(record.special_tariff_amount) : undefined,
       currency: record.special_tariff_currency ?? "EUR",
+      special_tariff_currency_other_label: record.special_tariff_currency_other_label ?? undefined,
     });
     setSpecialTariffOpen(true);
   }
@@ -1459,6 +3070,7 @@ function OrdersPageContent() {
     quotePriceForm.setFieldsValue({
       amount: record.quote_price_amount ? Number(record.quote_price_amount) : undefined,
       currency: record.quote_price_currency ?? "EUR",
+      quote_price_currency_other_label: record.quote_price_currency_other_label ?? undefined,
     });
     setQuotePriceOpen(true);
   }
@@ -1500,7 +3112,7 @@ function OrdersPageContent() {
   function orderActions(record: OrderListItem) {
     const actions = [] as Array<{ key: string; label: string; icon?: React.ReactNode; onClick: () => void }>;
 
-    if (canWriteOrder) {
+    if (canWriteOrderUi) {
       actions.push(
         {
           key: "edit",
@@ -1523,7 +3135,7 @@ function OrdersPageContent() {
       );
     }
 
-    if (canRunOperationalActions) {
+    if (canRunOperationalActionsUi) {
       actions.push(
         {
           key: "assign-forwarder",
@@ -1532,8 +3144,8 @@ function OrdersPageContent() {
           onClick: () => openAssignForwarder(record),
         },
         {
-          key: "pickup-window",
-          label: "Назначить окно вывоза",
+          key: "pickup-date",
+          label: "Назначить дату вывоза",
           icon: <SwapOutlined />,
           onClick: () => openPickup(record),
         },
@@ -1551,21 +3163,20 @@ function OrdersPageContent() {
         },
       );
 
-      if (record.pickup_date_from || record.pickup_date) {
+      if (record.pickup_date) {
         actions.push({
-          key: "clear-pickup-window",
-          label: "Очистить окно вывоза",
+          key: "cancel-pickup",
+          label: "Отменить вывоз",
           icon: <SwapOutlined />,
           onClick: () => {
-            clearPickupWindowMutation.mutate({ id: record.id });
+            cancelPickupMutation.mutate({ id: record.id });
           },
         });
       }
     }
 
     if (
-      (meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager") &&
-      record.order_type === "quote_request"
+      canQuotePriceUi && record.order_type === "quote_request"
     ) {
       actions.push({
         key: "quote-price",
@@ -1575,7 +3186,7 @@ function OrdersPageContent() {
       });
     }
 
-    if (isClientRole && record.order_type === "quote_request" && record.quote_status === "priced_waiting_client") {
+    if (isClientRoleUi && record.order_type === "quote_request" && record.quote_status === "priced_waiting_client") {
       actions.push({
         key: "quote-decision",
         label: "Решение по квоте",
@@ -1587,327 +3198,335 @@ function OrdersPageContent() {
     return actions;
   }
 
-  async function handleListDocumentDownload(orderId: number, row: OrderDocument) {
+  function renderPickupWindow(record: OrderListItem) {
+    const pickupDateFrom =
+      typeof record.raw_payload?.pickup_date_from === "string" ? record.raw_payload.pickup_date_from : undefined;
+    const pickupDateTo = typeof record.raw_payload?.pickup_date_to === "string" ? record.raw_payload.pickup_date_to : undefined;
+    if (pickupDateFrom || pickupDateTo) {
+      return [pickupDateFrom, pickupDateTo].filter(Boolean).join(" - ");
+    }
+
+    return record.pickup_date ?? record.trip_name ?? "—";
+  }
+
+  function openDocumentsPopup(record: OrderListItem) {
+    setDocumentsOrder(record);
+    setDocumentsOpen(true);
+  }
+
+  function openClientPopup(record: OrderListItem) {
+    setClientOrder(record);
+    setClientOpen(true);
+  }
+
+  function openFactoryPopup(record: OrderListItem) {
+    setFactoryOrder(record);
+    setFactoryOpen(true);
+  }
+
+  function openForwarderPopup(record: OrderListItem) {
+    setForwarderOrder(record);
+    setForwarderOpen(true);
+  }
+
+  function openInvoicePopup(record: OrderListItem) {
+    if (!record.invoice_number) return;
+    setInvoiceOrder(record);
+    setInvoiceOpen(true);
+  }
+
+  function openDescriptionPopup(record: OrderListItem) {
+    if (!record.additional_description && !record.has_description) return;
+    setDescriptionOrder(record);
+    setDescriptionOpen(true);
+  }
+
+  function getStringValue(source: Record<string, unknown> | null | undefined, keys: string[]) {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  function getClientPopupInfo() {
+    const detail = clientDetailQuery.data;
+    const fallback = clientOrder;
+    const rawPayload = detail?.raw_payload ?? fallback?.raw_payload;
+    const rawRecord = detail as unknown as Record<string, unknown> | undefined;
+    const rawClient = detail?.client as unknown as Record<string, unknown> | undefined;
+
+    return {
+      name:
+        detail?.client?.contact_name ??
+        detail?.client?.user_full_name ??
+        detail?.contact_name_snapshot ??
+        fallback?.contact_name_snapshot ??
+        detail?.company_name ??
+        fallback?.company_name ??
+        "—",
+      address:
+        getStringValue(rawClient, ["address", "company_address", "legal_address", "actual_address"]) ??
+        getStringValue(rawPayload, ["address", "company_address", "legal_address", "actual_address", "delivery_address"]) ??
+        getStringValue(rawRecord, ["address", "company_address", "legal_address", "actual_address"]) ??
+        "—",
+      phone:
+        detail?.client?.contact_phone ??
+        detail?.client?.user_phone ??
+        detail?.contact_phone_snapshot ??
+        fallback?.contact_phone_snapshot ??
+        "—",
+      email:
+        detail?.client?.contact_email ??
+        detail?.client?.user_email ??
+        detail?.contact_email_snapshot ??
+        fallback?.contact_email_snapshot ??
+        "—",
+    };
+  }
+
+  function getFactoryPopupInfo() {
+    const detail = factoryDetailQuery.data;
+    const fallback = factoryOrder;
+    const address = detail?.factory?.selected_loading_address;
+
+    return {
+      name: detail?.factory?.factory_name ?? fallback?.factory_name ?? "—",
+      postcode: address?.postcode ?? "—",
+      address: address?.address ?? "—",
+      phone: address?.phone ?? "—",
+      email: detail?.factory?.primary_email ?? "—",
+    };
+  }
+
+function getUserAddress(user: UserAdmin | undefined, source: Record<string, unknown> | null | undefined) {
+    const address =
+      getStringValue(user as unknown as Record<string, unknown> | undefined, ["address", "legal_address", "actual_address"]) ??
+      getStringValue(source, ["forwarder_address", "assigned_forwarder_address", "address"]) ??
+      [user?.country, user?.city].filter(Boolean).join(", ");
+
+    return address || "—";
+  }
+
+  function getForwarderPopupInfo() {
+    const detail = forwarderDetailQuery.data;
+    const fallback = forwarderOrder;
+    const forwarder = forwarderUserQuery.data;
+    const rawPayload = detail?.raw_payload ?? fallback?.raw_payload;
+
+    return {
+      name: forwarder?.full_name ?? detail?.assigned_forwarder?.full_name ?? fallback?.forwarder_name ?? "—",
+      address: getUserAddress(forwarder, rawPayload),
+      email: forwarder?.email ?? getStringValue(rawPayload, ["forwarder_email", "assigned_forwarder_email"]) ?? "—",
+      phone: forwarder?.phone ?? getStringValue(rawPayload, ["forwarder_phone", "assigned_forwarder_phone"]) ?? "—",
+      personalManagerName: personalManagerQuery.data?.full_name ?? "—",
+    };
+  }
+
+  function getGoodsLinePopupText(line: OrderCreateGoodsLineForm) {
+    const itemTypeCode = trimOrUndefined(line.item_type);
+    const customItemType = trimOrUndefined(line.custom_item_type);
+    const itemType =
+      itemTypeCode === "other"
+        ? customItemType
+        : itemTypeCode
+          ? (itemTypeLabelByValue.get(itemTypeCode) ?? itemTypeCode)
+          : undefined;
+    const description = trimOrUndefined(line.description);
+    const weight = trimOrUndefined(line.weight_kg);
+    const quantity = trimOrUndefined(line.quantity_value);
+    const unitCode = trimOrUndefined(line.quantity_unit);
+    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : undefined;
+    const name = [itemType, description].filter(Boolean).join(" ");
+    const details = [weight ? `${weight}кг` : undefined, quantity ? `${quantity}${unit ? ` ${unit}` : ""}` : undefined].filter(Boolean);
+    return [name || "Строка товара", ...details].join(" - ");
+  }
+
+  function getDescriptionPopupText() {
+    const detail = descriptionDetailQuery.data;
+    const goodsLines = (detail?.goods_lines ?? []).map((line) => getGoodsLinePopupText(normalizeGoodsLineFromDetail(line)));
+    const description = trimOrUndefined(detail?.additional_description ?? descriptionOrder?.additional_description ?? undefined);
+    return [...goodsLines, description].filter(Boolean).join("\n");
+  }
+
+  async function copyDescriptionPopupText() {
+    const text = getDescriptionPopupText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success("Описание скопировано");
+    } catch {
+      message.error("Не удалось скопировать описание");
+    }
+  }
+
+  async function handleOrderDocumentDownload(orderId: number, row: OrderDocument) {
     const fallbackName = row.file_name || row.display_name || `order-${orderId}-document-${row.id}`;
+    setDownloadingDocumentId(row.id);
     try {
       await downloadFileWithCredentials(`/api/orders/${orderId}/documents/${row.id}/download`, fallbackName);
     } catch (error) {
       message.error(getFileOperationErrorMessage(error, "Ошибка скачивания документа"));
+    } finally {
+      setDownloadingDocumentId(null);
     }
   }
 
-  async function handleListCertificateDownload(orderId: number) {
-    try {
-      await downloadFileWithCredentials(`/api/orders/${orderId}/certificate/download`, `order-${orderId}-certificate`);
-    } catch (error) {
-      message.error(getFileOperationErrorMessage(error, "Ошибка скачивания сертификата"));
-    }
-  }
-
-  function renderDocumentsPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const documents = detail?.documents ?? [];
-
-    if (!documents.length) {
-      return (
-        <PreviewRows
-          rows={[
-            { label: "Документы", value: record.has_documents ? "Есть, список не пришел в деталке" : "Нет документов" },
-            { label: "Кол-во", value: record.documents_count ?? null },
-          ]}
-        />
-      );
-    }
+  function renderPaymentId(value: number, record: OrderListItem) {
+    const isPaymentCompleted = Boolean(record.is_factory_payment_completed);
+    const isPaymentViaCompany =
+      Boolean(record.factory_payment_via_label) || Boolean(record.raw_payload?.is_factory_payment_via_company);
+    const color = isPaymentCompleted ? "#16a34a" : isPaymentViaCompany ? "#1677ff" : undefined;
+    const background = isPaymentCompleted ? "#f0fdf4" : isPaymentViaCompany ? "#eff6ff" : "transparent";
 
     return (
-      <div className="crm-preview-docs">
-        {documents.map((document) => (
-          <div key={document.id} className="crm-preview-doc">
-            <div>
-              <strong>{document.display_name || document.file_name || `Документ #${document.id}`}</strong>
-              <span>{document.document_type ?? "Без типа"}</span>
-            </div>
-            <Tooltip title="Скачать">
-              <Button
-                size="small"
-                type="text"
-                icon={<DownloadOutlined />}
-                onClick={() => {
-                  void handleListDocumentDownload(record.id, document);
-                }}
-              />
-            </Tooltip>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function renderClientPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const client = getPreviewClient(detail, record);
-    return (
-      <PreviewRows
-        rows={[
-          { label: "Компания", value: client.company_name ?? record.company_name ?? record.company_id },
-          { label: "Имя", value: client.contact_name ?? client.user_full_name ?? record.contact_name_snapshot },
-          { label: "Телефон", value: client.contact_phone ?? client.user_phone ?? record.contact_phone_snapshot },
-          { label: "Email", value: client.contact_email ?? client.user_email ?? record.contact_email_snapshot ?? record.email },
-          { label: "Инвойс на", value: client.invoice_company_name },
-        ]}
-      />
-    );
-  }
-
-  function renderFactoryPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const factory = getPreviewFactory(detail, record);
-    const address = factory.selected_loading_address;
-    return (
-      <PreviewRows
-        rows={[
-          { label: "Название", value: factory.factory_name ?? record.factory_name ?? record.factory_id },
-          { label: "Страна", value: factory.country ?? record.country },
-          { label: "Индекс", value: address?.postcode ?? getRawRecordValue(record, ["factory_postcode", "postcode"]) },
-          { label: "Адрес", value: address?.address ?? getRawRecordValue(record, ["factory_address", "loading_address"]) },
-          { label: "Телефон", value: address?.phone ?? getRawRecordValue(record, ["factory_phone"]) },
-          { label: "Email", value: factory.primary_email ?? record.email },
-        ]}
-      />
-    );
-  }
-
-  function renderForwarderPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const forwarder = getPreviewForwarder(detail, record);
-    return (
-      <PreviewRows
-        rows={[
-          { label: "Имя", value: forwarder.full_name ?? record.forwarder_name },
-          { label: "Email", value: forwarder.email },
-          { label: "Телефон", value: getRawRecordValue(record, ["forwarder_phone", "assigned_forwarder_phone"]) },
-          { label: "ID", value: forwarder.id || record.assigned_forwarder_user_id },
-        ]}
-      />
-    );
-  }
-
-  function renderInvoicePreview(record: OrderListItem) {
-    return (
-      <PreviewRows
-        rows={[
-          {
-            label: "Номер инвойса",
-            value: record.invoice_number ? <Typography.Text copyable>{record.invoice_number}</Typography.Text> : null,
-          },
-        ]}
-      />
-    );
-  }
-
-  function renderStatusPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const detailOrder = getPreviewOrder(detail);
-    return (
-      <PreviewRows
-        rows={[
-          { label: "Статус", value: record.status_name ? formatEnumCode(record.status_name) : null },
-          { label: "Специальный комментарий", value: detailOrder.booking_comment ?? record.booking_comment },
-          { label: "Причина / текст", value: detailOrder.comment ?? record.comment },
-          { label: "Рейс", value: record.trip_name ?? record.trip_id },
-          { label: "Дата статуса", value: detailOrder.status_date ?? record.status_date },
-        ]}
-      />
-    );
-  }
-
-  function renderGoodsPreview(record: OrderListItem, detail?: OrderDetailPreview) {
-    const detailOrder = getPreviewOrder(detail);
-    const goodsLines = detail?.goods_lines ?? [];
-    const description = detailOrder.additional_description ?? record.additional_description ?? record.comment;
-
-    return (
-      <div className="crm-preview-goods">
-        {description ? (
-          <Typography.Paragraph copyable className="crm-preview-copy-text">
-            {description}
-          </Typography.Paragraph>
-        ) : null}
-        {goodsLines.length ? (
-          <div className="crm-preview-goods-list">
-            {goodsLines.map((line) => (
-              <div key={line.id} className="crm-preview-good-line">
-                <strong>{getGoodsLineTitle(line)}</strong>
-                <span>
-                  {joinFilled([line.weight_kg ? `${line.weight_kg} кг` : null, getGoodsLineQuantity(line)], " / ")}
-                </span>
-                {line.description ? <small>{line.description}</small> : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {!description && !goodsLines.length ? <Typography.Text type="secondary">Нет описания</Typography.Text> : null}
-      </div>
+      <span
+        style={{
+          alignItems: "center",
+          background,
+          borderRadius: 6,
+          color,
+          display: "inline-flex",
+          fontSize: "inherit",
+          fontWeight: color ? 600 : 400,
+          height: 24,
+          justifyContent: "center",
+          lineHeight: "24px",
+          minWidth: 32,
+        }}
+      >
+        {value}
+      </span>
     );
   }
 
   const columns: ColumnsType<OrderListItem> = [
     {
-      title: <FileTextOutlined />,
+      title: "Documents",
       key: "documents",
-      width: 58,
+      width: 105,
       align: "center",
       render: (_, record) => {
-        const count = record.documents_count ?? (record.has_documents ? 1 : 0);
+        const documentsCount = record.documents_count ?? 0;
+        const hasDocuments = record.has_documents || documentsCount > 0;
         return (
-          <OrderPreviewPopover
-            record={record}
-            title="Документы в заказе"
-            render={(detail) => renderDocumentsPreview(record, detail)}
+          <Button
+            type="link"
+            size="small"
+            title={hasDocuments ? `Документы: ${documentsCount || "есть"}` : "Документов нет"}
+            style={{ padding: 0 }}
+            onClick={() => openDocumentsPopup(record)}
           >
-            <Tooltip title="Документы">
-              <Button
-                size="small"
-                type={count ? "primary" : "default"}
-                ghost={Boolean(count)}
-                icon={<FileTextOutlined />}
-                className="crm-icon-cell-button"
-              >
-                {count || null}
-              </Button>
-            </Tooltip>
-          </OrderPreviewPopover>
+            <FileTextOutlined style={{ opacity: hasDocuments ? 1 : 0.35 }} />
+            {documentsCount > 0 ? <span style={{ marginLeft: 6 }}>{documentsCount}</span> : null}
+          </Button>
         );
       },
     },
     {
-      title: "ID",
+      title: "Id",
       dataIndex: "id",
       key: "id",
       sorter: true,
       sortOrder: sortOrderFor("id"),
-      width: 86,
-      render: (value: number, record) => {
-        const className = [
-          "crm-order-id-link",
-          record.is_factory_payment_completed ? "crm-order-id-paid" : "",
-          !record.is_factory_payment_completed && record.is_factory_payment_via_company ? "crm-order-id-via-company" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-
-        return (
-          <Tooltip
-            title={
-              record.is_factory_payment_completed
-                ? "Оплата фабрики завершена"
-                : record.is_factory_payment_via_company
-                  ? "Оплата фабрики через компанию"
-                  : "Открыть заказ"
-            }
-          >
-            <Link href={`/orders/${record.id}`} className={className}>
-              {value}
-              {record.is_factory_payment_completed ? <CheckCircleOutlined /> : null}
-            </Link>
-          </Tooltip>
-        );
-      },
+      width: 84,
+      align: "center",
+      render: (value: number, record) => renderPaymentId(value, record),
     },
     {
-      title: "Номер",
+      title: "Внутренняя нумерация",
       dataIndex: "order_number",
       key: "order_number",
       sorter: true,
       sortOrder: sortOrderFor("order_number"),
-      width: 150,
-      render: (value: string | null, record) => (
-        <Link href={`/orders/${record.id}`} className="crm-cell-strong-link">
-          {renderOrderNumber(value)}
-        </Link>
-      ),
+      width: 180,
+      render: (value: string | null) => renderOrderNumber(value),
     },
     {
       title: "Клиент",
       dataIndex: "company_name",
       key: "company_name",
-      width: 170,
-      render: (value: string | null | undefined, record) => (
-        <OrderPreviewPopover record={record} title="Клиент" render={(detail) => renderClientPreview(record, detail)}>
-          <Button type="link" size="small" className="crm-cell-link">
-            <InlineValue value={value || record.contact_name_snapshot || (record.company_id ? `ID ${record.company_id}` : null)} />
+      width: 180,
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openClientPopup(record)}>
+            {value}
           </Button>
-        </OrderPreviewPopover>
-      ),
+        ) : (
+          "—"
+        ),
     },
     {
       title: "Страна",
       dataIndex: "country",
       key: "country",
-      width: 112,
-      render: (value: string | null) => <InlineValue value={value} max={16} muted />,
+      width: 120,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Фабрика",
+      title: "Название фабрики",
       dataIndex: "factory_name",
       key: "factory_name",
-      width: 170,
-      render: (value: string | null | undefined, record) => (
-        <OrderPreviewPopover record={record} title="Фабрика" render={(detail) => renderFactoryPreview(record, detail)}>
-          <Button type="link" size="small" className="crm-cell-link">
-            <InlineValue value={value || `ID ${record.factory_id}`} />
+      width: 180,
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openFactoryPopup(record)}>
+            {value}
           </Button>
-        </OrderPreviewPopover>
-      ),
+        ) : (
+          "—"
+        ),
     },
     {
       title: "Экспедитор",
       dataIndex: "forwarder_name",
       key: "forwarder_name",
-      width: 150,
-      render: (value: string | null, record) => (
-        <OrderPreviewPopover
-          record={record}
-          title="Экспедитор"
-          render={(detail) => renderForwarderPreview(record, detail)}
-        >
-          <Button type="link" size="small" className="crm-cell-link">
-            <InlineValue value={value || (record.assigned_forwarder_user_id ? `ID ${record.assigned_forwarder_user_id}` : null)} />
+      width: 140,
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openForwarderPopup(record)}>
+            {value}
           </Button>
-        </OrderPreviewPopover>
-      ),
+        ) : (
+          "—"
+        ),
     },
     {
-      title: "Номер инвойса",
+      title: "Инвойс/проформа",
       dataIndex: "invoice_number",
       key: "invoice_number",
-      width: 150,
-      render: (value: string | null, record) => (
-        <OrderPreviewPopover record={record} title="Инвойс" render={() => renderInvoicePreview(record)}>
-          <Button type="link" size="small" className="crm-cell-link">
-            <InlineValue value={value} />
+      width: 160,
+      render: (value: string | null | undefined, record) =>
+        value ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openInvoicePopup(record)}>
+            {value}
           </Button>
-        </OrderPreviewPopover>
-      ),
+        ) : (
+          "—"
+        ),
     },
     {
-      title: "Объем м3",
-      dataIndex: "declared_volume_m3",
-      key: "declared_volume_m3",
-      width: 112,
-      align: "right",
-      render: (value: string | null | undefined) => <InlineValue value={value} max={12} muted />,
+      title: "Объем m3",
+      dataIndex: "volume_m3",
+      key: "volume_m3",
+      width: 100,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
       title: "Объем из инвойса",
-      dataIndex: "volume_m3",
-      key: "volume_m3",
-      width: 138,
-      align: "right",
-      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
+      dataIndex: "declared_volume_m3",
+      key: "declared_volume_m3",
+      width: 155,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Актуальный объем",
+      title: "Акт. объем",
       dataIndex: "actual_volume_m3",
       key: "actual_volume_m3",
-      width: 138,
-      align: "right",
-      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
+      width: 110,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
       title: "Статус",
@@ -1915,21 +3534,17 @@ function OrdersPageContent() {
       key: "status_name",
       sorter: true,
       sortOrder: sortOrderFor("status_name"),
-      render: (value: OrderStatus | null, record) => (
-        <OrderPreviewPopover record={record} title="Статус заказа" render={(detail) => renderStatusPreview(record, detail)}>
-          <Button type="link" size="small" className="crm-cell-link crm-status-cell-link">
-            {renderOrderStatus(value)}
-          </Button>
-        </OrderPreviewPopover>
-      ),
-      width: 172,
+      render: (value: OrderStatus | null) => renderOrderStatus(value),
+      width: 190,
     },
     {
-      title: "Дней в статусе",
-      key: "days_in_status",
-      width: 116,
-      align: "right",
-      render: (_, record) => <InlineValue value={record.days_in_current_status ?? record.days_same_status} max={8} muted />,
+      title: "Дней в текущем статусе",
+      dataIndex: "days_same_status",
+      key: "days_same_status",
+      sorter: true,
+      sortOrder: sortOrderFor("days_same_status"),
+      width: 100,
+      render: (value: number | null | undefined) => value ?? "—",
     },
     {
       title: "Дата заказа",
@@ -1937,8 +3552,8 @@ function OrdersPageContent() {
       key: "order_date",
       sorter: true,
       sortOrder: sortOrderFor("order_date"),
-      width: 124,
-      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
+      width: 130,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
       title: "Дата готовности",
@@ -1946,121 +3561,74 @@ function OrdersPageContent() {
       key: "ready_date",
       sorter: true,
       sortOrder: sortOrderFor("ready_date"),
-      width: 136,
-      render: (value: string | null) => <InlineValue value={value} max={12} muted />,
+      width: 130,
+      render: (value: string | null) => value ?? "—",
     },
     {
-      title: "Вывоз",
+      title: "Вывоз (от - до)",
       key: "pickup_window",
-      width: 142,
-      render: (_, record) => <InlineValue value={formatPickupWindow(record)} max={18} muted />,
+      width: 150,
+      render: (_, record) => renderPickupWindow(record),
     },
     {
       title: "Описание",
-      key: "description",
-      width: 170,
-      render: (_, record) => (
-        <OrderPreviewPopover record={record} title="Описание и товары" render={(detail) => renderGoodsPreview(record, detail)}>
-          <Button type="link" size="small" className="crm-cell-link">
-            <InlineValue value={record.additional_description || record.comment || (record.has_description ? "Описание" : null)} />
+      dataIndex: "additional_description",
+      key: "additional_description",
+      width: 180,
+      render: (value: string | null | undefined, record) =>
+        value || record.has_description ? (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => openDescriptionPopup(record)}>
+            {value ?? "Описание"}
           </Button>
-        </OrderPreviewPopover>
-      ),
+        ) : (
+          "—"
+        ),
     },
     {
-      title: "Комментарий клиента",
+      title: "Комм. клиента",
       dataIndex: "user_comment",
       key: "user_comment",
-      width: 178,
-      render: (value: string | null) => <InlineValue value={value} />,
+      width: 190,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Комментарий экспедитора",
+      title: "Комм. экспед.",
       dataIndex: "forwarder_comment",
       key: "forwarder_comment",
       width: 190,
-      render: (value: string | null) => <InlineValue value={value} />,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
       title: "Спецтариф",
       key: "special_tariff",
-      width: 128,
-      render: (_, record) => (
-        <InlineValue
-          value={
-            record.special_tariff_amount
-              ? `${record.special_tariff_amount} ${record.special_tariff_currency_other_label || record.special_tariff_currency || ""}`
-              : null
-          }
-          max={14}
-          muted
-        />
-      ),
+      width: 130,
+      render: (_, record) =>
+        record.special_tariff_amount
+          ? `${record.special_tariff_amount}${record.special_tariff_currency ? ` ${record.special_tariff_currency}` : ""}`
+          : "—",
     },
     {
-      title: "Комментарий склада",
+      title: "Комм. склада",
       dataIndex: "warehouse_comment",
       key: "warehouse_comment",
-      width: 178,
-      render: (value: string | null) => <InlineValue value={value} />,
+      width: 190,
+      render: (value: string | null | undefined) => value ?? "—",
     },
     {
-      title: "Сертификаты",
-      key: "certificate",
-      width: 132,
-      render: (_, record) => (
-        <OrderPreviewPopover
-          record={record}
-          title="Сертификаты"
-          render={(detail) => {
-            const certificate = getPreviewCertificate(detail);
-            return (
-              <Space direction="vertical" size={8} className="crm-preview-cert">
-                <PreviewRows
-                  rows={[
-                    { label: "Наличие", value: record.has_certificate ? "Есть" : "Нет" },
-                    { label: "Обработан", value: record.certificate_processed === true ? "Да" : null },
-                    { label: "Номер", value: certificate?.number },
-                    { label: "Статус", value: certificate?.status ? formatEnumCode(certificate.status) : null },
-                    { label: "Выдан", value: certificate?.issued_date },
-                    { label: "Истекает", value: certificate?.expires_date },
-                  ]}
-                />
-                {record.has_certificate ? (
-                  <Button
-                    size="small"
-                    icon={<DownloadOutlined />}
-                    onClick={() => {
-                      void handleListCertificateDownload(record.id);
-                    }}
-                  >
-                    Скачать
-                  </Button>
-                ) : null}
-              </Space>
-            );
-          }}
-        >
-          <Button
-            size="small"
-            type={record.has_certificate ? "primary" : "default"}
-            ghost={record.has_certificate}
-            icon={<InfoCircleOutlined />}
-            className="crm-icon-cell-button"
-          >
-            {record.certificate_processed ? "OK" : record.has_certificate ? "Есть" : "-"}
-          </Button>
-        </OrderPreviewPopover>
-      ),
+      title: "Сертификат",
+      dataIndex: "has_certificate",
+      key: "has_certificate",
+      width: 110,
+      render: (value: boolean | undefined) => (value ? <Tag color="green">Да</Tag> : "—"),
     },
     {
       title: "Действия",
       key: "actions",
       fixed: "right",
-      width: 156,
+      width: 190,
       render: (_, record) => (
         <Space size={4}>
-          <Button size="small" type="link" onClick={() => router.push(`/orders/${record.id}`)}>
+          <Button size="small" type="link" onClick={() => openView(record)}>
             Открыть
           </Button>
           {orderActions(record).length ? (
@@ -2072,6 +3640,170 @@ function OrdersPageContent() {
       ),
     },
   ];
+
+  const columnsWithResize: ColumnsType<OrderListItem> = columns.map((column) => {
+    const dataIndexKey =
+      "dataIndex" in column && typeof column.dataIndex === "string" ? column.dataIndex : undefined;
+    const columnKey = String(column.key ?? dataIndexKey ?? "");
+    const defaultWidth = typeof column.width === "number" ? column.width : ORDER_TABLE_MIN_COLUMN_WIDTH;
+    const width = columnWidths[columnKey] ?? defaultWidth;
+    const shouldResize = columnKey.length > 0 && columnKey !== "actions";
+
+    const nextColumn: ColumnType<OrderListItem> = {
+      ...column,
+      width,
+    };
+
+    if (!shouldResize) {
+      return nextColumn;
+    }
+
+    return {
+      ...nextColumn,
+      onHeaderCell: () =>
+        ({
+          resizable: true,
+          onResizeStart: (event: React.MouseEvent<HTMLSpanElement>) => {
+            if (columnWidths[columnKey] === undefined) {
+              setColumnWidths((prev) => ({ ...prev, [columnKey]: defaultWidth }));
+            }
+            startColumnResize(columnKey, width, event);
+          },
+        }) as React.HTMLAttributes<HTMLTableCellElement> & ResizableHeaderCellProps,
+    };
+  });
+
+  const tableScrollX = useMemo(
+    () =>
+      columnsWithResize.reduce((total, column) => {
+        const width = typeof column.width === "number" ? column.width : ORDER_TABLE_MIN_COLUMN_WIDTH;
+        return total + width;
+      }, 0) + 120,
+    [columnsWithResize],
+  );
+
+  function openCreateGoodsLineModal() {
+    setGoodsLineEditIndex(null);
+    goodsLineQuickForm.resetFields();
+    setGoodsLineModalOpen(true);
+  }
+
+  function openEditGoodsLineModal(index: number) {
+    const line = goodsLineRows[index];
+    if (!line) return;
+    setGoodsLineEditIndex(index);
+    goodsLineQuickForm.setFieldsValue(line);
+    setGoodsLineModalOpen(true);
+  }
+
+  function removeGoodsLine(index: number) {
+    const nextLines = goodsLineRows.filter((_, currentIndex) => currentIndex !== index);
+    createForm.setFieldsValue({ goods_lines: nextLines });
+    mergeCreateDraft({ goods_lines: nextLines });
+  }
+
+  async function saveGoodsLine(values: OrderCreateGoodsLineForm) {
+    const itemType = trimOrUndefined(values.item_type);
+    const customItemType = trimOrUndefined(values.custom_item_type);
+    if (itemType === "other" && !customItemType) {
+      goodsLineQuickForm.setFields([
+        { name: ["custom_item_type"], errors: ["Укажите свой тип для 'другой'"] },
+      ]);
+      return;
+    }
+
+    const nextLine: OrderCreateGoodsLineForm = {
+      item_type: itemType,
+      custom_item_type: itemType === "other" ? customItemType : undefined,
+      description: trimOrUndefined(values.description),
+      weight_kg: trimOrUndefined(values.weight_kg),
+      quantity_value: trimOrUndefined(values.quantity_value),
+      quantity_unit: trimOrUndefined(values.quantity_unit),
+    };
+
+    const nextLines = [...goodsLineRows];
+    if (goodsLineEditIndex === null) {
+      nextLines.push(nextLine);
+    } else {
+      nextLines[goodsLineEditIndex] = nextLine;
+    }
+    createForm.setFieldsValue({ goods_lines: nextLines });
+    mergeCreateDraft({ goods_lines: nextLines });
+    setGoodsLineModalOpen(false);
+    setGoodsLineEditIndex(null);
+    goodsLineQuickForm.resetFields();
+  }
+
+  function getGoodsLineSummary(line: OrderCreateGoodsLineForm) {
+    const itemTypeCode = trimOrUndefined(line.item_type);
+    const customItemType = trimOrUndefined(line.custom_item_type);
+    const itemTypeLabel =
+      itemTypeCode === "other"
+        ? customItemType ?? "—"
+        : itemTypeCode
+          ? (itemTypeLabelByValue.get(itemTypeCode) ?? itemTypeCode)
+          : "—";
+    const weight = trimOrUndefined(line.weight_kg) ?? "—";
+    const quantity = trimOrUndefined(line.quantity_value) ?? "—";
+    const unitCode = trimOrUndefined(line.quantity_unit);
+    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : "—";
+    return `${itemTypeLabel} + ${weight} + ${quantity} + ${unit}`;
+  }
+
+  function openEditOrderGoodsLineModal() {
+    setEditGoodsLineEditIndex(null);
+    editGoodsLineQuickForm.resetFields();
+    setEditGoodsLineModalOpen(true);
+  }
+
+  function openUpdateOrderGoodsLineModal(index: number) {
+    const line = editGoodsLineRows[index];
+    if (!line) return;
+    setEditGoodsLineEditIndex(index);
+    editGoodsLineQuickForm.setFieldsValue(line);
+    setEditGoodsLineModalOpen(true);
+  }
+
+  function removeEditOrderGoodsLine(index: number) {
+    if (!selectedOrderId) return;
+    const nextLines = editGoodsLineRows.filter((_, currentIndex) => currentIndex !== index);
+    editForm.setFieldValue("goods_lines", nextLines);
+    mergeEditDraft(selectedOrderId, { goods_lines: nextLines });
+  }
+
+  async function saveEditOrderGoodsLine(values: OrderCreateGoodsLineForm) {
+    if (!selectedOrderId) return;
+    const itemType = trimOrUndefined(values.item_type);
+    const customItemType = trimOrUndefined(values.custom_item_type);
+    if (itemType === "other" && !customItemType) {
+      editGoodsLineQuickForm.setFields([
+        { name: ["custom_item_type"], errors: ["Укажите свой тип для 'другой'"] },
+      ]);
+      return;
+    }
+
+    const nextLine: OrderCreateGoodsLineForm = {
+      item_type: itemType,
+      custom_item_type: itemType === "other" ? customItemType : undefined,
+      description: trimOrUndefined(values.description),
+      weight_kg: trimOrUndefined(values.weight_kg),
+      quantity_value: trimOrUndefined(values.quantity_value),
+      quantity_unit: trimOrUndefined(values.quantity_unit),
+    };
+
+    const nextLines = [...editGoodsLineRows];
+    if (editGoodsLineEditIndex === null) {
+      nextLines.push(nextLine);
+    } else {
+      nextLines[editGoodsLineEditIndex] = nextLine;
+    }
+
+    editForm.setFieldValue("goods_lines", nextLines);
+    mergeEditDraft(selectedOrderId, { goods_lines: nextLines });
+    setEditGoodsLineModalOpen(false);
+    setEditGoodsLineEditIndex(null);
+    editGoodsLineQuickForm.resetFields();
+  }
 
   function handleTableChange(
     pagination: TablePaginationConfig,
@@ -2098,14 +3830,37 @@ function OrdersPageContent() {
     { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
   ];
   const orderTypeCreateOptions = toSelectOptions(createMetadataQuery.data?.order_type_options);
-  const priorityOptions = toSelectOptions((createMetadataQuery.data as OrderCreateMetadata | undefined)?.priority_options);
   const officeMarkOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.office_mark_options,
   );
   const productCharacteristicOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.product_characteristic_options,
   );
+  const certificateIntentOptions = toSelectOptions(
+    (createMetadataQuery.data as OrderCreateMetadata | undefined)?.certificate_intent_options,
+  );
   const itemTypeOptions = toSelectOptions(createMetadataQuery.data?.item_type_options);
+  const quantityUnitOptions =
+    toSelectOptions(createMetadataQuery.data?.quantity_unit_options).length > 0
+      ? toSelectOptions(createMetadataQuery.data?.quantity_unit_options)
+      : QUANTITY_UNIT_FALLBACK_OPTIONS;
+  const itemTypeLabelByValue = useMemo(
+    () =>
+      new Map(
+        itemTypeOptions.map((option) => [option.value, typeof option.label === "string" ? option.label : String(option.label)]),
+      ),
+    [itemTypeOptions],
+  );
+  const quantityUnitLabelByValue = useMemo(
+    () =>
+      new Map(
+        quantityUnitOptions.map((option) => [
+          option.value,
+          typeof option.label === "string" ? option.label : String(option.label),
+        ]),
+      ),
+    [quantityUnitOptions],
+  );
   const documentTypeOptions = toSelectOptions(createMetadataQuery.data?.document_type_options);
   const measurementStatusOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.measurement_status_options,
@@ -2114,40 +3869,223 @@ function OrdersPageContent() {
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.weighing_status_options,
   );
   const clientCompanyOptions = (clientCompaniesQuery.data?.items ?? []).map((item) => ({
-    label: `${item.company_name} (ID ${item.company_id})`,
+    label: item.company_name,
     value: item.company_id,
   }));
   const selectedCompanyContacts = selectedClientCompany?.contacts ?? [];
-  const countryOptions = (countriesQuery.data?.items ?? []).map((country) => ({
+  const clientCompanyLabel = meQuery.data?.company_id ? "Компания" : "Компания из токена";
+  const clientContactUiOptions = meQuery.data?.id
+    ? [
+        {
+          label: [meQuery.data.full_name, meQuery.data.login].filter(Boolean).join(" · ") || "Пользователь",
+          value: meQuery.data.id,
+        },
+      ]
+    : [];
+  const selectedLoadingAddress = useMemo(
+    () => (loadingAddressesQuery.data ?? []).find((address) => address.id === createLoadingAddressId),
+    [createLoadingAddressId, loadingAddressesQuery.data],
+  );
+  const selectedFactoryContact = useMemo(
+    () => (factoryContactsQuery.data?.items ?? []).find((contact) => contact.id === createFactoryContactId),
+    [createFactoryContactId, factoryContactsQuery.data?.items],
+  );
+  const postcodeOptions = useMemo(
+    () =>
+      (postcodeOptionsQuery.data?.items ?? []).map((postcode) => ({
+        label: postcode.postcode,
+        value: postcode.id,
+      })),
+    [postcodeOptionsQuery.data?.items],
+  );
+  const cityOptions = useMemo(
+    () =>
+      (postcodeCitiesQuery.data?.items ?? []).map((city) => ({
+        label: city.city,
+        value: city.id,
+      })),
+    [postcodeCitiesQuery.data?.items],
+  );
+  const allLoadingAddresses = useMemo(() => {
+    const source = loadingAddressesQuery.data ?? [];
+    return createdLoadingAddressOption && !source.some((address) => address.id === createdLoadingAddressOption.id)
+      ? [createdLoadingAddressOption, ...source]
+      : source;
+  }, [createdLoadingAddressOption, loadingAddressesQuery.data]);
+  const allEditLoadingAddresses = useMemo(() => {
+    const source = editLoadingAddressesQuery.data?.items ?? [];
+    return editCreatedLoadingAddressOption && !source.some((address) => address.id === editCreatedLoadingAddressOption.id)
+      ? [editCreatedLoadingAddressOption, ...source]
+      : source;
+  }, [editCreatedLoadingAddressOption, editLoadingAddressesQuery.data?.items]);
+  const selectedEditLoadingAddress = useMemo(
+    () => allEditLoadingAddresses.find((address) => address.id === editLoadingAddressId),
+    [allEditLoadingAddresses, editLoadingAddressId],
+  );
+
+  useEffect(() => {
+    if (!createOpen || createFactoryMode !== "existing") return;
+    if (!createLoadingAddressId) return;
+    const stillVisible = allLoadingAddresses.some((address) => address.id === createLoadingAddressId);
+    if (!stillVisible) {
+      createForm.setFieldValue("loading_address_id", undefined);
+    }
+  }, [
+    createFactoryMode,
+    createForm,
+    createLoadingAddressId,
+    createOpen,
+    allLoadingAddresses,
+  ]);
+
+  useEffect(() => {
+    if (!createOpen || !selectedLoadingAddress) return;
+    createForm.setFieldValue("loading_postcode_id_ui", selectedLoadingAddress.postcode_id ?? undefined);
+    createForm.setFieldValue("loading_city_id_ui", selectedLoadingAddress.city_id ?? undefined);
+    if (createFactoryMode === "create") {
+      createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], selectedLoadingAddress.postcode_id ?? undefined);
+      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], selectedLoadingAddress.city_id ?? undefined);
+    }
+  }, [createFactoryMode, createForm, createOpen, selectedLoadingAddress]);
+
+  useEffect(() => {
+    if (!editOpen || editFactoryMode !== "existing") return;
+    if (!editLoadingAddressId) return;
+    const stillVisible = allEditLoadingAddresses.some((address) => address.id === editLoadingAddressId);
+    if (!stillVisible) {
+      editForm.setFieldValue("loading_address_id", undefined);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, { loading_address_id: undefined });
+      }
+    }
+  }, [
+    allEditLoadingAddresses,
+    editFactoryMode,
+    editForm,
+    editLoadingAddressId,
+    editOpen,
+    mergeEditDraft,
+    selectedOrderId,
+  ]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedEditLoadingAddress) return;
+    editForm.setFieldValue("loading_postcode_id_ui", selectedEditLoadingAddress.postcode_id ?? undefined);
+    editForm.setFieldValue("loading_city_id_ui", selectedEditLoadingAddress.city_id ?? undefined);
+    editForm.setFieldValue("loading_address_line", selectedEditLoadingAddress.address ?? undefined);
+    editForm.setFieldValue("loading_address_fax", selectedEditLoadingAddress.fax ?? undefined);
+  }, [editForm, editOpen, selectedEditLoadingAddress]);
+  const priceCoefficient = formatRatio(createClientGoodsValueAmount, createDeclaredVolumeM3);
+  const weightCoefficient = formatRatio(createDeclaredVolumeM3, createDeclaredTotalWeightKg);
+  const createCountryOptions = (createCountriesQuery.data?.items ?? []).map((country) => ({
     label: country.name_ru,
     value: country.id,
-  }));
-  const postcodeOptions = (postcodesQuery.data?.items ?? []).map((postcode) => ({
-    label: `${postcode.postcode}${postcode.country_id ? ` (country ${postcode.country_id})` : ""}`,
-    value: postcode.id,
-  }));
-  const postcodeCityOptions = (postcodeCitiesQuery.data?.items ?? []).map((city) => ({
-    label: city.city,
-    value: city.id,
-  }));
-  const messengerTypeOptions = (messengerTypesQuery.data ?? []).map((item) => ({
-    label: item.label,
-    value: item.code,
   }));
   const selfDeliveryForwarderOptions = (
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.self_delivery_forwarder_options ?? []
   ).map((forwarder) => ({
-    label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || `ID ${forwarder.id}`,
+    label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · ") || "Экспедитор",
     value: forwarder.id,
   }));
-  const factoryEmailOptions = (factoryEmailsQuery.data?.items ?? []).map((item) => ({
-    label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
-    value: item.id,
+  const clientForwarderUiOptions =
+    selfDeliveryForwarderOptions.length > 0
+      ? selfDeliveryForwarderOptions
+      : [
+          {
+            label: "UI-only (до backend parity)",
+            value: -1,
+          },
+        ];
+  const factoryContactEmailOptions = (factoryContactsQuery.data?.items ?? [])
+    .filter((item) => Boolean(item.email))
+    .map((item) => ({
+      label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
+      value: item.id,
+    }));
+  const editOfficeMarkOptions = toSelectOptions(editMetadataQuery.data?.office_mark_options);
+  const editProductCharacteristicOptions = toSelectOptions(editMetadataQuery.data?.product_characteristic_options);
+  const editCertificateIntentOptions = toSelectOptions(editMetadataQuery.data?.certificate_intent_options);
+  const editItemTypeOptions = toSelectOptions(editMetadataQuery.data?.item_type_options);
+  const editQuantityUnitOptions =
+    toSelectOptions(editMetadataQuery.data?.quantity_unit_options).length > 0
+      ? toSelectOptions(editMetadataQuery.data?.quantity_unit_options)
+      : QUANTITY_UNIT_FALLBACK_OPTIONS;
+  const editDocumentTypeOptions = toSelectOptions(editMetadataQuery.data?.document_type_options);
+  const editMeasurementStatusOptions = toSelectOptions(editMetadataQuery.data?.measurement_status_options);
+  const editWeighingStatusOptions = toSelectOptions(editMetadataQuery.data?.weighing_status_options);
+  const editFactoryContactEmailSelectOptions = editContactEmailOptions
+    .filter((item) => Boolean(item.email))
+    .map((item) => ({
+      label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
+      value: item.id,
+    }));
+  const editCountryOptions = (editCountriesQuery.data?.items ?? []).map((country) => ({
+    label: country.name_ru,
+    value: country.id,
   }));
+  const editFactoryOptionSource =
+    editCreatedFactoryOption && !(editFactoryOptionsQuery.data ?? []).some((factory) => factory.id === editCreatedFactoryOption.id)
+      ? [editCreatedFactoryOption, ...(editFactoryOptionsQuery.data ?? [])]
+      : (editFactoryOptionsQuery.data ?? []);
+  const editFactoryOptions = editFactoryOptionSource.map((factory) => ({
+    label: [factory.name, factory.subtitle].filter(Boolean).join(" (") + (factory.subtitle ? ")" : ""),
+    value: factory.id,
+  }));
+  const editLoadingAddressOptions = allEditLoadingAddresses.map((address) => ({
+    label: (address.name?.trim() || address.address || "Адрес") + (address.is_primary ? " (Primary)" : ""),
+    value: address.id,
+  }));
+  const editPostcodeOptions = (editPostcodeOptionsQuery.data?.items ?? []).map((postcode) => ({
+    label: postcode.postcode,
+    value: postcode.id,
+  }));
+  const editCityOptions = (editPostcodeCitiesQuery.data?.items ?? []).map((city) => ({
+    label: city.city,
+    value: city.id,
+  }));
+  const editPriceCoefficient = formatRatio(
+    Form.useWatch("client_goods_value_amount", editForm),
+    Form.useWatch("declared_volume_m3", editForm),
+  );
+  const editWeightCoefficient = formatRatio(
+    Form.useWatch("declared_volume_m3", editForm),
+    Form.useWatch("declared_total_weight_kg", editForm),
+  );
+  const editCompanyOptions = (editClientCompaniesQuery.data?.items ?? []).map((item) => ({
+    label: item.company_name,
+    value: item.company_id,
+  }));
+  const selectedEditCompanyContacts = selectedEditCompany?.contacts ?? [];
+
+  useEffect(() => {
+    if (!createOpen || isClientRole) return;
+    if (!selectedFactoryContact) {
+      createForm.setFieldValue(["create_factory_contact", "full_name"], undefined);
+      createForm.setFieldValue(["create_factory_contact", "phone"], undefined);
+      createForm.setFieldValue(["create_factory_contact", "email"], undefined);
+      return;
+    }
+    createForm.setFieldValue(["create_factory_contact", "full_name"], selectedFactoryContact.full_name);
+    createForm.setFieldValue(["create_factory_contact", "phone"], selectedFactoryContact.phone);
+    createForm.setFieldValue(["create_factory_contact", "email"], selectedFactoryContact.email ?? undefined);
+  }, [createForm, createOpen, isClientRole, selectedFactoryContact]);
+
+  useEffect(() => {
+    if (!editOpen || !selectedOrderId) return;
+    const contactId = editForm.getFieldValue("factory_contact_id") as number | undefined;
+    if (!contactId) return;
+    const selectedContact = editContactEmailOptions.find((item) => item.id === contactId);
+    if (!selectedContact) return;
+    editForm.setFieldValue("factory_contact_email", selectedContact.email ?? undefined);
+    editForm.setFieldValue("factory_contact_name", selectedContact.full_name ?? undefined);
+    editForm.setFieldValue("factory_contact_phone", selectedContact.phone ?? undefined);
+  }, [editContactEmailOptions, editForm, editOpen, selectedOrderId]);
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
-      <PageToolbar
+    <Space orientation="vertical" size={16} className="crm-page-stack">
+      {!standaloneOrderView ? (
+        <>
+          <PageToolbar
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((open) => !open)}
         toggleLabel="Фильтр"
@@ -2167,8 +4105,8 @@ function OrdersPageContent() {
           />
         }
         actions={
-          canCreate ? (
-            <Button type="primary" onClick={() => setCreateOpen(true)}>
+          canCreateUi ? (
+            <Button type="primary" onClick={openCreateModal}>
               + Новый заказ
             </Button>
           ) : null
@@ -2352,7 +4290,7 @@ function OrdersPageContent() {
         </div>
       </Card>
 
-      {canWriteOrder ? (
+      {canWriteOrderUi ? (
         <Card className="crm-panel crm-actions-strip-bar">
           <div className="crm-actions-strip">
             <Typography.Text type="secondary">Выбрано: {selectedRowKeys.length}</Typography.Text>
@@ -2363,21 +4301,21 @@ function OrdersPageContent() {
               Назначить рейс
             </Button>
             <Button type="text" onClick={() => runBulkAction(() => setBulkPickupOpen(true))}>
-              Назначить окно вывоза
+              Назначить дату вывоза
             </Button>
             <Button
               type="text"
               onClick={() =>
                 runBulkAction(() => {
                   askBulkConfirm(
-                    "Очистить окно вывоза у выбранных заказов",
-                    "Окно вывоза будет очищено. Продолжить?",
-                    () => runBulkMutation("clear-pickup-window", {}),
+                    "Отменить вывоз у выбранных заказов",
+                    "Дата вывоза будет очищена. Продолжить?",
+                    () => runBulkMutation("cancel-pickup", {}),
                   );
                 })
               }
             >
-              Очистить вывоз
+              Отменить вывоз
             </Button>
             <Button type="text" onClick={() => runBulkAction(() => setBulkSpecialTariffOpen(true))}>
               Спецтариф
@@ -2454,7 +4392,7 @@ function OrdersPageContent() {
                 <article key={record.id} className="crm-row-card">
                   <div className="crm-row-card-head">
                     <div>
-                      {canWriteOrder ? (
+                      {canWriteOrderUi ? (
                         <Checkbox
                           checked={selectedRowKeys.includes(record.id)}
                           onChange={(event) => {
@@ -2469,9 +4407,14 @@ function OrdersPageContent() {
                           Выбрать
                         </Checkbox>
                       ) : null}
-                      <Link href={`/orders/${record.id}`} className="crm-row-title">
+                      <Button
+                        type="link"
+                        className="crm-row-title"
+                        style={{ padding: 0, height: "auto" }}
+                        onClick={() => openView(record)}
+                      >
                         {renderOrderNumber(record.order_number)}
-                      </Link>
+                      </Button>
                       <Typography.Text type="secondary">ID #{record.id}</Typography.Text>
                     </div>
                     {renderOrderStatus(record.status_name)}
@@ -2488,7 +4431,7 @@ function OrdersPageContent() {
                     </div>
                     <div className="crm-row-meta-item">
                       Рейс
-                      <strong>{record.trip_name ?? record.trip_id ?? "-"}</strong>
+                      <strong>{record.trip_name ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Готовность
@@ -2496,7 +4439,7 @@ function OrdersPageContent() {
                     </div>
                     <div className="crm-row-meta-item">
                       Вывоз
-                      <strong>{formatPickupWindow(record)}</strong>
+                      <strong>{record.pickup_date ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Тип
@@ -2505,7 +4448,7 @@ function OrdersPageContent() {
                   </div>
 
                   <div className="crm-row-actions">
-                    <Button size="small" type="primary" ghost onClick={() => router.push(`/orders/${record.id}`)}>
+                    <Button size="small" type="primary" ghost onClick={() => openView(record)}>
                       Открыть
                     </Button>
                     {orderActions(record).length ? (
@@ -2543,16 +4486,24 @@ function OrdersPageContent() {
             rowKey="id"
             loading={listQuery.isLoading}
             dataSource={rows}
-            columns={columns}
+            columns={columnsWithResize}
+            components={{
+              header: {
+                cell: ResizableHeaderCell,
+              },
+            }}
             rowSelection={
-              canWriteOrder
+              canWriteOrderUi
                 ? {
+                    fixed: true,
+                    columnWidth: 56,
+                    columnTitle: (checkboxNode) => <span className="crm-selection-column-title">{checkboxNode}</span>,
                     selectedRowKeys,
                     onChange: (keys) => setSelectedRowKeys(keys as number[]),
                   }
                 : undefined
             }
-            scroll={{ x: 2800 }}
+            scroll={{ x: tableScrollX }}
             pagination={{
               current: currentPage,
               pageSize: currentPageSize,
@@ -2566,6 +4517,38 @@ function OrdersPageContent() {
         )}
       </Card>
 
+        </>
+      ) : null}
+
+      {!isHydrated ? (
+        <>
+          <Form form={createForm} component={false} />
+          <Form form={editForm} component={false} />
+          <Form form={statusForm} component={false} />
+          <Form form={assignForm} component={false} />
+          <Form form={assignForwarderForm} component={false} />
+          <Form form={pickupForm} component={false} />
+          <Form form={specialTariffForm} component={false} />
+          <Form form={requestToFactoryForm} component={false} />
+          <Form form={quotePriceForm} component={false} />
+          <Form form={quoteDecisionForm} component={false} />
+          <Form form={filterForm} component={false} />
+          <Form form={bulkStatusForm} component={false} />
+          <Form form={bulkAssignForm} component={false} />
+          <Form form={bulkPickupForm} component={false} />
+          <Form form={bulkSpecialTariffForm} component={false} />
+          <Form form={bulkCommentForm} component={false} />
+          <Form form={factoryContactQuickForm} component={false} />
+          <Form form={editFactoryContactQuickForm} component={false} />
+          <Form form={factoryLoadingAddressQuickForm} component={false} />
+          <Form form={editFactoryLoadingAddressQuickForm} component={false} />
+          <Form form={goodsLineQuickForm} component={false} />
+          <Form form={editGoodsLineQuickForm} component={false} />
+        </>
+      ) : null}
+
+      {isHydrated ? (
+        <>
       <Modal
         title={
           isClientRole
@@ -2575,610 +4558,2066 @@ function OrdersPageContent() {
               : "Создать заказ"
         }
         open={createOpen}
-        destroyOnHidden
+        className="crm-order-create-modal"
+        forceRender
         onCancel={() => {
-          setCreateOpen(false);
-          createForm.resetFields();
-          setClientCompaniesQueryText("");
-          setPostcodeQueryText("");
-          setNewFactoryEmail("");
-          setInlinePostcodeValue("");
-          setInlineCityValue("");
+          Modal.confirm({
+            title: "Вы уверены, что хотите отменить создание заказа?",
+            okText: "Отменить создание",
+            cancelText: "Продолжить заполнение",
+            onOk: () => closeAndResetCreateModal(),
+          });
         }}
-        onOk={() => createForm.submit()}
-        confirmLoading={createMutation.isPending}
-        width={860}
+        footer={
+          <div className="crm-create-wizard-footer">
+            <Button
+              disabled={createStep === 0 || createMutation.isPending}
+              onClick={() => void goToCreateStep(createStep - 1)}
+            >
+              Назад
+            </Button>
+            {createStep < createWizardLastStep ? (
+              <Button type="primary" disabled={createMutation.isPending} onClick={() => void goToNextCreateStep()}>
+                Далее
+              </Button>
+            ) : (
+              <Button type="primary" loading={createMutation.isPending} onClick={() => createForm.submit()}>
+                Готово
+              </Button>
+            )}
+          </div>
+        }
+        width={createStep === 0 || isRequestCreate ? COMPACT_CREATE_MODAL_WIDTH : 1080}
       >
+        <div className="crm-create-wizard-head">
+          <Typography.Text className="crm-create-wizard-step-counter">
+            Шаг {createStep + 1} из {createWizardSteps.length}
+          </Typography.Text>
+          <Steps
+            size="small"
+            current={createStep}
+            className="crm-create-wizard-steps"
+            orientation={isMobile ? "vertical" : "horizontal"}
+            items={createWizardSteps.map((step) => ({ title: step.title }))}
+            onChange={(nextStep) => void goToCreateStep(nextStep)}
+          />
+        </div>
+
         <Form<OrderCreateForm>
           form={createForm}
           layout="vertical"
-          initialValues={{
-            order_type: "delivery",
-            factory_mode: "existing",
-            client_goods_value_currency: "EUR",
-            documents: [],
-            goods_lines: [],
-          }}
-          onFinish={(values) => createMutation.mutate(values)}
-        >
-          <Form.Item name="order_number" label="Номер заказа (опционально)">
-            <Input />
-          </Form.Item>
-
-          {!isClientRole ? (
-            <>
-              <Form.Item name="company_id" label="Клиент (компания)" rules={[{ required: true }]}>
-                <Select
-                  showSearch
-                  filterOption={false}
-                  loading={clientCompaniesQuery.isLoading}
-                  options={clientCompanyOptions}
-                  onSearch={(value) => setClientCompaniesQueryText(value)}
-                  onChange={() => {
-                    createForm.setFieldValue("company_contact_id", undefined);
-                  }}
-                  placeholder="Начните вводить название компании"
-                />
-              </Form.Item>
-
-              <Form.Item name="company_contact_id" label="Контакт компании (опционально)">
-                <Select
-                  allowClear
-                  disabled={!selectedCompanyContacts.length}
-                  options={selectedCompanyContacts.map((contact) => ({
-                    label:
-                      [contact.full_name, contact.job_title, contact.email, contact.phone]
-                        .filter(Boolean)
-                        .join(" · ") || `Contact #${contact.id}`,
-                    value: contact.id,
-                  }))}
-                  placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
-                />
-              </Form.Item>
-
-              <Form.Item name="order_type" label="Тип заказа" rules={[{ required: true }]}>
-                <Select
-                  loading={createMetadataQuery.isLoading}
-                  options={orderTypeCreateOptions}
-                  placeholder={orderTypeCreateOptions.length ? undefined : "Нет доступных типов в metadata"}
-                />
-              </Form.Item>
-            </>
-          ) : null}
-
-          {!isRequestCreate ? (
-            <Form.Item name="ready_date" label="Дата готовности" rules={[{ required: true }]}>
-              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
-            </Form.Item>
-          ) : null}
-
-          <Form.Item name="invoice_on_other_company" valuePropName="checked">
-            <Checkbox>Инвойс на другую компанию</Checkbox>
-          </Form.Item>
-
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue("invoice_on_other_company") ? (
-                <Form.Item
-                  name="invoice_company_name"
-                  label="Название компании для инвойса"
-                  rules={[{ required: true, message: "Укажите название компании" }]}
-                >
-                  <Input />
-                </Form.Item>
-              ) : null
+          className="crm-order-create-form"
+          initialValues={CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>}
+          onValuesChange={(changedValues) => {
+            if (isRehydratingCreateFormRef.current) {
+              return;
             }
-          </Form.Item>
-
-          <Form.Item name="invoice_number" label="Инвойс / проформа">
-            <Input />
-          </Form.Item>
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="factory_mode" label="Фабрика">
-                <Select
-                  options={[
-                    { label: "Выбрать существующую", value: "existing" },
-                    { label: "Создать новую", value: "create" },
-                  ]}
-                />
-              </Form.Item>
-
-              {createFactoryMode === "existing" ? (
-                <>
-                  <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]}>
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={factoryOptionsQuery.isLoading}
-                      options={(factoryOptionsQuery.data ?? []).map((factory) => ({
-                        label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
-                        value: factory.id,
-                      }))}
-                      onChange={() => {
-                        createForm.setFieldValue("loading_address_id", undefined);
-                        createForm.setFieldValue("email_id", undefined);
-                      }}
-                    />
-                  </Form.Item>
-
-                  <Form.Item name="loading_address_id" label="Адрес загрузки" rules={[{ required: true }]}>
-                    <Select
-                      loading={loadingAddressesQuery.isLoading}
-                      disabled={!createFactoryId}
-                      options={(loadingAddressesQuery.data ?? []).map((address) => ({
-                        label: `${address.city ?? "-"}, ${address.address ?? "-"}${address.is_primary ? " (Primary)" : ""}`,
-                        value: address.id,
-                      }))}
-                      notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
-                    />
-                  </Form.Item>
-
-                  {!isClientRole ? (
-                    <>
-                      <Form.Item name="email_id" label="Email фабрики (опционально)">
-                        <Select
-                          allowClear
-                          loading={factoryEmailsQuery.isLoading}
-                          disabled={!createFactoryId}
-                          options={factoryEmailOptions}
-                          placeholder={createFactoryId ? "Выберите email" : "Сначала выберите фабрику"}
-                        />
-                      </Form.Item>
-
-                      {canManageFactoryEmails ? (
-                        <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                          <Input
-                            placeholder="Добавить email фабрики"
-                            value={newFactoryEmail}
-                            onChange={(event) => setNewFactoryEmail(event.target.value)}
-                          />
-                          <Button
-                            loading={createFactoryEmailMutation.isPending}
-                            onClick={() => {
-                              if (!createFactoryId) {
-                                message.error("Сначала выберите фабрику");
-                                return;
-                              }
-                              const email = trimOrUndefined(newFactoryEmail);
-                              if (!email) {
-                                message.error("Введите email");
-                                return;
-                              }
-                              createFactoryEmailMutation.mutate({ factoryId: createFactoryId, email });
-                            }}
-                          >
-                            Добавить email
-                          </Button>
-                        </Space.Compact>
-                      ) : null}
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <Typography.Text type="secondary">Новая фабрика (inline create)</Typography.Text>
-
+            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
+            const nextOrderType = snapshot.order_type ?? currentCreateOrderType;
+            if ("order_type" in changedValues) {
+              setCreateStep((previous) => clampOrderCreateWizardStep(previous, nextOrderType));
+            }
+            setCreateDraft({ ...snapshot, order_type: nextOrderType } as Record<string, unknown>);
+          }}
+          onFinish={(values) => {
+            const snapshot = createForm.getFieldsValue(true) as OrderCreateForm;
+            const latestLastStep = getOrderCreateWizardSteps(snapshot.order_type ?? currentCreateOrderType).length - 1;
+            if (createStep < latestLastStep) {
+              setCreateStep((previous) => Math.min(previous + 1, latestLastStep));
+              return;
+            }
+            const draftPayload = (createDraft as Partial<OrderCreateForm>) ?? {};
+            createMutation.mutate({ ...draftPayload, ...snapshot, ...values });
+          }}
+        >
+          {createWizardStepKey === "base" ? (
+            <div className="crm-order-create-section">
+              <div className="crm-order-create-grid">
+                {!isClientRole ? (
                   <Form.Item
-                    name={["create_factory", "factory_name"]}
-                    label="Название фабрики"
-                    rules={[{ required: true, message: "Укажите название фабрики" }]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "country_id"]}
-                    label="Страна фабрики"
-                    rules={[{ required: true, message: "Выберите страну" }]}
-                  >
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={countriesQuery.isLoading}
-                      options={countryOptions}
-                      onChange={() => {
-                        createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
-                        createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
-                      }}
-                    />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "primary_email"]}
-                    label="Primary email фабрики"
-                    rules={[
-                      { required: true, message: "Укажите email" },
-                      { type: "email", message: "Введите корректный email" },
-                    ]}
-                  >
-                    <Input />
-                  </Form.Item>
-
-                  <Form.Item
-                    name={["create_factory", "loading_address", "postcode_id"]}
-                    label="Индекс"
-                    rules={[{ required: true, message: "Выберите индекс" }]}
+                    name="company_id"
+                    label="Компания"
+                    rules={[{ required: true }]}
+                    className="crm-order-create-col"
                   >
                     <Select
                       showSearch
                       filterOption={false}
-                      onSearch={(value) => setPostcodeQueryText(value)}
-                      loading={postcodesQuery.isLoading}
-                      options={postcodeOptions}
-                      onChange={() => createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined)}
+                      loading={clientCompaniesQuery.isLoading}
+                      options={clientCompanyOptions}
+                      onSearch={(value) => setClientCompaniesQueryText(value)}
+                      onChange={() => createForm.setFieldValue("company_contact_id", undefined)}
+                      placeholder="Начните вводить название компании"
                     />
                   </Form.Item>
+                ) : (
+                  <Form.Item label="Компания" className="crm-order-create-col" extra="UI-only: определяется из профиля клиента">
+                    <Input readOnly value={clientCompanyLabel} />
+                  </Form.Item>
+                )}
 
-                  {canInlineCreatePostcodeCity ? (
-                    <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                      <Input
-                        placeholder="Новый индекс (inline create)"
-                        value={inlinePostcodeValue}
-                        onChange={(event) => setInlinePostcodeValue(event.target.value)}
-                      />
-                      <Button
-                        loading={createPostcodeMutation.isPending}
-                        onClick={() => {
-                          if (!createFactoryCountryId) {
-                            message.error("Сначала выберите страну фабрики");
-                            return;
-                          }
-                          const postcode = trimOrUndefined(inlinePostcodeValue);
-                          if (!postcode) {
-                            message.error("Введите индекс");
-                            return;
-                          }
-                          createPostcodeMutation.mutate({ country_id: createFactoryCountryId, postcode });
-                        }}
+                {!isClientRole ? (
+                  <Form.Item
+                    name="company_contact_id"
+                    label="Имя клиента"
+                    rules={[{ required: true, message: "Выберите контакт компании" }]}
+                    className="crm-order-create-col"
+                  >
+                    <Select
+                      allowClear
+                      disabled={!selectedCompanyContacts.length}
+                      options={selectedCompanyContacts.map((contact) => ({
+                        label:
+                          [contact.full_name, contact.job_title, contact.email, contact.phone]
+                            .filter(Boolean)
+                            .join(" · ") || "Контакт",
+                        value: contact.id,
+                      }))}
+                      placeholder={selectedCompanyContacts.length ? "Выберите контакт" : "Сначала выберите компанию"}
+                    />
+                  </Form.Item>
+                ) : (
+                  <Form.Item
+                    name="company_contact_id"
+                    label="Имя клиента"
+                    className="crm-order-create-col"
+                    extra="UI-only: в текущем client API поле не отправляется"
+                  >
+                    <Select allowClear options={clientContactUiOptions} placeholder="Опционально" />
+                  </Form.Item>
+                )}
+
+                <Form.Item name="invoice_on_other_company" valuePropName="checked" className="crm-order-create-col">
+                  <Checkbox>Инвойс на другую компанию</Checkbox>
+                </Form.Item>
+
+                <Form.Item noStyle shouldUpdate={(prev, next) => prev.invoice_on_other_company !== next.invoice_on_other_company}>
+                  {({ getFieldValue }) =>
+                    getFieldValue("invoice_on_other_company") ? (
+                      <Form.Item
+                        name="invoice_company_name"
+                        label="Название компании"
+                        rules={[{ required: true, message: "Укажите название компании" }]}
+                        className="crm-order-create-col"
                       >
-                        Создать индекс
-                      </Button>
-                    </Space.Compact>
+                        <Input />
+                      </Form.Item>
+                    ) : null
+                  }
+                </Form.Item>
+
+                <Form.Item name="order_number" label="Ваша внутренняя нумерация" className="crm-order-create-col">
+                  <Input />
+                </Form.Item>
+
+                <Form.Item
+                  name="order_type"
+                  label="Тип заказа"
+                  rules={[{ required: true }]}
+                  className="crm-order-create-col"
+                >
+                  <Select
+                    loading={createMetadataQuery.isLoading}
+                    options={orderTypeCreateOptions}
+                    placeholder={orderTypeCreateOptions.length ? undefined : "Нет доступных типов в metadata"}
+                    onChange={(value) => {
+                      const orderType = value as OrderType;
+                      const documents = orderType === "request" ? [] : createForm.getFieldValue("documents");
+                      if (orderType === "request") {
+                        createForm.setFieldValue("documents", []);
+                      }
+                      const nextValues = {
+                        ...(createForm.getFieldsValue(true) as OrderCreateForm),
+                        order_type: orderType,
+                        documents,
+                      };
+                      setCreateDraft(nextValues as Record<string, unknown>);
+                      setCreateStep((previous) => clampOrderCreateWizardStep(previous, orderType));
+                    }}
+                  />
+                </Form.Item>
+
+              </div>
+            </div>
+          ) : null}
+
+          {createWizardStepKey === "factory" ? (
+            <>
+              <div className="crm-order-create-section">
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Фабрика
+                </Typography.Title>
+                <div className="crm-order-create-grid">
+                  <Form.Item name="self_delivery" valuePropName="checked" className="crm-order-create-col">
+                    <Checkbox>Самодоставка</Checkbox>
+                  </Form.Item>
+
+                  {createSelfDelivery ? (
+                    <Form.Item
+                      name="self_delivery_forwarder_user_id"
+                      label="Экспедитор самодоставки"
+                      rules={!isClientRole ? [{ required: true, message: "Выберите экспедитора самодоставки" }] : undefined}
+                      className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
+                    >
+                      <Select
+                        allowClear
+                        loading={!isClientRole && createMetadataQuery.isLoading}
+                        options={isClientRole ? clientForwarderUiOptions : selfDeliveryForwarderOptions}
+                        placeholder={
+                          isClientRole
+                            ? "UI-only поле"
+                            : selfDeliveryForwarderOptions.length
+                              ? undefined
+                              : "Нет экспедиторов в metadata"
+                        }
+                        onChange={(value) => {
+                          createForm.setFieldValue("assigned_forwarder_user_id", value ?? undefined);
+                        }}
+                      />
+                    </Form.Item>
                   ) : null}
 
                   <Form.Item
-                    name={["create_factory", "loading_address", "city_id"]}
-                    label="Город"
-                    rules={[{ required: true, message: "Выберите город" }]}
+                    name="assigned_forwarder_user_id"
+                    label="Назначить экспедитора"
+                    className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only: не отправляется в client payload" : undefined}
+                  >
+                    <Select
+                      allowClear
+                      loading={!isClientRole && forwardersQuery.isLoading}
+                      options={
+                        isClientRole
+                          ? clientForwarderUiOptions
+                          : (forwardersQuery.data?.items ?? []).map((user) => ({
+                              label: [user.full_name, user.login].filter(Boolean).join(" · ") || "Экспедитор",
+                              value: user.id,
+                            }))
+                      }
+                      placeholder={isClientRole ? "UI-only поле" : undefined}
+                    />
+                  </Form.Item>
+
+                  <Form.Item name="factory_mode" hidden initialValue="existing">
+                    <Input />
+                  </Form.Item>
+
+                  <Form.Item
+                    name="factory_country_id"
+                    label="Страна"
+                    rules={[{ required: true, message: "Выберите страну" }]}
+                    className="crm-order-create-col"
                   >
                     <Select
                       showSearch
                       optionFilterProp="label"
-                      loading={postcodeCitiesQuery.isLoading}
-                      options={postcodeCityOptions}
-                      disabled={!createFactoryPostcodeId}
+                      loading={createCountriesQuery.isLoading}
+                      options={createCountryOptions}
+                      onChange={() => {
+                        createForm.setFieldValue("factory_id", undefined);
+                        createForm.setFieldValue("loading_address_id", undefined);
+                        createForm.setFieldValue("factory_contact_id", undefined);
+                        createForm.setFieldValue("loading_postcode_id_ui", undefined);
+                        createForm.setFieldValue("loading_city_id_ui", undefined);
+                        setPostcodeQuery("");
+                        setPostcodeQueryDebounced("");
+                      }}
                     />
                   </Form.Item>
 
-                  {canInlineCreatePostcodeCity ? (
-                    <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
-                      <Input
-                        placeholder="Новый город (inline create)"
-                        value={inlineCityValue}
-                        onChange={(event) => setInlineCityValue(event.target.value)}
-                      />
-                      <Button
-                        loading={createPostcodeCityMutation.isPending}
-                        onClick={() => {
-                          if (!createFactoryPostcodeId) {
-                            message.error("Сначала выберите индекс");
-                            return;
-                          }
-                          const city = trimOrUndefined(inlineCityValue);
-                          if (!city) {
-                            message.error("Введите город");
-                            return;
-                          }
-                          createPostcodeCityMutation.mutate({ postcodeId: createFactoryPostcodeId, city });
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true }]} className="crm-order-create-col">
+                      {(() => {
+                        const source = factoryOptionsQuery.data ?? [];
+                        const options =
+                          createdFactoryOption && !source.some((factory) => factory.id === createdFactoryOption.id)
+                            ? [createdFactoryOption, ...source]
+                            : source;
+                        return (
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={factoryOptionsQuery.isLoading}
+                        disabled={!createFactoryCountryId}
+                        options={options.map((factory) => ({
+                          label: factory.subtitle ? `${factory.name} (${factory.subtitle})` : factory.name,
+                          value: factory.id,
+                        }))}
+                        onSearch={setFactorySearchTerm}
+                        onChange={() => {
+                          createForm.setFieldValue("loading_address_id", undefined);
+                          createForm.setFieldValue("factory_contact_id", undefined);
                         }}
+                        dropdownRender={(menu) => (
+                          <>
+                            {menu}
+                            <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                              <Button
+                                type="link"
+                                style={{ padding: 0 }}
+                                onClick={() => {
+                                  createForm.setFieldValue("factory_mode", "create");
+                                  createForm.setFieldValue("factory_id", undefined);
+                                  createForm.setFieldValue("loading_address_id", undefined);
+                                  createForm.setFieldValue("factory_contact_id", undefined);
+                                  createForm.setFieldValue(["create_factory", "factory_name"], factorySearchTerm?.trim() || undefined);
+                                }}
+                              >
+                                Не нашли фабрику? Добавить вручную
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                        notFoundContent={createFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
+                      />
+                        );
+                      })()}
+                    </Form.Item>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name={["create_factory", "factory_name"]}
+                        label="Фабрика"
+                        rules={[{ required: true, message: "Введите название фабрики" }]}
+                        className="crm-order-create-col"
                       >
-                        Создать город
-                      </Button>
-                    </Space.Compact>
+                        <Input placeholder="Введите название фабрики" />
+                      </Form.Item>
+                      <Form.Item className="crm-order-create-col" style={{ marginTop: -8, marginBottom: 8 }}>
+                        <Button
+                          type="link"
+                          style={{ padding: 0 }}
+                          onClick={() => {
+                            createForm.setFieldValue("factory_mode", "existing");
+                            createForm.setFieldValue(["create_factory"], undefined);
+                          }}
+                        >
+                          Вернуться к поиску по базе
+                        </Button>
+                      </Form.Item>
+                    </>
+                  )}
+
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item
+                      name="loading_address_id"
+                      label="Название адреса"
+                      rules={[{ required: true }]}
+                      className="crm-order-create-col"
+                    >
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        loading={loadingAddressesQuery.isLoading}
+                        disabled={!createFactoryId}
+                        options={allLoadingAddresses.map((address) => ({
+                          label: (address.name?.trim() || address.address || "Адрес") + (address.is_primary ? " (Primary)" : ""),
+                          value: address.id,
+                        }))}
+                        dropdownRender={(menu) => (
+                          <>
+                            {menu}
+                            <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                              <Button
+                                type="link"
+                                style={{ padding: 0 }}
+                                onClick={() => {
+                                  factoryLoadingAddressQuickForm.resetFields();
+                                  setFactoryLoadingAddressModalOpen(true);
+                                }}
+                              >
+                                Добавить адрес
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                        notFoundContent={createFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name={["create_factory", "loading_address", "name"]}
+                        label="Название адреса"
+                        rules={[{ required: true, message: "Введите название адреса" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Input placeholder="Например: Основной склад" />
+                      </Form.Item>
+                      <Form.Item
+                        name={["create_factory", "loading_address", "address"]}
+                        label="Адрес погрузки"
+                        rules={[{ required: true, message: "Введите адрес погрузки" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Input placeholder="Введите адрес погрузки" />
+                      </Form.Item>
+                    </>
+                  )}
+
+                  {createFactoryMode === "existing" ? (
+                    <Form.Item label="Адрес погрузки" className="crm-order-create-col">
+                      <Input
+                        readOnly
+                        value={
+                          selectedLoadingAddress
+                            ? [
+                                selectedLoadingAddress.postcode,
+                                selectedLoadingAddress.city,
+                                selectedLoadingAddress.address,
+                              ]
+                                .filter(Boolean)
+                                .join(" -> ")
+                            : ""
+                        }
+                        placeholder={createFactoryId ? "Выберите название адреса" : "Сначала выберите фабрику"}
+                      />
+                    </Form.Item>
                   ) : null}
 
-                  <Form.Item
-                    name={["create_factory", "loading_address", "address"]}
-                    label="Адрес загрузки"
-                    rules={[{ required: true, message: "Укажите адрес" }]}
-                  >
-                    <Input />
+                  <Form.Item name="loading_postcode_id_ui" label="Индекс" className="crm-order-create-col">
+                    <Select
+                      showSearch
+                      filterOption={false}
+                      allowClear
+                      disabled={!createFactoryCountryId}
+                      loading={postcodeOptionsQuery.isLoading}
+                      options={postcodeOptions}
+                      onSearch={(value) => setPostcodeQuery(value)}
+                      onChange={(value) => {
+                        createForm.setFieldValue("loading_city_id_ui", undefined);
+                        if (createFactoryMode === "create") {
+                          createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], value ?? undefined);
+                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                        }
+                      }}
+                      placeholder={createFactoryCountryId ? "Начните вводить индекс" : "Сначала выберите страну"}
+                      notFoundContent={createFactoryCountryId ? "Индексы не найдены" : "Сначала выберите страну"}
+                    />
                   </Form.Item>
 
-                  <Form.Item
-                    name={["create_factory", "loading_address", "phone"]}
-                    label="Телефон адреса загрузки"
-                    rules={[
-                      { required: true, message: "Укажите телефон" },
-                      { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
-                    ]}
-                  >
-                    <Input />
+                  <Form.Item name="loading_city_id_ui" label="Город" className="crm-order-create-col">
+                    <Select
+                      allowClear
+                      disabled={!createLoadingPostcodeIdUi}
+                      loading={postcodeCitiesQuery.isLoading}
+                      options={cityOptions}
+                      onChange={(value) => {
+                        if (createFactoryMode === "create") {
+                          createForm.setFieldValue(["create_factory", "loading_address", "city_id"], value ?? undefined);
+                        }
+                      }}
+                      placeholder={createLoadingPostcodeIdUi ? "Выберите город" : "Сначала выберите индекс"}
+                      notFoundContent={createLoadingPostcodeIdUi ? "Нет городов для индекса" : "Сначала выберите индекс"}
+                    />
                   </Form.Item>
 
-                  <Form.Item name={["create_factory", "loading_address", "fax"]} label="Fax (опционально)">
-                    <Input />
-                  </Form.Item>
+                  {(createFactoryMode === "existing" || factoryCreateConfirmed) ? (
+                  <div className="crm-order-create-col crm-order-create-contact-block">
+                    <div className="crm-order-create-contact-head">
+                      <Typography.Text strong>Контакты</Typography.Text>
+                      <Button
+                        onClick={() => {
+                          factoryContactQuickForm.resetFields();
+                          setFactoryContactModalOpen(true);
+                        }}
+                      >
+                        Добавить
+                      </Button>
+                    </div>
 
-                  {canUseMessengerFields ? (
-                    <>
-                      <Form.Item name={["create_factory", "loading_address", "messenger_type"]} label="Тип мессенджера">
-                        <Select allowClear loading={messengerTypesQuery.isLoading} options={messengerTypeOptions} />
+                    {!isClientRole ? (
+                      <Form.Item
+                        name="factory_contact_id"
+                        label="Email"
+                        rules={[{ required: true, message: "Выберите email контакта фабрики" }]}
+                        className="crm-order-create-col"
+                      >
+                        <Select
+                          showSearch
+                          optionFilterProp="label"
+                          allowClear
+                          loading={factoryContactsQuery.isLoading}
+                          disabled={!createFactoryId}
+                          options={factoryContactEmailOptions}
+                          placeholder={createFactoryId ? "Выберите email контакта" : "Сначала выберите фабрику"}
+                        />
                       </Form.Item>
-                      <Form.Item name={["create_factory", "loading_address", "messenger_value"]} label="Контакт мессенджера">
+                    ) : (
+                      <Form.Item
+                        name={["create_factory_contact", "email"]}
+                        label="Email"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
+                        <Input />
+                      </Form.Item>
+                    )}
+
+                    <Form.Item
+                      name={["create_factory_contact", "full_name"]}
+                      label="Имя"
+                      rules={!isClientRole ? [{ required: true, message: "Укажите имя контакта фабрики" }] : undefined}
+                      className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only до backend parity" : undefined}
+                    >
+                      <Input readOnly={!isClientRole} />
+                    </Form.Item>
+
+                    <Form.Item
+                      name={["create_factory_contact", "phone"]}
+                      label="Телефон"
+                      rules={
+                        !isClientRole
+                          ? [
+                              { required: true, message: "Укажите телефон контакта фабрики" },
+                              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+                            ]
+                          : undefined
+                      }
+                      className="crm-order-create-col"
+                      extra={isClientRole ? "UI-only до backend parity" : undefined}
+                    >
+                      <Input readOnly={!isClientRole} />
+                    </Form.Item>
+                  </div>
+                  ) : (
+                    <Typography.Text type="secondary" className="crm-order-create-col">
+                      Заполните кастомную фабрику и подтвердите создание, чтобы перейти к контактам.
+                    </Typography.Text>
+                  )}
+
+                  <Form.Item
+                    name="ready_date"
+                    label="Дата готовности"
+                    rules={[{ required: true }]}
+                    className="crm-order-create-col"
+                  >
+                    <DatePicker
+                      style={{ width: "100%" }}
+                      format="YYYY-MM-DD"
+                      disabledDate={(current) =>
+                        Boolean(current && current.startOf("day").isBefore(dayjs().startOf("day")))
+                      }
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="Вывоз" className="crm-order-create-col">
+                    <Space.Compact style={{ width: "100%" }}>
+                      <Form.Item name="pickup_date_from" noStyle>
+                        <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="От" />
+                      </Form.Item>
+                      <Form.Item
+                        name="pickup_date_to"
+                        noStyle
+                        dependencies={["pickup_date_from"]}
+                        rules={[
+                          ({ getFieldValue }) => ({
+                            validator(_, value: dayjs.Dayjs | undefined) {
+                              const from = getFieldValue("pickup_date_from") as dayjs.Dayjs | undefined;
+                              if (!from || !value || !from.isAfter(value, "day")) {
+                                return Promise.resolve();
+                              }
+                              return Promise.reject(new Error("Дата 'До' должна быть не раньше даты 'От'"));
+                            },
+                          }),
+                        ]}
+                      >
+                        <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="До" />
+                      </Form.Item>
+                    </Space.Compact>
+                  </Form.Item>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {createWizardStepKey === "order_data" ? (
+            <>
+              <div className="crm-order-create-section">
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Данные заказа
+                </Typography.Title>
+                <div className="crm-order-create-grid">
+                  <Form.Item name="invoice_number" label="Номер инвойса" className="crm-order-create-col">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="Валюта" className="crm-order-create-col">
+                    <div className="crm-order-currency-row">
+                      <Form.Item name="client_goods_value_currency" noStyle>
+                        <Select
+                          className="crm-order-currency-select"
+                          options={[
+                            { label: "USD", value: "USD" },
+                            { label: "RUB", value: "RUB" },
+                            { label: "EUR", value: "EUR" },
+                            { label: "OTHER", value: "OTHER" },
+                          ]}
+                        />
+                      </Form.Item>
+                      {createClientGoodsValueCurrency === "OTHER" ? (
+                        <Form.Item
+                          name="client_goods_value_currency_other_label"
+                          rules={[{ required: true, message: "Укажите валюту" }]}
+                          className="crm-order-currency-inline-item"
+                        >
+                          <Input className="crm-order-currency-select" placeholder="Введите валюту" />
+                        </Form.Item>
+                      ) : null}
+                    </div>
+                  </Form.Item>
+                  <Form.Item name="client_goods_value_amount" label="Сумма" className="crm-order-create-col">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="declared_volume_m3" label="Заявленный объем, м3" className="crm-order-create-col">
+                    <Input />
+                  </Form.Item>
+                  <div className="crm-order-create-col crm-order-inline-pair">
+                    <Form.Item name="declared_total_weight_kg" label="Вес, кг" className="crm-order-inline-pair-item">
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name="cargo_places_qty" label="Кол-во мест" className="crm-order-inline-pair-item">
+                      <InputNumber min={0} style={{ width: "100%" }} />
+                    </Form.Item>
+                  </div>
+                </div>
+              </div>
+
+              <div className="crm-order-create-section">
+                <div className="crm-order-create-grid">
+                  {!isClientRole ? (
+                    <>
+                      <Form.Item name="measurement_status" label="Перемер" className="crm-order-create-col">
+                        <Select allowClear options={measurementStatusOptions} />
+                      </Form.Item>
+                      <Form.Item name="weighing_status" label="Взвешивание" className="crm-order-create-col">
+                        <Select allowClear options={weighingStatusOptions} />
+                      </Form.Item>
+                    </>
+                  ) : (
+                    <>
+                      <Form.Item
+                        name="client_measurement_ui"
+                        label="Перемер"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        name="client_weighing_ui"
+                        label="Взвешивание"
+                        className="crm-order-create-col"
+                        extra="UI-only до backend parity"
+                      >
                         <Input />
                       </Form.Item>
                     </>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : (
-            <Typography.Text type="secondary">
-              Для типа заказа `request` используется отдельный backend path `POST /api/requests`.
-            </Typography.Text>
-          )}
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="additional_description" label="Описание груза">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-              <Form.Item name="comment" label="Комментарий">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-            </>
-          ) : (
-            <>
-              <Form.Item name="comment" label="Комментарий заявки">
-                <Input.TextArea rows={3} />
-              </Form.Item>
-              <Form.Item name="request_payload_json" label="payload_json (JSON, опционально)">
-                <Input.TextArea rows={3} placeholder='{"source":"web"}' />
-              </Form.Item>
-            </>
-          )}
-
-          {!isClientRole && !isRequestCreate ? (
-            <>
-              <Form.Item name="self_delivery" valuePropName="checked">
-                <Checkbox>Self-delivery</Checkbox>
-              </Form.Item>
-              <Form.Item noStyle shouldUpdate={(prev, next) => prev.self_delivery !== next.self_delivery}>
-                {({ getFieldValue }) =>
-                  getFieldValue("self_delivery") ? (
+                  )}
+                  <Form.Item
+                    label="Ценовой коэффициент"
+                    className="crm-order-create-col"
+                    extra="Расчет: client_goods_value_amount / declared_volume_m3"
+                  >
+                    <Input readOnly value={priceCoefficient} />
+                  </Form.Item>
+                  <Form.Item
+                    label="Весовой коэффициент"
+                    className="crm-order-create-col"
+                    extra="Расчет: declared_volume_m3 / declared_total_weight_kg"
+                  >
+                    <Input readOnly value={weightCoefficient} />
+                  </Form.Item>
+                  <Form.Item name="certificate_intent_enabled" valuePropName="checked" className="crm-order-create-col">
+                    <Checkbox>Сертификат</Checkbox>
+                  </Form.Item>
+                  {createCertificateIntentEnabled ? (
                     <Form.Item
-                      name="self_delivery_forwarder_user_id"
-                      label="Экспедитор для self-delivery"
-                      rules={[{ required: true, message: "Выберите экспедитора" }]}
+                      name="certificate_intent"
+                      label="Сертификат: вариант"
+                      className="crm-order-create-col"
+                      rules={[{ required: true, message: "Выберите вариант сертификата" }]}
                     >
                       <Select
-                        loading={createMetadataQuery.isLoading}
-                        options={selfDeliveryForwarderOptions}
+                        allowClear
+                        options={certificateIntentOptions}
                         placeholder={
-                          selfDeliveryForwarderOptions.length ? undefined : "Нет доступных экспедиторов в metadata"
+                          certificateIntentOptions.length
+                            ? "Выберите вариант"
+                            : "Нет certificate_intent_options в metadata"
                         }
                       />
                     </Form.Item>
-                  ) : null
-                }
-              </Form.Item>
+                  ) : null}
+                </div>
+              </div>
             </>
           ) : null}
 
-          {!isClientRole && canEditRestrictedCreateFields && !isRequestCreate ? (
+          {createWizardStepKey === "goods" ? (
             <>
-              <Form.Item name="priority_codes" label="Priority codes">
-                <Select mode="multiple" allowClear options={priorityOptions} />
-              </Form.Item>
-              <Form.Item name="office_mark_codes" label="Office mark codes">
-                <Select mode="multiple" allowClear options={officeMarkOptions} />
-              </Form.Item>
-              <Form.Item name="product_characteristic_codes" label="Product characteristic codes">
-                <Select mode="multiple" allowClear options={productCharacteristicOptions} />
-              </Form.Item>
-              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
-                <Select
-                  allowClear
-                  loading={forwardersQuery.isLoading}
-                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                    label: `${user.id} - ${user.full_name || user.login}`,
-                    value: user.id,
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item name="factory_payment_via_label" label="Оплата фабрики через">
-                <Input />
-              </Form.Item>
-              <Form.Item name="is_factory_payment_completed" valuePropName="checked">
-                <Checkbox>Оплата фабрики завершена</Checkbox>
-              </Form.Item>
-              <Form.Item name="is_checked" valuePropName="checked">
-                <Checkbox>Проверено офисом</Checkbox>
-              </Form.Item>
-              <Form.Item name="measurement_status" label="Статус измерений">
-                <Select allowClear options={measurementStatusOptions} />
-              </Form.Item>
-              <Form.Item name="measurement_comment" label="Комментарий измерений">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="weighing_status" label="Статус взвешивания">
-                <Select allowClear options={weighingStatusOptions} />
-              </Form.Item>
-              <Form.Item name="weighing_comment" label="Комментарий взвешивания">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="user_comment" label="Комментарий клиента (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="forwarder_comment" label="Комментарий экспедитора (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
-              <Form.Item name="warehouse_comment" label="Комментарий склада (внутр.)">
-                <Input.TextArea rows={2} />
-              </Form.Item>
+              <div className="crm-order-create-section">
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Товары
+                </Typography.Title>
+                <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                  <Button onClick={openCreateGoodsLineModal} block>
+                    Добавить строку товара
+                  </Button>
+                  {goodsLineRows.map((line, index) => (
+                    <Card
+                      key={`goods-line-${index}`}
+                      size="small"
+                      extra={
+                        <Space>
+                          <Button size="small" onClick={() => openEditGoodsLineModal(index)}>
+                            изменить
+                          </Button>
+                          <Button danger size="small" onClick={() => removeGoodsLine(index)}>
+                            удалить
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      <Typography.Text>{getGoodsLineSummary(line)}</Typography.Text>
+                      <div style={{ marginTop: 8 }}>
+                        <Typography.Text type="secondary">
+                          {trimOrUndefined(line.description) ?? "—"}
+                        </Typography.Text>
+                      </div>
+                    </Card>
+                  ))}
+                </Space>
+              </div>
+
+              <div className="crm-order-create-section">
+                <div className="crm-order-create-grid">
+                  <Form.Item
+                    name="additional_description"
+                    label="Описание"
+                    className="crm-order-create-col crm-order-create-col-full"
+                  >
+                    <Input.TextArea rows={4} />
+                  </Form.Item>
+                  <Form.Item name="comment" label="Комментарий" className="crm-order-create-col">
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  <Form.Item name="product_characteristic_codes" label="Характеристики" className="crm-order-create-col">
+                    <Select mode="multiple" allowClear options={productCharacteristicOptions} />
+                  </Form.Item>
+                  {!isClientRole && canEditRestrictedCreateFields ? (
+                    <Form.Item name="office_mark_codes" label="Отметки офиса" className="crm-order-create-col">
+                      <Select mode="multiple" allowClear options={officeMarkOptions} />
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="office_mark_codes"
+                      label="Отметки офиса"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Select mode="tags" allowClear tokenSeparators={[","]} />
+                    </Form.Item>
+                  ) : null}
+                  <Form.Item
+                    name="is_1c"
+                    valuePropName="checked"
+                    className="crm-order-create-col"
+                    extra={isClientRole ? "UI-only до backend parity" : undefined}
+                  >
+                    <Checkbox>1С</Checkbox>
+                  </Form.Item>
+                  {!isClientRole && canEditRestrictedCreateFields ? (
+                    <Form.Item name="is_factory_payment_via_company" valuePropName="checked" className="crm-order-create-col">
+                      <Checkbox>Оплата через компанию</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_factory_payment_via_company"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Checkbox>Оплата через компанию</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {!isClientRole && canEditRestrictedCreateFields ? (
+                    <Form.Item name="is_checked" valuePropName="checked" className="crm-order-create-col">
+                      <Checkbox>Проверен</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_checked"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Checkbox>Проверен</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {!isClientRole && canEditRestrictedCreateFields ? (
+                    <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-create-col">
+                      <Checkbox>Оплачено компанией</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {isClientRole ? (
+                    <Form.Item
+                      name="is_factory_payment_completed"
+                      valuePropName="checked"
+                      className="crm-order-create-col"
+                      extra="UI-only до backend parity"
+                    >
+                      <Checkbox>Оплачено компанией</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                </div>
+              </div>
             </>
           ) : null}
 
-          {!isRequestCreate ? (
-            <>
-              <Typography.Title level={5} style={{ marginTop: 8 }}>
-                Строки товара
-              </Typography.Title>
-              <Form.List name="goods_lines">
+          {createWizardStepKey === "documents" ? (
+            <div className="crm-order-create-section">
+              {isRequestCreate ? (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Описание
+                </Typography.Title>
+              ) : (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Документы
+                </Typography.Title>
+              )}
+              {isRequestCreate ? (
+                <Form.Item
+                  name="additional_description"
+                  rules={[{ required: true, message: "Заполните описание" }]}
+                >
+                  <Input.TextArea rows={10} />
+                </Form.Item>
+              ) : null}
+              {isRequestCreate ? (
+                <Typography.Title level={5} className="crm-order-create-section-title">
+                  Документы
+                </Typography.Title>
+              ) : null}
+              <Form.List name="documents">
                 {(fields, { add, remove }) => (
-                  <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                  <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                    <Button onClick={() => add()} block disabled={fields.length >= 10}>
+                      Добавить документ
+                    </Button>
                     {fields.map((field) => (
                       <Card
                         key={field.key}
                         size="small"
-                        title={`Строка #${field.name + 1}`}
+                        title={`Документ #${field.name + 1}`}
                         extra={
                           <Button danger size="small" onClick={() => remove(field.name)}>
                             Удалить
                           </Button>
                         }
                       >
-                        <Form.Item name={[field.name, "item_type"]} label="Тип позиции">
-                          <Select
-                            allowClear
-                            options={[
-                              ...itemTypeOptions,
-                              { label: "Other", value: "other" },
-                            ]}
-                          />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "custom_item_type"]} label="Custom тип (если other)">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "description"]} label="Описание">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "weight_kg"]} label="Вес, кг">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_value"]} label="Количество">
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name={[field.name, "quantity_unit"]} label="Ед. изм.">
-                          <Select allowClear options={QUANTITY_UNIT_FALLBACK_OPTIONS} />
-                        </Form.Item>
+                        <div className="crm-order-create-grid">
+                          <Form.Item
+                            name={[field.name, "document_type"]}
+                            label="Тип документа"
+                            rules={[{ required: true, message: "Укажите тип документа" }]}
+                            className="crm-order-create-col"
+                          >
+                            <Select allowClear options={isRequestCreate ? REQUEST_DOCUMENT_TYPE_OPTIONS : documentTypeOptions} />
+                          </Form.Item>
+                          <Form.Item
+                            name={[field.name, "file_list"]}
+                            label="Выбрать файл"
+                            valuePropName="fileList"
+                            getValueFromEvent={(event) => event?.fileList}
+                            rules={[{ required: true, message: "Выберите файл" }]}
+                            className="crm-order-create-col"
+                          >
+                            <Upload
+                              accept={isRequestCreate ? ".doc,.docx,.xlsx,.xls,.pdf,.zip" : undefined}
+                              beforeUpload={() => false}
+                              maxCount={1}
+                            >
+                              <Button>Выбрать файл</Button>
+                            </Upload>
+                          </Form.Item>
+                        </div>
                       </Card>
                     ))}
-                    <Button onClick={() => add()} block>
-                      Добавить строку товара
-                    </Button>
                   </Space>
                 )}
               </Form.List>
-            </>
-          ) : null}
-
-          <Typography.Title level={5} style={{ marginTop: 12 }}>
-            Документы (до 10 файлов)
-          </Typography.Title>
-          <Form.List name="documents">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: "100%" }} size={12}>
-                {fields.map((field) => (
-                  <Card
-                    key={field.key}
-                    size="small"
-                    title={`Документ #${field.name + 1}`}
-                    extra={
-                      <Button danger size="small" onClick={() => remove(field.name)}>
-                        Удалить
-                      </Button>
-                    }
-                  >
-                    <Form.Item
-                      name={[field.name, "document_type"]}
-                      label="Тип документа"
-                      rules={[{ required: true, message: "Укажите тип документа" }]}
-                    >
-                      <Select
-                        allowClear
-                        options={documentTypeOptions.length ? documentTypeOptions : [{ label: "attachment", value: "attachment" }]}
-                      />
-                    </Form.Item>
-                    <Form.Item name={[field.name, "display_name"]} label="Отображаемое имя (опционально)">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "file_list"]}
-                      label="Файл"
-                      valuePropName="fileList"
-                      getValueFromEvent={(event) => event?.fileList}
-                      rules={[{ required: true, message: "Выберите файл" }]}
-                    >
-                      <Upload beforeUpload={() => false} maxCount={1}>
-                        <Button>Выбрать файл</Button>
-                      </Upload>
-                    </Form.Item>
-                  </Card>
-                ))}
-                <Button onClick={() => add()} block disabled={fields.length >= 10}>
-                  Добавить документ
-                </Button>
-              </Space>
-            )}
-          </Form.List>
-
-          {!isRequestCreate ? (
-            <>
-              <Form.Item name="declared_volume_m3" label="Declared volume (m3)">
-                <Input />
-              </Form.Item>
-              <Form.Item name="declared_total_weight_kg" label="Declared total weight (kg)">
-                <Input />
-              </Form.Item>
-              <Form.Item name="cargo_places_qty" label="Cargo places qty">
-                <InputNumber min={0} style={{ width: "100%" }} />
-              </Form.Item>
-              <Form.Item name="client_goods_value_amount" label="Goods value amount">
-                <Input />
-              </Form.Item>
-              <Form.Item name="client_goods_value_currency" label="Goods value currency">
-                <Input />
-              </Form.Item>
-            </>
+            </div>
           ) : null}
         </Form>
       </Modal>
 
       <Modal
-        title={selected ? `Редактировать заказ #${selected.id}` : "Редактировать заказ"}
-        open={editOpen}
+        title="Новый контакт фабрики"
+        open={factoryContactModalOpen}
+        forceRender
         destroyOnHidden
-        onCancel={() => setEditOpen(false)}
-        onOk={() => editForm.submit()}
-        confirmLoading={updateMutation.isPending}
+        onCancel={() => setFactoryContactModalOpen(false)}
+        onOk={() => factoryContactQuickForm.submit()}
       >
+        <Form
+          form={factoryContactQuickForm}
+          layout="vertical"
+          onFinish={(values: { full_name?: string; phone?: string; email?: string }) => {
+            const fullName = trimOrUndefined(values.full_name);
+            const phone = trimOrUndefined(values.phone);
+            const email = trimOrUndefined(values.email);
+            if (!fullName || !phone) {
+              message.error("Заполните имя и телефон");
+              return;
+            }
+            if (!email) {
+              message.error("Заполните email");
+              return;
+            }
+            if (!createFactoryId) {
+              message.error("Сначала выберите фабрику");
+              return;
+            }
+            createFactoryContactMutation.mutate({
+              factoryId: createFactoryId,
+              full_name: fullName,
+              phone,
+              email,
+            });
+          }}
+        >
+          <Form.Item name="full_name" label="Имя" rules={[{ required: true, message: "Укажите имя" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Укажите телефон" },
+              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[
+              { required: true, message: "Укажите email" },
+              { type: "email", message: "Введите корректный email" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый адрес погрузки"
+        open={factoryLoadingAddressModalOpen}
+        forceRender
+        destroyOnHidden
+        onCancel={() => setFactoryLoadingAddressModalOpen(false)}
+        onOk={() => factoryLoadingAddressQuickForm.submit()}
+      >
+        <Form
+          form={factoryLoadingAddressQuickForm}
+          layout="vertical"
+          onFinish={(values: { name?: string; address?: string; postcode_id?: number; city_id?: number }) => {
+            const name = trimOrUndefined(values.name);
+            const address = trimOrUndefined(values.address);
+            const postcodeId = values.postcode_id;
+            const cityId = values.city_id;
+            if (!name || !address || !postcodeId || !cityId) {
+              message.error("Заполните название, индекс, город и адрес");
+              return;
+            }
+            if (!createFactoryId || !createFactoryCountryId) {
+              message.error("Сначала выберите фабрику и страну");
+              return;
+            }
+            createFactoryLoadingAddressMutation.mutate({
+              factoryId: createFactoryId,
+              countryId: createFactoryCountryId,
+              name,
+              address,
+              postcode_id: postcodeId,
+              city_id: cityId,
+            });
+          }}
+        >
+          <Form.Item name="name" label="Название адреса" rules={[{ required: true, message: "Укажите название" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="postcode_id" label="Индекс" rules={[{ required: true, message: "Выберите индекс" }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              options={postcodeOptions}
+              onSearch={(value) => setPostcodeQuery(value)}
+              onChange={() => {
+                factoryLoadingAddressQuickForm.setFieldValue("city_id", undefined);
+              }}
+              placeholder="Начните вводить индекс"
+              notFoundContent="Индексы не найдены"
+            />
+          </Form.Item>
+          <Form.Item
+            name="city_id"
+            label="Город"
+            rules={[{ required: true, message: "Выберите город" }]}
+            dependencies={["postcode_id"]}
+          >
+            <Select
+              allowClear
+              disabled={!factoryLoadingAddressQuickForm.getFieldValue("postcode_id")}
+              loading={loadingAddressQuickCitiesQuery.isLoading}
+              options={(loadingAddressQuickCitiesQuery.data?.items ?? []).map((city) => ({
+                label: city.city,
+                value: city.id,
+              }))}
+              placeholder="Выберите город"
+              notFoundContent="Нет городов для индекса"
+            />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес погрузки" rules={[{ required: true, message: "Укажите адрес" }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый адрес погрузки"
+        open={editFactoryLoadingAddressModalOpen}
+        forceRender
+        destroyOnHidden
+        onCancel={() => setEditFactoryLoadingAddressModalOpen(false)}
+        onOk={() => editFactoryLoadingAddressQuickForm.submit()}
+      >
+        <Form
+          form={editFactoryLoadingAddressQuickForm}
+          layout="vertical"
+          onFinish={(values: { name?: string; address?: string; postcode_id?: number; city_id?: number }) => {
+            const name = trimOrUndefined(values.name);
+            const address = trimOrUndefined(values.address);
+            const postcodeId = values.postcode_id;
+            const cityId = values.city_id;
+            if (!name || !address || !postcodeId || !cityId) {
+              message.error("Заполните название, индекс, город и адрес");
+              return;
+            }
+            if (!editFactoryId || !editFactoryCountryId) {
+              message.error("Сначала выберите фабрику и страну");
+              return;
+            }
+            editFactoryLoadingAddressMutation.mutate({
+              factoryId: editFactoryId,
+              countryId: editFactoryCountryId,
+              name,
+              address,
+              postcode_id: postcodeId,
+              city_id: cityId,
+            });
+          }}
+        >
+          <Form.Item name="name" label="Название адреса" rules={[{ required: true, message: "Укажите название" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="postcode_id" label="Индекс" rules={[{ required: true, message: "Выберите индекс" }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              options={editPostcodeOptions}
+              onSearch={(value) => setEditPostcodeQuery(value)}
+              onChange={() => {
+                editFactoryLoadingAddressQuickForm.setFieldValue("city_id", undefined);
+              }}
+              placeholder="Начните вводить индекс"
+              notFoundContent="Индексы не найдены"
+            />
+          </Form.Item>
+          <Form.Item
+            name="city_id"
+            label="Город"
+            rules={[{ required: true, message: "Выберите город" }]}
+            dependencies={["postcode_id"]}
+          >
+            <Select
+              allowClear
+              disabled={!editFactoryLoadingAddressQuickForm.getFieldValue("postcode_id")}
+              loading={editLoadingAddressQuickCitiesQuery.isLoading}
+              options={(editLoadingAddressQuickCitiesQuery.data?.items ?? []).map((city) => ({
+                label: city.city,
+                value: city.id,
+              }))}
+              placeholder="Выберите город"
+              notFoundContent="Нет городов для индекса"
+            />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес погрузки" rules={[{ required: true, message: "Укажите адрес" }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={goodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
+        open={goodsLineModalOpen}
+        forceRender
+        onCancel={() => {
+          setGoodsLineModalOpen(false);
+          setGoodsLineEditIndex(null);
+          goodsLineQuickForm.resetFields();
+        }}
+        onOk={() => goodsLineQuickForm.submit()}
+      >
+        <Form<OrderCreateGoodsLineForm> form={goodsLineQuickForm} layout="vertical" onFinish={saveGoodsLine}>
+          <Form.Item name="item_type" label="Тип товара">
+            <Select allowClear options={itemTypeOptions} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.item_type !== next.item_type}>
+            {({ getFieldValue }) =>
+              getFieldValue("item_type") === "other" ? (
+                <Form.Item
+                  name="custom_item_type"
+                  label="Свой тип (если другой)"
+                  rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+          <Form.Item name="weight_kg" label="Вес, кг">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_unit" label="Единицы изм.">
+            <Select allowClear options={quantityUnitOptions} />
+          </Form.Item>
+          <Form.Item name="quantity_value" label="Кол-во">
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Описание">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editGoodsLineEditIndex === null ? "Добавить строку товара" : "Изменить строку товара"}
+        open={editGoodsLineModalOpen}
+        forceRender
+        onCancel={() => {
+          setEditGoodsLineModalOpen(false);
+          setEditGoodsLineEditIndex(null);
+          editGoodsLineQuickForm.resetFields();
+        }}
+        onOk={() => editGoodsLineQuickForm.submit()}
+      >
+        <Form<OrderCreateGoodsLineForm> form={editGoodsLineQuickForm} layout="vertical" onFinish={saveEditOrderGoodsLine}>
+          <Form.Item name="item_type" label="Тип товара">
+            <Select allowClear options={editItemTypeOptions} />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.item_type !== next.item_type}>
+            {({ getFieldValue }) =>
+              getFieldValue("item_type") === "other" ? (
+                <Form.Item
+                  name="custom_item_type"
+                  label="Свой тип (если другой)"
+                  rules={[{ required: true, message: "Укажите свой тип для 'другой'" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+          <Form.Item name="weight_kg" label="Вес, кг">
+            <Input />
+          </Form.Item>
+          <Form.Item name="quantity_unit" label="Единицы изм.">
+            <Select allowClear options={editQuantityUnitOptions} />
+          </Form.Item>
+          <Form.Item name="quantity_value" label="Кол-во">
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Описание">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Новый контакт фабрики"
+        open={editFactoryContactModalOpen}
+        forceRender
+        destroyOnHidden
+        onCancel={() => setEditFactoryContactModalOpen(false)}
+        onOk={() => editFactoryContactQuickForm.submit()}
+      >
+        <Form
+          form={editFactoryContactQuickForm}
+          layout="vertical"
+          onFinish={(values: { full_name?: string; phone?: string; email?: string }) => {
+            const fullName = trimOrUndefined(values.full_name);
+            const phone = trimOrUndefined(values.phone);
+            const email = trimOrUndefined(values.email);
+            if (!fullName || !phone || !email) {
+              message.error("Заполните имя, телефон и email");
+              return;
+            }
+            if (!editFactoryId) {
+              message.error("Сначала выберите фабрику");
+              return;
+            }
+            editFactoryContactMutation.mutate({
+              factoryId: editFactoryId,
+              full_name: fullName,
+              phone,
+              email,
+            });
+          }}
+        >
+          <Form.Item name="full_name" label="Имя" rules={[{ required: true, message: "Укажите имя" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Укажите телефон" },
+              { pattern: PHONE_FORMAT_REGEX, message: "Допустимы цифры, пробелы и символы + ( ) -" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[
+              { required: true, message: "Укажите email" },
+              { type: "email", message: "Введите корректный email" },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {standaloneOrderView ? (
+        <div className="crm-order-detail-layout">
+        {editOpen ? (
+        <Card className="crm-panel crm-order-detail-left crm-order-edit-page-card">
+        <div className="crm-order-edit-header">
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {selected ? `Редактирование заказа #${selected.id}` : "Редактирование заказа"}
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Последнее изменение:{" "}
+            {editDetailQuery.data?.order?.status_date ? dayjs(editDetailQuery.data.order.status_date).format("DD.MM.YYYY HH:mm") : "—"}
+          </Typography.Text>
+          <Typography.Text type="secondary">Изменил: —</Typography.Text>
+          {!isEditMode ? (
+            <Button type="primary" onClick={() => setIsEditMode(true)}>
+              Редактировать
+            </Button>
+          ) : null}
+        </div>
         <Form<OrderEditForm>
           form={editForm}
           layout="vertical"
+          disabled={!isEditMode}
+          className={`crm-order-edit-form${isEditMode ? "" : " crm-order-edit-form-readonly"}`}
+          onValuesChange={(changedValues, allValues) => {
+            if (isRehydratingEditFormRef.current || !selectedOrderId) return;
+            mergeEditDraft(selectedOrderId, {
+              ...(allValues as Record<string, unknown>),
+              ...(changedValues as Record<string, unknown>),
+            });
+          }}
           onFinish={(values) => {
             if (!selected) return;
             updateMutation.mutate({ id: selected.id, payload: values });
           }}
         >
-          <Form.Item name="order_number" label="Номер заказа">
-            <Input />
-          </Form.Item>
-          <Form.Item name="comment" label="Комментарий">
-            <Input.TextArea rows={3} />
-          </Form.Item>
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="order_date" label="Дата заказа">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" disabled />
+              </Form.Item>
+              <Form.Item name="status_name" label="Статус">
+                <Select allowClear options={ORDER_STATUS_VALUES.map((status) => ({ label: formatEnumCode(status), value: status }))} />
+              </Form.Item>
+              <Form.Item name="status_date" label="Дата изменения статуса">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item name="order_number" label="Номер заказа (внутренний номер клиента)">
+                <Input />
+              </Form.Item>
+              <Form.Item name="company_id" label="Компания">
+                <Select
+                  showSearch
+                  filterOption={false}
+                  loading={editClientCompaniesQuery.isLoading}
+                  options={editCompanyOptions}
+                  onSearch={(value) => setEditCompanyQueryText(value)}
+                  placeholder="Введите название компании"
+                  notFoundContent={editClientCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                />
+              </Form.Item>
+              <Form.Item name="company_contact_id" label="Имя клиента">
+                <Select
+                  allowClear
+                  disabled={!isEditMode || !editCompanyId}
+                  options={selectedEditCompanyContacts.map((contact) => ({
+                    label: [contact.full_name, contact.email, contact.phone].filter(Boolean).join(" · "),
+                    value: contact.id,
+                  }))}
+                  placeholder={selectedEditCompanyContacts.length ? "Выберите клиента" : "Сначала выберите компанию"}
+                />
+              </Form.Item>
+              <Form.Item name="invoice_on_other_company" valuePropName="checked">
+                <Checkbox>Инвойс на другую компанию</Checkbox>
+              </Form.Item>
+              <Form.Item name="invoice_company_name" label="Название компании, на которую будет оформлен груз">
+                <Input />
+              </Form.Item>
+            </div>
+          </div>
+
+          <div className="crm-order-create-section crm-order-create-factory-section">
+            <Typography.Title level={5} className="crm-order-create-section-title">
+              Фабрика
+            </Typography.Title>
+            <div className="crm-order-create-grid">
+              <Form.Item name="self_delivery" valuePropName="checked">
+                <Checkbox>Самодоставка</Checkbox>
+              </Form.Item>
+              <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
+                <Select
+                  allowClear
+                  loading={forwardersQuery.isLoading}
+                  options={(forwardersQuery.data?.items ?? []).map((user) => ({
+                    label: [user.full_name, user.login].filter(Boolean).join(" · "),
+                    value: user.id,
+                  }))}
+                  notFoundContent={forwardersQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
+                />
+              </Form.Item>
+              {editSelfDelivery ? (
+                <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
+                  <Select
+                    allowClear
+                    loading={editMetadataQuery.isLoading}
+                    options={(editMetadataQuery.data?.self_delivery_forwarder_options ?? []).map((forwarder) => ({
+                      label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · "),
+                      value: forwarder.id,
+                    }))}
+                    notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
+                  />
+                </Form.Item>
+              ) : null}
+              <Form.Item name="factory_mode" hidden initialValue="existing">
+                <Input />
+              </Form.Item>
+              <Form.Item name="factory_country_id" label="Страна">
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  allowClear
+                  loading={editCountriesQuery.isLoading}
+                  disabled={!isEditMode || !canWriteOrder}
+                  notFoundContent={editCountriesQuery.isLoading ? "Загрузка..." : "Страны не найдены"}
+                  options={editCountryOptions}
+                  placeholder="Выберите страну"
+                  onChange={() => {
+                    editForm.setFieldValue("factory_mode", "existing");
+                    editForm.setFieldValue("factory_id", undefined);
+                    editForm.setFieldValue("loading_address_id", undefined);
+                    editForm.setFieldValue("factory_contact_id", undefined);
+                    editForm.setFieldValue(["create_factory"], undefined);
+                    editForm.setFieldValue("loading_postcode_id_ui", undefined);
+                    editForm.setFieldValue("loading_city_id_ui", undefined);
+                    editForm.setFieldValue("loading_address_line", undefined);
+                    editForm.setFieldValue("loading_address_fax", undefined);
+                    editForm.setFieldValue("factory_contact_email", undefined);
+                    editForm.setFieldValue("factory_contact_name", undefined);
+                    editForm.setFieldValue("factory_contact_phone", undefined);
+                    setEditPostcodeQuery("");
+                    setEditPostcodeQueryDebounced("");
+                  }}
+                />
+              </Form.Item>
+              {editFactoryMode === "existing" ? (
+                <Form.Item name="factory_id" label="Фабрика" rules={[{ required: true, message: "Выберите фабрику" }]}>
+                  <Select
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    loading={editFactoryOptionsQuery.isLoading}
+                    disabled={!isEditMode || !editFactoryCountryId}
+                    options={editFactoryOptions}
+                    onSearch={setEditFactorySearchTerm}
+                    onChange={() => {
+                      editForm.setFieldValue("loading_address_id", undefined);
+                      editForm.setFieldValue("factory_contact_id", undefined);
+                      editForm.setFieldValue("factory_contact_email", undefined);
+                      editForm.setFieldValue("factory_contact_name", undefined);
+                      editForm.setFieldValue("factory_contact_phone", undefined);
+                    }}
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                          <Button
+                            type="link"
+                            style={{ padding: 0 }}
+                            disabled={!isEditMode}
+                            onClick={() => {
+                              editForm.setFieldValue("factory_mode", "create");
+                              editForm.setFieldValue("factory_id", undefined);
+                              editForm.setFieldValue("loading_address_id", undefined);
+                              editForm.setFieldValue("factory_contact_id", undefined);
+                              editForm.setFieldValue(["create_factory", "factory_name"], editFactorySearchTerm?.trim() || undefined);
+                            }}
+                          >
+                            Не нашли фабрику? Добавить вручную
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                    notFoundContent={editFactoryCountryId ? "Нет фабрик в выбранной стране" : "Сначала выберите страну"}
+                  />
+                </Form.Item>
+              ) : (
+                <>
+                  <Form.Item
+                    name={["create_factory", "factory_name"]}
+                    label="Фабрика"
+                    rules={[{ required: true, message: "Введите название фабрики" }]}
+                  >
+                    <Input placeholder="Введите название фабрики" />
+                  </Form.Item>
+                  <Form.Item style={{ marginTop: -8, marginBottom: 8 }}>
+                    <Button
+                      type="link"
+                      style={{ padding: 0 }}
+                      disabled={!isEditMode}
+                      onClick={() => {
+                        editForm.setFieldValue("factory_mode", "existing");
+                        editForm.setFieldValue(["create_factory"], undefined);
+                      }}
+                    >
+                      Вернуться к поиску по базе
+                    </Button>
+                  </Form.Item>
+                </>
+              )}
+              {editFactoryMode === "existing" ? (
+                <Form.Item
+                  name="loading_address_id"
+                  label="Название адреса"
+                  rules={[{ required: true, message: "Выберите адрес погрузки" }]}
+                >
+                  <Select
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    loading={editLoadingAddressesQuery.isLoading}
+                    disabled={!isEditMode || !editFactoryId}
+                    options={editLoadingAddressOptions}
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div style={{ padding: 8, borderTop: "1px solid #f0f0f0" }}>
+                          <Button
+                            type="link"
+                            style={{ padding: 0 }}
+                            disabled={!isEditMode}
+                            onClick={() => {
+                              editFactoryLoadingAddressQuickForm.resetFields();
+                              setEditFactoryLoadingAddressModalOpen(true);
+                            }}
+                          >
+                            Добавить адрес
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                    notFoundContent={editFactoryId ? "Нет адресов загрузки" : "Сначала выберите фабрику"}
+                  />
+                </Form.Item>
+              ) : (
+                <>
+                  <Form.Item
+                    name={["create_factory", "loading_address", "name"]}
+                    label="Название адреса"
+                    rules={[{ required: true, message: "Введите название адреса" }]}
+                  >
+                    <Input placeholder="Например: Основной склад" />
+                  </Form.Item>
+                  <Form.Item
+                    name={["create_factory", "loading_address", "address"]}
+                    label="Адрес погрузки"
+                    rules={[{ required: true, message: "Введите адрес погрузки" }]}
+                  >
+                    <Input placeholder="Введите адрес погрузки" />
+                  </Form.Item>
+                </>
+              )}
+              {editFactoryMode === "existing" ? (
+                <Form.Item label="Адрес погрузки">
+                  <Input
+                    readOnly
+                    value={
+                      selectedEditLoadingAddress
+                        ? [selectedEditLoadingAddress.postcode, selectedEditLoadingAddress.city, selectedEditLoadingAddress.address]
+                            .filter(Boolean)
+                            .join(" -> ")
+                        : ""
+                    }
+                    placeholder={editFactoryId ? "Выберите название адреса" : "Сначала выберите фабрику"}
+                  />
+                </Form.Item>
+              ) : null}
+              <Form.Item name="loading_postcode_id_ui" label="Индекс">
+                <Select
+                  showSearch
+                  filterOption={false}
+                  allowClear
+                  loading={editPostcodeOptionsQuery.isLoading}
+                  options={editPostcodeOptions}
+                  disabled={!isEditMode || !editFactoryCountryId}
+                  onSearch={(value) => setEditPostcodeQuery(value)}
+                  onChange={(value) => {
+                    editForm.setFieldValue("loading_city_id_ui", undefined);
+                    if (editFactoryMode === "create") {
+                      editForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], value ?? undefined);
+                      editForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                    }
+                  }}
+                  placeholder={editFactoryCountryId ? "Начните вводить индекс" : "Сначала выберите страну"}
+                  notFoundContent={editPostcodeOptionsQuery.isLoading ? "Загрузка..." : "Индексы не найдены"}
+                />
+              </Form.Item>
+              <Form.Item name="loading_city_id_ui" label="Город">
+                <Select
+                  allowClear
+                  loading={editPostcodeCitiesQuery.isLoading}
+                  options={editCityOptions}
+                  disabled={!isEditMode || !editLoadingPostcodeIdUi}
+                  onChange={(value) => {
+                    if (editFactoryMode === "create") {
+                      editForm.setFieldValue(["create_factory", "loading_address", "city_id"], value ?? undefined);
+                    }
+                  }}
+                  placeholder={editLoadingPostcodeIdUi ? "Выберите город" : "Сначала выберите индекс"}
+                  notFoundContent={editPostcodeCitiesQuery.isLoading ? "Загрузка..." : "Города не найдены"}
+                />
+              </Form.Item>
+              <Form.Item name="loading_address_line" label="Адрес">
+                <Input />
+              </Form.Item>
+              <Form.Item name="loading_address_fax" label="Факс">
+                <Input />
+              </Form.Item>
+              {(editFactoryMode === "existing" || editFactoryCreateConfirmed) ? (
+              <div className="crm-order-create-contact-block">
+                <div className="crm-order-create-contact-head">
+                  <Typography.Text strong>Контакты</Typography.Text>
+                  <Button
+                    disabled={!isEditMode || !editFactoryId}
+                    onClick={() => {
+                      editFactoryContactQuickForm.resetFields();
+                      setEditFactoryContactModalOpen(true);
+                    }}
+                  >
+                    Добавить
+                  </Button>
+                </div>
+                <Form.Item name="factory_contact_id" label="Email" rules={[{ required: true, message: "Выберите email контакта фабрики" }]}>
+                  <Select
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    loading={editFactoryContactsQuery.isLoading}
+                    disabled={!isEditMode || !editFactoryId}
+                    options={editFactoryContactEmailSelectOptions}
+                    onChange={(value) => {
+                      const selectedOption = editContactEmailOptions.find((item) => item.id === value);
+                      editForm.setFieldValue("factory_contact_email", selectedOption?.email ?? undefined);
+                      editForm.setFieldValue("factory_contact_name", selectedOption?.full_name ?? undefined);
+                      editForm.setFieldValue("factory_contact_phone", selectedOption?.phone ?? undefined);
+                      editForm.setFieldValue(["create_factory_contact", "email"], selectedOption?.email ?? undefined);
+                      editForm.setFieldValue(["create_factory_contact", "full_name"], selectedOption?.full_name ?? undefined);
+                      editForm.setFieldValue(["create_factory_contact", "phone"], selectedOption?.phone ?? undefined);
+                    }}
+                    notFoundContent={editFactoryContactsQuery.isLoading ? "Загрузка..." : "Контакты не найдены"}
+                  />
+                </Form.Item>
+                <Form.Item name="factory_contact_name" label="Имя">
+                  <Input readOnly />
+                </Form.Item>
+                <Form.Item name="factory_contact_phone" label="Телефон">
+                  <Input readOnly />
+                </Form.Item>
+              </div>
+              ) : (
+                <Typography.Text type="secondary">
+                  Заполните кастомную фабрику и подтвердите создание, чтобы перейти к контактам.
+                </Typography.Text>
+              )}
+            </div>
+          </div>
+
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="ready_date" label="Дата готовности">
+                <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+              </Form.Item>
+              <Form.Item label="Вывоз">
+                <Space.Compact style={{ width: "100%" }}>
+                  <Form.Item name="pickup_date_from" noStyle>
+                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="От" />
+                  </Form.Item>
+                  <Form.Item name="pickup_date_to" noStyle>
+                    <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="До" />
+                  </Form.Item>
+                </Space.Compact>
+              </Form.Item>
+              <Form.Item name="certificate_intent_enabled" valuePropName="checked">
+                <Checkbox>Сертификат</Checkbox>
+              </Form.Item>
+              {editCertificateIntentEnabled ? (
+                <Form.Item name="certificate_intent" label="Вариант сертификата">
+                  <Select
+                    allowClear
+                    loading={editMetadataQuery.isLoading}
+                    options={editCertificateIntentOptions}
+                    notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Варианты не найдены"}
+                  />
+                </Form.Item>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="crm-order-create-section">
+            <div className="crm-order-create-grid">
+              <Form.Item name="invoice_number" label="Номер инвойса/проформы">
+                <Input />
+              </Form.Item>
+              <Form.Item name="client_goods_value_amount" label="Стоимость товара от клиента">
+                <Input />
+              </Form.Item>
+              <Form.Item label="Валюта">
+                <div className="crm-order-currency-row">
+                  <Form.Item name="client_goods_value_currency" noStyle>
+                    <Select
+                      className="crm-order-currency-select"
+                      options={[
+                        { label: "USD", value: "USD" },
+                        { label: "RUB", value: "RUB" },
+                        { label: "EUR", value: "EUR" },
+                        { label: "OTHER", value: "OTHER" },
+                      ]}
+                    />
+                  </Form.Item>
+                  {editClientGoodsCurrency === "OTHER" ? (
+                    <Form.Item name="client_goods_value_currency_other_label" className="crm-order-currency-inline-item">
+                      <Input className="crm-order-currency-select" placeholder="Введите валюту" />
+                    </Form.Item>
+                  ) : null}
+                </div>
+              </Form.Item>
+              <Form.Item label="Перечень товаров">
+                <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                  <Form.List name="goods_lines">{() => null}</Form.List>
+                  {editGoodsLineRows.map((line, index) => (
+                    <Card
+                      key={`edit-goods-line-${index}`}
+                      size="small"
+                      extra={
+                        <Space>
+                          <Button size="small" disabled={!isEditMode} onClick={() => openUpdateOrderGoodsLineModal(index)}>
+                            изменить
+                          </Button>
+                          <Button danger size="small" disabled={!isEditMode} onClick={() => removeEditOrderGoodsLine(index)}>
+                            удалить
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      <Typography.Text>{getGoodsLineSummary(line)}</Typography.Text>
+                    </Card>
+                  ))}
+                  <Button disabled={!isEditMode} onClick={openEditOrderGoodsLineModal}>Добавить строку товара</Button>
+                </Space>
+              </Form.Item>
+              <Form.Item name="declared_volume_m3" label="Заявленный клиентом объем, м3">
+                <Input />
+              </Form.Item>
+              <Form.Item name="volume_m3" label="Объем из инвойса, м3">
+                <Input />
+              </Form.Item>
+              <Form.Item name="declared_total_weight_kg" label="Суммарный вес товаров, кг">
+                <Input />
+              </Form.Item>
+              <Form.Item name="cargo_places_qty" label="Кол-во грузовых мест">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="measurement_status" label="Перемер">
+                <Select allowClear options={editMeasurementStatusOptions} />
+              </Form.Item>
+              {String(editMeasurementStatus ?? "").toLowerCase() === "completed" ? (
+                <Form.Item name="actual_volume_m3" label="Актуальный объем, м3">
+                  <Input />
+                </Form.Item>
+              ) : null}
+              <Form.Item name="weighing_status" label="Взвешивание">
+                <Select allowClear options={editWeighingStatusOptions} />
+              </Form.Item>
+              {String(editWeighingStatus ?? "").toLowerCase() === "completed" ? (
+                <Form.Item name="actual_weight_kg" label="Актуальный вес, кг">
+                  <Input />
+                </Form.Item>
+              ) : null}
+              <Form.Item name="actual_qty" label="Актуальное количество">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item name="quantity_whs" label="На складе">
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+              <Form.Item label="Ценовой коэффициент" extra="Расчет: client_goods_value_amount / declared_volume_m3">
+                <Input readOnly value={editPriceCoefficient} />
+              </Form.Item>
+              <Form.Item label="Весовой коэффициент" extra="Расчет: declared_volume_m3 / declared_total_weight_kg">
+                <Input readOnly value={editWeightCoefficient} />
+              </Form.Item>
+              <Form.Item name="product_characteristic_codes" label="Характеристики товара">
+                <Select mode="multiple" allowClear options={editProductCharacteristicOptions} />
+              </Form.Item>
+              <Form.Item name="office_mark_codes" label="Отметки офиса">
+                <Select mode="multiple" allowClear options={editOfficeMarkOptions} />
+              </Form.Item>
+              <Form.Item name="additional_description" label="Описание заказа">
+                <Input.TextArea rows={5} />
+              </Form.Item>
+              <Form.Item name="comment" label="Комментарий (всё кроме описания заказа)">
+                <Input.TextArea rows={5} />
+              </Form.Item>
+              <div className="crm-order-inline-pair">
+                <Form.Item name="is_1c" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>1С</Checkbox>
+                </Form.Item>
+                <Form.Item name="is_factory_payment_via_company" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Оплата через компанию</Checkbox>
+                </Form.Item>
+              </div>
+              <div className="crm-order-inline-pair">
+                <Form.Item name="is_checked" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Проверен</Checkbox>
+                </Form.Item>
+                <Form.Item name="is_factory_payment_completed" valuePropName="checked" className="crm-order-inline-pair-item">
+                  <Checkbox>Оплачено компанией</Checkbox>
+                </Form.Item>
+              </div>
+              <Form.Item name="mrn" label="MRN">
+                <Input />
+              </Form.Item>
+              <Form.Item name="trip_id" label="Рейс">
+                <Select
+                  allowClear
+                  loading={tripsQuery.isLoading}
+                  options={(tripsQuery.data?.items ?? []).map((trip) => ({
+                    label: trip.name,
+                    value: trip.id,
+                  }))}
+                  notFoundContent={tripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
+                />
+              </Form.Item>
+              <Form.List name="documents">
+                {(fields, { add, remove }) => (
+                  <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+                    {fields.map((field) => (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        title={`Документ #${field.name + 1}`}
+                        extra={
+                          <Button danger size="small" disabled={!isEditMode} onClick={() => remove(field.name)}>
+                            Удалить
+                          </Button>
+                        }
+                      >
+                        <div className="crm-order-create-grid">
+                          <Form.Item
+                            name={[field.name, "document_type"]}
+                            label="Тип документа"
+                            rules={[{ required: true, message: "Укажите тип документа" }]}
+                          >
+                            <Select
+                              allowClear
+                              loading={editMetadataQuery.isLoading}
+                              options={editDocumentTypeOptions}
+                              notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Типы документов не найдены"}
+                            />
+                          </Form.Item>
+                          <Form.Item
+                            name={[field.name, "file_list"]}
+                            label="Выбрать файл"
+                            valuePropName="fileList"
+                            getValueFromEvent={(event) => event?.fileList}
+                            rules={[{ required: true, message: "Выберите файл" }]}
+                          >
+                            <Upload beforeUpload={() => false} maxCount={1}>
+                              <Button>Выбрать файл</Button>
+                            </Upload>
+                          </Form.Item>
+                        </div>
+                      </Card>
+                    ))}
+                    <Button onClick={() => add()} disabled={!isEditMode || fields.length >= 10} block>
+                      Добавить документ
+                    </Button>
+                  </Space>
+                )}
+              </Form.List>
+            </div>
+          </div>
         </Form>
+        <div className="crm-order-edit-footer crm-order-edit-page-footer">
+          {isEditMode ? (
+            <>
+              <Button
+                onClick={() => {
+                  if (!selectedOrderId) return;
+                  const detail = editDetailQuery.data;
+                  if (!detail) return;
+                  const discardChanges = () => {
+                    resetEditDraft(selectedOrderId);
+                    isRehydratingEditFormRef.current = true;
+                    editForm.setFieldsValue(toEditFormValues(detail));
+                    queueMicrotask(() => {
+                      isRehydratingEditFormRef.current = false;
+                    });
+                    setIsEditMode(false);
+                  };
+
+                  if (!editDraftRecord?.dirty) {
+                    discardChanges();
+                    return;
+                  }
+
+                  Modal.confirm({
+                    title: "Уверены, что хотите отменить изменения?",
+                    okText: "Да",
+                    cancelText: "Нет",
+                    onOk: discardChanges,
+                  });
+                }}
+              >
+                Отмена
+              </Button>
+              <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
+                Сохранить
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => router.push("/orders")}>К списку заказов</Button>
+          )}
+        </div>
+      </Card>
+      ) : (
+        <Card className="crm-panel crm-order-detail-left">
+          {deepLinkOrderQuery.isLoading ? (
+            <Typography.Text>Загрузка заказа...</Typography.Text>
+          ) : deepLinkOrderQuery.isError ? (
+            <Typography.Text type="danger">
+              {deepLinkOrderQuery.error instanceof ApiError ? deepLinkOrderQuery.error.detail : "Ошибка загрузки заказа"}
+            </Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">Подготовка формы редактирования...</Typography.Text>
+          )}
+        </Card>
+      )}
+      <Card className="crm-panel crm-order-detail-right" />
+      </div>
+      ) : null}
+
+      <Modal
+        title={documentsOrder ? `Documents #${documentsOrder.id}` : "Documents"}
+        open={documentsOpen}
+        footer={null}
+        width={720}
+        onCancel={() => {
+          setDocumentsOpen(false);
+          setDocumentsOrder(null);
+        }}
+      >
+        <Table<OrderDocument>
+          rowKey="id"
+          size="small"
+          loading={documentsQuery.isLoading}
+          dataSource={documentsQuery.data?.items ?? []}
+          pagination={false}
+          columns={[
+            {
+              title: "Тип",
+              dataIndex: "document_type",
+              key: "document_type",
+              width: 180,
+              render: (value: string | null) => value ?? "—",
+            },
+            {
+              title: "Файл",
+              key: "file_name",
+              render: (_, row) => row.file_name ?? row.display_name ?? row.file_path ?? "—",
+            },
+            {
+              title: "Скачать",
+              key: "download",
+              width: 120,
+              render: (_, row) =>
+                documentsOrder ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    loading={downloadingDocumentId === row.id}
+                    onClick={() => void handleOrderDocumentDownload(documentsOrder.id, row)}
+                  >
+                    Скачать
+                  </Button>
+                ) : null,
+            },
+          ]}
+          locale={{
+            emptyText: documentsQuery.isError
+              ? documentsQuery.error instanceof ApiError
+                ? documentsQuery.error.detail
+                : "Ошибка загрузки документов"
+              : "Нет документов",
+          }}
+        />
+      </Modal>
+
+      <Modal
+        title={clientOrder ? `Клиент #${clientOrder.id}` : "Клиент"}
+        open={clientOpen}
+        footer={null}
+        onCancel={() => {
+          setClientOpen(false);
+          setClientOrder(null);
+        }}
+      >
+        {clientDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {clientDetailQuery.error instanceof ApiError ? clientDetailQuery.error.detail : "Ошибка загрузки клиента"}
+          </Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Имя">{getClientPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getClientPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getClientPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getClientPopupInfo().email}</Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={factoryOrder ? `Фабрика #${factoryOrder.id}` : "Фабрика"}
+        open={factoryOpen}
+        footer={null}
+        onCancel={() => {
+          setFactoryOpen(false);
+          setFactoryOrder(null);
+        }}
+      >
+        {factoryDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {factoryDetailQuery.error instanceof ApiError ? factoryDetailQuery.error.detail : "Ошибка загрузки фабрики"}
+          </Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Название">{getFactoryPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Индекс">{getFactoryPopupInfo().postcode}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getFactoryPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getFactoryPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getFactoryPopupInfo().email}</Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={forwarderOrder ? `Экспедитор #${forwarderOrder.id}` : "Экспедитор"}
+        open={forwarderOpen}
+        footer={null}
+        onCancel={() => {
+          setForwarderOpen(false);
+          setForwarderOrder(null);
+        }}
+      >
+        {forwarderDetailQuery.isError || forwarderUserQuery.isError || personalManagerQuery.isError ? (
+          <Typography.Text type="danger">Ошибка загрузки данных экспедитора</Typography.Text>
+        ) : null}
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="Имя">{getForwarderPopupInfo().name}</Descriptions.Item>
+          <Descriptions.Item label="Адрес">{getForwarderPopupInfo().address}</Descriptions.Item>
+          <Descriptions.Item label="Email">{getForwarderPopupInfo().email}</Descriptions.Item>
+          <Descriptions.Item label="Телефон">{getForwarderPopupInfo().phone}</Descriptions.Item>
+          <Descriptions.Item label="Имя персонального менеджера">
+            {getForwarderPopupInfo().personalManagerName}
+          </Descriptions.Item>
+        </Descriptions>
+      </Modal>
+
+      <Modal
+        title={invoiceOrder ? `Инвойс #${invoiceOrder.id}` : "Инвойс"}
+        open={invoiceOpen}
+        footer={null}
+        onCancel={() => {
+          setInvoiceOpen(false);
+          setInvoiceOrder(null);
+        }}
+      >
+        <Typography.Paragraph
+          copyable={invoiceOrder?.invoice_number ? { text: invoiceOrder.invoice_number } : false}
+          style={{ marginBottom: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        >
+          {invoiceOrder?.invoice_number ?? "—"}
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title={descriptionOrder ? `Описание #${descriptionOrder.id}` : "Описание"}
+        open={descriptionOpen}
+        footer={[
+          <Button key="copy" type="primary" onClick={() => void copyDescriptionPopupText()}>
+            Скопировать в буфер
+          </Button>,
+        ]}
+        onCancel={() => {
+          setDescriptionOpen(false);
+          setDescriptionOrder(null);
+        }}
+      >
+        {descriptionDetailQuery.isError ? (
+          <Typography.Text type="danger">
+            {descriptionDetailQuery.error instanceof ApiError
+              ? descriptionDetailQuery.error.detail
+              : "Ошибка загрузки описания"}
+          </Typography.Text>
+        ) : null}
+        <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {getDescriptionPopupText() || (descriptionDetailQuery.isLoading ? "Загрузка..." : "—")}
+        </Typography.Paragraph>
       </Modal>
 
       <Modal
         title={selected ? `Изменить статус #${selected.id}` : "Изменить статус"}
         open={statusOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setStatusOpen(false)}
         onOk={() => statusForm.submit()}
@@ -3213,6 +6652,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Назначить рейс #${selected.id}` : "Назначить рейс"}
         open={assignOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setAssignOpen(false)}
         onOk={() => assignForm.submit()}
@@ -3234,7 +6674,7 @@ function OrdersPageContent() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} - ${trip.name}`,
+                label: trip.name,
                 value: trip.id,
               }))}
             />
@@ -3245,6 +6685,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Назначить экспедитора #${selected.id}` : "Назначить экспедитора"}
         open={assignForwarderOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setAssignForwarderOpen(false)}
         onOk={() => assignForwarderForm.submit()}
@@ -3266,7 +6707,7 @@ function OrdersPageContent() {
               allowClear
               loading={forwardersQuery.isLoading}
               options={(forwardersQuery.data?.items ?? []).map((user) => ({
-                label: `${user.id} - ${user.full_name || user.login}`,
+                label: [user.full_name, user.login].filter(Boolean).join(" · ") || "Экспедитор",
                 value: user.id,
               }))}
             />
@@ -3275,29 +6716,26 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title={selected ? `Назначить окно вывоза #${selected.id}` : "Назначить окно вывоза"}
+        title={selected ? `Назначить дату вывоза #${selected.id}` : "Назначить дату вывоза"}
         open={pickupOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setPickupOpen(false)}
         onOk={() => pickupForm.submit()}
-        confirmLoading={pickupWindowMutation.isPending}
+        confirmLoading={pickupDateMutation.isPending}
       >
         <Form
           form={pickupForm}
           layout="vertical"
-          onFinish={(values: PickupWindowForm) => {
+          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
             if (!selected) return;
-            pickupWindowMutation.mutate({
+            pickupDateMutation.mutate({
               id: selected.id,
-              pickup_date_from: values.pickup_date_from.format("YYYY-MM-DD"),
-              pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD") ?? null,
+              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
             });
           }}
         >
-          <Form.Item name="pickup_date_from" label="Вывоз: от" rules={[{ required: true }]}>
-            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
-          </Form.Item>
-          <Form.Item name="pickup_date_to" label="Вывоз: до">
+          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
             <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
         </Form>
@@ -3306,6 +6744,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Спецтариф #${selected.id}` : "Спецтариф"}
         open={specialTariffOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setSpecialTariffOpen(false)}
         onOk={() => specialTariffForm.submit()}
@@ -3315,12 +6754,17 @@ function OrdersPageContent() {
           form={specialTariffForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount?: number | null; currency?: string }) => {
+          onFinish={(values: {
+            amount?: number | null;
+            currency?: string;
+            special_tariff_currency_other_label?: string;
+          }) => {
             if (!selected) return;
             specialTariffMutation.mutate({
               id: selected.id,
               amount: values.amount,
               currency: values.currency || "EUR",
+              special_tariff_currency_other_label: values.special_tariff_currency_other_label,
             });
           }}
         >
@@ -3328,7 +6772,26 @@ function OrdersPageContent() {
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="special_tariff_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>
@@ -3336,6 +6799,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Запрос на фабрику #${selected.id}` : "Запрос на фабрику"}
         open={requestToFactoryOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setRequestToFactoryOpen(false)}
         onOk={() => requestToFactoryForm.submit()}
@@ -3365,6 +6829,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Выставить цену #${selected.id}` : "Выставить цену"}
         open={quotePriceOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setQuotePriceOpen(false)}
         onOk={() => quotePriceForm.submit()}
@@ -3374,12 +6839,13 @@ function OrdersPageContent() {
           form={quotePriceForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount: number; currency?: string }) => {
+          onFinish={(values: { amount: number; currency?: string; quote_price_currency_other_label?: string }) => {
             if (!selected) return;
             quotePriceMutation.mutate({
               id: selected.id,
               amount: values.amount,
               currency: values.currency,
+              quote_price_currency_other_label: values.quote_price_currency_other_label,
             });
           }}
         >
@@ -3387,7 +6853,26 @@ function OrdersPageContent() {
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="quote_price_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>
@@ -3395,6 +6880,7 @@ function OrdersPageContent() {
       <Modal
         title={selected ? `Решение по квоте #${selected.id}` : "Решение по квоте"}
         open={quoteDecisionOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setQuoteDecisionOpen(false)}
         onOk={() => quoteDecisionForm.submit()}
@@ -3426,6 +6912,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: изменить статус"
         open={bulkStatusOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkStatusOpen(false)}
         onOk={() => bulkStatusForm.submit()}
@@ -3458,6 +6945,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: назначить рейс"
         open={bulkAssignOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkAssignOpen(false)}
         onOk={() => bulkAssignForm.submit()}
@@ -3477,7 +6965,7 @@ function OrdersPageContent() {
               allowClear
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
-                label: `${trip.id} - ${trip.name}`,
+                label: trip.name,
                 value: trip.id,
               }))}
             />
@@ -3486,8 +6974,9 @@ function OrdersPageContent() {
       </Modal>
 
       <Modal
-        title="Массово: назначить окно вывоза"
+        title="Массово: назначить дату вывоза"
         open={bulkPickupOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkPickupOpen(false)}
         onOk={() => bulkPickupForm.submit()}
@@ -3496,17 +6985,13 @@ function OrdersPageContent() {
         <Form
           form={bulkPickupForm}
           layout="vertical"
-          onFinish={(values: PickupWindowForm) => {
-            runBulkMutation("pickup-window", {
-              pickup_date_from: values.pickup_date_from.format("YYYY-MM-DD"),
-              pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD") ?? null,
+          onFinish={(values: { pickup_date: dayjs.Dayjs }) => {
+            runBulkMutation("pickup-date", {
+              pickup_date: values.pickup_date.format("YYYY-MM-DD"),
             });
           }}
         >
-          <Form.Item name="pickup_date_from" label="Вывоз: от" rules={[{ required: true }]}>
-            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
-          </Form.Item>
-          <Form.Item name="pickup_date_to" label="Вывоз: до">
+          <Form.Item name="pickup_date" label="Дата вывоза" rules={[{ required: true }]}>
             <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
           </Form.Item>
         </Form>
@@ -3515,6 +7000,7 @@ function OrdersPageContent() {
       <Modal
         title="Массово: спецтариф"
         open={bulkSpecialTariffOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkSpecialTariffOpen(false)}
         onOk={() => bulkSpecialTariffForm.submit()}
@@ -3524,18 +7010,51 @@ function OrdersPageContent() {
           form={bulkSpecialTariffForm}
           layout="vertical"
           initialValues={{ currency: "EUR" }}
-          onFinish={(values: { amount?: number | null; currency?: string }) => {
-            runBulkMutation("special-tariff", {
-              amount: values.amount ?? null,
-              currency: values.currency || "EUR",
-            });
+          onFinish={(values: {
+            amount?: number | null;
+            currency?: string;
+            special_tariff_currency_other_label?: string;
+          }) => {
+            try {
+              const normalized = normalizeCurrencyPayload(
+                values.currency,
+                values.special_tariff_currency_other_label,
+                "special_tariff_currency_other_label",
+              );
+              runBulkMutation("special-tariff", {
+                amount: values.amount ?? null,
+                currency: normalized.currency,
+                special_tariff_currency_other_label: normalized.otherLabel,
+              });
+            } catch (error) {
+              message.error(error instanceof Error ? error.message : "Ошибка в валюте спецтарифа");
+            }
           }}
         >
           <Form.Item name="amount" label="Сумма (пусто = очистить)">
             <InputNumber min={0} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Input />
+            <Select
+              options={[
+                { label: "USD", value: "USD" },
+                { label: "EUR", value: "EUR" },
+                { label: "OTHER", value: "OTHER" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
+            {({ getFieldValue }) =>
+              getFieldValue("currency") === "OTHER" ? (
+                <Form.Item
+                  name="special_tariff_currency_other_label"
+                  label="Текст валюты для OTHER"
+                  rules={[{ required: true, message: "Укажите текст валюты" }]}
+                >
+                  <Input />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>
@@ -3543,6 +7062,7 @@ function OrdersPageContent() {
       <Modal
         title={`Массово: ${bulkCommentTarget === "warehouse" ? "комментарий склада" : "комментарий экспедитора"}`}
         open={bulkCommentOpen}
+        forceRender
         destroyOnHidden
         onCancel={() => setBulkCommentOpen(false)}
         onOk={() => bulkCommentForm.submit()}
@@ -3562,6 +7082,9 @@ function OrdersPageContent() {
           </Form.Item>
         </Form>
       </Modal>
+
+        </>
+      ) : null}
     </Space>
   );
 }

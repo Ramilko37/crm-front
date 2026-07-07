@@ -1,22 +1,16 @@
-import { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-import { buildRequestMultipartPayload } from "@/server/bff/orchestration";
-import { proxyJsonPayloadAsMultipart, proxyToBackend } from "@/server/bff/proxy";
-
-export async function GET(request: NextRequest) {
-  return proxyToBackend(request, "/requests");
+function removedResponse() {
+  return NextResponse.json(
+    { detail: "Requests API removed. Use /api/orders with order_types=request." },
+    { status: 410 },
+  );
 }
 
-export async function POST(request: NextRequest) {
-  const contentType = request.headers.get("content-type") ?? "";
+export async function GET() {
+  return removedResponse();
+}
 
-  // Canonical request create is multipart/form-data. In that case proxy body as-is.
-  if (contentType.includes("multipart/form-data")) {
-    return proxyToBackend(request, "/requests");
-  }
-
-  // Keep backward compatibility for JSON callers.
-  return proxyJsonPayloadAsMultipart(request, "/requests", {
-    payloadBuilder: buildRequestMultipartPayload,
-  });
+export async function POST() {
+  return removedResponse();
 }

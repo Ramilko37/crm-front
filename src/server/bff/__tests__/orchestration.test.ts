@@ -151,4 +151,84 @@ describe("orchestration payload builders", () => {
       documents: [{ document_type: "invoice", file_slot: "request_file_1" }],
     });
   });
+
+  it("maps new internal create fields for JSON fallback", () => {
+    const payload = buildInternalOrderMultipartPayload({
+      company_id: 10,
+      company_contact_id: 55,
+      ready_date: "2026-04-01",
+      pickup_date_from: "2026-04-02",
+      pickup_date_to: "2026-04-03",
+      is_factory_payment_via_company: true,
+      is_factory_payment_completed: false,
+      is_1c: true,
+      factory_mode: "existing",
+      country_id: 380,
+      factory_id: 7,
+      loading_address_id: 3,
+      email_id: 11,
+      factory_contact_id: 501,
+    });
+
+    expect(payload).toEqual({
+      order: {
+        company_id: 10,
+        company_contact_id: 55,
+        ready_date: "2026-04-01",
+        pickup_date_from: "2026-04-02",
+        pickup_date_to: "2026-04-03",
+        is_factory_payment_via_company: true,
+        is_factory_payment_completed: false,
+        is_1c: true,
+      },
+      factory_selection: {
+        factory_mode: "existing",
+        country_id: 380,
+        factory_id: 7,
+        loading_address_id: 3,
+        email_id: 11,
+        factory_contact_id: 501,
+      },
+      goods_lines: [],
+      documents: [],
+    });
+  });
+
+  it("maps factory contact xor payload for create contact mode", () => {
+    const payload = buildInternalOrderMultipartPayload({
+      company_id: 10,
+      ready_date: "2026-04-01",
+      factory_mode: "create",
+      country_id: 380,
+      create_factory_contact: {
+        full_name: "Mario Bianchi",
+        phone: "+3900011122",
+        email: "logistics@factory.it",
+      },
+      create_factory: {
+        factory_name: "Inline Factory",
+      },
+    });
+
+    expect(payload).toEqual({
+      order: {
+        company_id: 10,
+        ready_date: "2026-04-01",
+      },
+      factory_selection: {
+        factory_mode: "create",
+        country_id: 380,
+        create_factory_contact: {
+          full_name: "Mario Bianchi",
+          phone: "+3900011122",
+          email: "logistics@factory.it",
+        },
+        create_factory: {
+          factory_name: "Inline Factory",
+        },
+      },
+      goods_lines: [],
+      documents: [],
+    });
+  });
 });

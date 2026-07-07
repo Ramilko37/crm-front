@@ -738,7 +738,7 @@ function FactoriesPageContent() {
   ];
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
+    <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader
         title="Фабрики"
         subtitle="Каталог фабрик и nested-ресурсы emails/certificates/loading-addresses."
@@ -1043,7 +1043,7 @@ function FactoriesPageContent() {
               key: "emails",
               label: "Emails",
               children: (
-                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                <Space orientation="vertical" style={{ width: "100%" }} size={12}>
                   {canMutate ? (
                     <Form<FactoryEmailForm>
                       form={emailCreateForm}
@@ -1077,7 +1077,7 @@ function FactoriesPageContent() {
               key: "certificates",
               label: "Сертификаты",
               children: (
-                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                <Space orientation="vertical" style={{ width: "100%" }} size={12}>
                   {canMutate ? (
                     <Form<FactoryCertificateForm>
                       form={certificateCreateForm}
@@ -1148,7 +1148,7 @@ function FactoriesPageContent() {
               key: "loading-addresses",
               label: "Адреса загрузки",
               children: (
-                <Space direction="vertical" style={{ width: "100%" }} size={12}>
+                <Space orientation="vertical" style={{ width: "100%" }} size={12}>
                   {canMutate ? (
                     <Form<FactoryLoadingAddressForm>
                       form={loadingAddressCreateForm}

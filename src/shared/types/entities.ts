@@ -204,11 +204,15 @@ export type OrderListItem = {
   user_id: number;
   company_id: number | null;
   company_name?: string | null;
+  contact_name_snapshot?: string | null;
+  contact_phone_snapshot?: string | null;
+  contact_email_snapshot?: string | null;
   personal_manager_id?: number | null;
   order_type: OrderType | null;
   quote_status: QuoteStatus | null;
   quote_price_amount: string | null;
   quote_price_currency: string | null;
+  quote_price_currency_other_label?: string | null;
   special_tariff_amount: string | null;
   special_tariff_currency: string | null;
   special_tariff_currency_other_label?: string | null;
@@ -253,9 +257,6 @@ export type OrderListItem = {
   warehouse_comment: string | null;
   booking_comment?: string | null;
   email: string | null;
-  contact_name_snapshot?: string | null;
-  contact_phone_snapshot?: string | null;
-  contact_email_snapshot?: string | null;
   raw_payload: Record<string, unknown> | null;
   documents_count?: number | null;
   has_documents?: boolean;
@@ -289,6 +290,36 @@ export type OrderDetail = OrderListItem & {
   certificate?: OrderCertificate | null;
   status_history?: OrderStatusHistoryItem[];
   chat_messages?: OrderChatMessage[];
+};
+
+export type OrderEditFactorySelection = {
+  factory_mode?: "existing" | "create";
+  country_id?: number | null;
+  factory_id?: number | null;
+  loading_address_id?: number | null;
+  factory_contact_id?: number | null;
+  loading_address?: FactoryLoadingAddress | null;
+  factory_contact?: {
+    id: number;
+    full_name: string;
+    phone: string | null;
+    email: string | null;
+  } | null;
+};
+
+export type OrderEditCard = {
+  price_coefficient_effective?: string | number | null;
+  weight_coefficient_effective?: string | number | null;
+  days_same_status?: number | null;
+  latest_factory_request_at?: string | null;
+};
+
+export type OrderInternalEditRead = {
+  order: OrderListItem;
+  factory_selection?: OrderEditFactorySelection | null;
+  goods_lines?: OrderGoodsLine[];
+  documents?: OrderDocument[];
+  card?: OrderEditCard | null;
 };
 
 export type Order = OrderListItem;
@@ -326,13 +357,104 @@ export type OrderWritePayload = {
   raw_payload?: Record<string, unknown>;
   client_goods_value_amount?: string | null;
   client_goods_value_currency?: string | null;
+  client_goods_value_currency_other_label?: string | null;
+  pickup_date_from?: string | null;
+  pickup_date_to?: string | null;
   assigned_forwarder_user_id?: number | null;
-  factory_payment_via_label?: string | null;
+  is_factory_payment_via_company?: boolean;
   is_factory_payment_completed?: boolean;
   is_checked?: boolean;
+  is_1c?: boolean;
   priority_codes?: string[];
   office_mark_codes?: string[];
   product_characteristic_codes?: string[];
+};
+
+export type FactoryContactCreatePayload = {
+  full_name: string;
+  phone: string;
+  email?: string | null;
+};
+
+export type FactorySelectionCreatePayload = {
+  factory_mode: "existing" | "create";
+  country_id: number;
+  factory_id?: number;
+  loading_address_id?: number;
+  email_id?: number;
+  factory_contact_id?: number;
+  create_factory_contact?: FactoryContactCreatePayload;
+  create_factory?: {
+    factory_name: string;
+    country_id?: number;
+    primary_email: string;
+    loading_address: {
+      country_id: number;
+      postcode_id?: number;
+      city_id?: number;
+      create_postcode?: { postcode: string };
+      create_city?: { city: string };
+      address: string;
+      contact_name: string;
+      phone: string;
+      fax?: string | null;
+      messenger_type?: string | null;
+      messenger_value?: string | null;
+    };
+  };
+};
+
+export type OrderCreatePayload = {
+  order: {
+    order_number?: string;
+    company_id?: number;
+    company_contact_id?: number;
+    order_type?: OrderType;
+    ready_date?: string;
+    pickup_date_from?: string;
+    pickup_date_to?: string;
+    invoice_on_other_company?: boolean;
+    invoice_company_name?: string;
+    invoice_number?: string;
+    declared_volume_m3?: string;
+    declared_total_weight_kg?: string;
+    cargo_places_qty?: number;
+    client_goods_value_amount?: string;
+    client_goods_value_currency?: string;
+    client_goods_value_currency_other_label?: string;
+    product_characteristic_codes?: string[];
+    additional_description?: string;
+    comment?: string;
+    user_comment?: string;
+    forwarder_comment?: string;
+    warehouse_comment?: string;
+    assigned_forwarder_user_id?: number;
+    self_delivery?: boolean;
+    self_delivery_forwarder_user_id?: number;
+    measurement_payload?: MeasurementPayload;
+    weighing_payload?: MeasurementPayload;
+    is_priority?: boolean;
+    office_mark_codes?: string[];
+    is_factory_payment_via_company?: boolean;
+    is_factory_payment_completed?: boolean;
+    is_checked?: boolean;
+    is_1c?: boolean;
+    raw_payload?: Record<string, unknown>;
+  };
+  factory_selection: FactorySelectionCreatePayload;
+  goods_lines: Array<{
+    item_type?: string;
+    custom_item_type?: string;
+    description?: string;
+    weight_kg?: string;
+    quantity_value?: string;
+    quantity_unit?: string;
+  }>;
+  documents: Array<{
+    document_type: string;
+    file_slot: string;
+    display_name?: string;
+  }>;
 };
 
 export type Factory = {
@@ -348,6 +470,22 @@ export type Factory = {
   certificate_status: FactoryCertificateStatus | null;
 };
 
+export type TripCityLookupItem = {
+  city: string;
+};
+
+export type TripForwarderLookupItem = {
+  id: number;
+  full_name: string | null;
+  company_id?: number | null;
+  company_name?: string | null;
+  country: string | null;
+  city: string | null;
+  label?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
 export type FactoryEmail = {
   id: number;
   factory_id: number;
@@ -358,12 +496,14 @@ export type FactoryEmail = {
 export type FactoryLoadingAddress = {
   id: number;
   factory_id: number;
+  name?: string | null;
   country_id: number | null;
   postcode_id?: number | null;
   city_id?: number | null;
   postcode: string | null;
   city: string | null;
   address: string | null;
+  contact_name?: string | null;
   phone: string | null;
   fax: string | null;
   messenger_type: string | null;
@@ -378,6 +518,7 @@ export type FactoryLoadingAddressWritePayload = {
   postcode_id?: number | null;
   city_id?: number | null;
   address?: string | null;
+  contact_name?: string | null;
   phone?: string | null;
   fax?: string | null;
   messenger_type?: string | null;
@@ -464,18 +605,10 @@ export type TripPointWritePayload = {
   is_completed?: boolean;
 };
 
-export type TripCityLookupItem = {
-  city: string;
-};
+export type TripPointUpdatePayload = Partial<TripPointWritePayload>;
 
-export type TripForwarderLookupItem = {
-  id: number;
-  full_name: string | null;
-  company_id: number | null;
-  company_name: string | null;
-  country: string | null;
-  city: string | null;
-  label: string;
+export type TripDetail = Trip & {
+  points: TripPoint[];
 };
 
 export type ListParams = {
@@ -804,7 +937,9 @@ export type OrderCreateMetadata = {
   priority_options: DictionaryOption[];
   office_mark_options: DictionaryOption[];
   product_characteristic_options: DictionaryOption[];
+  certificate_intent_options: DictionaryOption[];
   item_type_options: DictionaryOption[];
+  quantity_unit_options: DictionaryOption[];
   document_type_options: DictionaryOption[];
   measurement_status_options: DictionaryOption[];
   weighing_status_options: DictionaryOption[];
@@ -817,7 +952,9 @@ export type OrderCreateMetadata = {
 
 export type ClientOrderCreateMetadata = {
   order_type_options: DictionaryOption[];
+  product_characteristic_options: DictionaryOption[];
   item_type_options: DictionaryOption[];
+  quantity_unit_options: DictionaryOption[];
   document_type_options: DictionaryOption[];
 };
 

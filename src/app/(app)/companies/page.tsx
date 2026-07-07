@@ -335,7 +335,7 @@ function CompaniesPageContent() {
 
   if (!canWrite) {
     return (
-      <Space direction="vertical" size={16} className="crm-page-stack">
+      <Space orientation="vertical" size={16} className="crm-page-stack">
         <PageHeader title="Компании" subtitle="Раздел доступен только administrator/manager" />
         <Card className="crm-panel">
           <Typography.Text>Недостаточно прав для просмотра этого раздела.</Typography.Text>
@@ -345,7 +345,7 @@ function CompaniesPageContent() {
   }
 
   return (
-    <Space direction="vertical" size={16} className="crm-page-stack">
+    <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader title="Компании" subtitle="Управление компаниями и контактной книгой" />
 
       <Card className="crm-panel">
@@ -413,7 +413,7 @@ function CompaniesPageContent() {
 
       <Drawer
         title={selectedCompany ? `Компания #${selectedCompany.id}` : "Компания"}
-        width={840}
+        size={840}
         open={detailsOpen}
         onClose={() => {
           setDetailsOpen(false);

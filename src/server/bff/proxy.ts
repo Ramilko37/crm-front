@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { ACCESS_COOKIE_NAME } from "@/server/constants";
 import { getUnauthorizedPayload } from "@/server/auth/cookie";
-import { buildBackendUrl } from "@/server/bff/backend-url";
+import { buildBackendFallbackUrls } from "@/server/bff/backend-url";
 
 async function parseBackendPayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
@@ -102,7 +102,6 @@ export async function proxyToBackend(
     return createUnauthorizedResponse();
   }
 
-  const targetUrl = buildBackendUrl(backendPath, request.nextUrl.search);
   const method = options.methodOverride ?? request.method;
   let body: ArrayBuffer | undefined;
   if (method !== "GET" && method !== "HEAD") {
@@ -112,26 +111,56 @@ export async function proxyToBackend(
     }
   }
 
-  const response = await fetch(targetUrl, {
-    method,
-    headers: createHeaders(request, token),
-    body,
-    cache: "no-store",
-  });
+  const targetUrls = buildBackendFallbackUrls(backendPath, request.nextUrl.search);
+  let response: Response | null = null;
+  let lastError: unknown;
+
+  for (const targetUrl of targetUrls) {
+    try {
+      response = await fetch(targetUrl, {
+        method,
+        headers: createHeaders(request, token),
+        body,
+        cache: "no-store",
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error("Backend is unavailable");
+  }
 
   return toProxyResponse(response);
 }
 
 export async function postToBackend(path: string, payload: unknown) {
-  const response = await fetch(buildBackendUrl(path, ""), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
+  const targetUrls = buildBackendFallbackUrls(path, "");
+  let response: Response | null = null;
+  let lastError: unknown;
+
+  for (const targetUrl of targetUrls) {
+    try {
+      response = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error("Backend is unavailable");
+  }
 
   const data = await parseBackendPayload(response);
   return { response, data };
@@ -164,14 +193,28 @@ export async function proxyJsonPayloadAsMultipart(
   const formData = new FormData();
   formData.set("payload", JSON.stringify(payload));
 
-  const targetUrl = buildBackendUrl(backendPath, request.nextUrl.search);
   const method = options.methodOverride ?? request.method;
-  const response = await fetch(targetUrl, {
-    method,
-    headers: createHeaders(request, token, { omitContentType: true }),
-    body: formData,
-    cache: "no-store",
-  });
+  const targetUrls = buildBackendFallbackUrls(backendPath, request.nextUrl.search);
+  let response: Response | null = null;
+  let lastError: unknown;
+
+  for (const targetUrl of targetUrls) {
+    try {
+      response = await fetch(targetUrl, {
+        method,
+        headers: createHeaders(request, token, { omitContentType: true }),
+        body: formData,
+        cache: "no-store",
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error("Backend is unavailable");
+  }
 
   return toProxyResponse(response);
 }
