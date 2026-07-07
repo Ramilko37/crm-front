@@ -601,11 +601,9 @@ function OrdersPageContent() {
   const [editPostcodeQueryDebounced, setEditPostcodeQueryDebounced] = useState("");
   const [editContactEmailOptions, setEditContactEmailOptions] = useState<FactoryContactOption[]>([]);
   const [factoryCreateConfirmed, setFactoryCreateConfirmed] = useState(false);
-  const [factoryCreateConfirmShown, setFactoryCreateConfirmShown] = useState(false);
-  const factoryCreateConfirmOpenRef = useRef(false);
+  const [factoryCreateSubmitting, setFactoryCreateSubmitting] = useState(false);
   const [editFactoryCreateConfirmed, setEditFactoryCreateConfirmed] = useState(false);
-  const [editFactoryCreateConfirmShown, setEditFactoryCreateConfirmShown] = useState(false);
-  const editFactoryCreateConfirmOpenRef = useRef(false);
+  const [editFactoryCreateSubmitting, setEditFactoryCreateSubmitting] = useState(false);
   const [postcodeQuery, setPostcodeQuery] = useState("");
   const [factorySearchTerm, setFactorySearchTerm] = useState("");
   const [editFactorySearchTerm, setEditFactorySearchTerm] = useState("");
@@ -1307,137 +1305,14 @@ function OrdersPageContent() {
     if (!createOpen) return;
     if (createFactoryMode === "create") {
       setFactoryCreateConfirmed(false);
-      setFactoryCreateConfirmShown(false);
       createForm.setFieldValue("factory_id", undefined);
       createForm.setFieldValue("loading_address_id", undefined);
       createForm.setFieldValue("factory_contact_id", undefined);
       return;
     }
     setFactoryCreateConfirmed(false);
-    setFactoryCreateConfirmShown(false);
     createForm.setFieldValue(["create_factory"], undefined);
   }, [createFactoryMode, createForm, createOpen]);
-
-  useEffect(() => {
-    if (factoryCreateConfirmOpenRef.current) {
-      return;
-    }
-    if (!createOpen || createFactoryMode !== "create" || factoryCreateConfirmed || factoryCreateConfirmShown) {
-      return;
-    }
-    const factoryName = createForm.getFieldValue(["create_factory", "factory_name"]);
-    const loadingAddress = createForm.getFieldValue(["create_factory", "loading_address", "address"]);
-    const postcodeId = createForm.getFieldValue("loading_postcode_id_ui");
-    const cityId = createForm.getFieldValue("loading_city_id_ui");
-    if (!factoryName || !loadingAddress || !postcodeId || !cityId) {
-      return;
-    }
-    setFactoryCreateConfirmShown(true);
-    factoryCreateConfirmOpenRef.current = true;
-    Modal.confirm({
-      title: "Вы готовы создать фабрику?",
-      okText: "Да",
-      cancelText: "Нет",
-      onOk: async () => {
-        try {
-          const values = createForm.getFieldsValue(true) as OrderCreateForm;
-          const factoryName = trimOrUndefined(values.create_factory?.factory_name);
-          const countryId = values.factory_country_id;
-          const address = trimOrUndefined(values.create_factory?.loading_address?.address);
-          const loadingAddressName =
-            trimOrUndefined(values.create_factory?.loading_address?.name) ??
-            trimOrUndefined(values.create_factory?.loading_address?.address) ??
-            trimOrUndefined(values.create_factory?.factory_name) ??
-            "Основной адрес";
-          const postcodeId = values.loading_postcode_id_ui;
-          const cityId = values.loading_city_id_ui;
-          const primaryContactName =
-            trimOrUndefined(values.create_factory_contact?.full_name) ??
-            trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
-            "Primary Contact";
-          const primaryContactPhone =
-            trimOrUndefined(values.create_factory_contact?.phone) ??
-            trimOrUndefined(values.create_factory?.loading_address?.phone) ??
-            "+70000000000";
-          const primaryContactEmail =
-            trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
-          if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
-            throw new Error("missing-factory-fields");
-          }
-
-          const createdFactory = await apiRequest<Factory>("/api/factories", {
-            method: "POST",
-            body: {
-              name: factoryName,
-              country_id: countryId,
-              country: createCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
-              city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
-              address,
-              postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
-              phone: trimOrUndefined(values.create_factory_contact?.phone),
-              primary_contact: {
-                full_name: primaryContactName,
-                phone: primaryContactPhone,
-                email: primaryContactEmail,
-              },
-            },
-          });
-
-          const createdAddress = await apiRequest<FactoryLoadingAddress>(`/api/factories/${createdFactory.id}/loading-addresses`, {
-            method: "POST",
-            body: {
-              name: loadingAddressName,
-              country_id: countryId,
-              postcode_id: postcodeId,
-              city_id: cityId,
-              address,
-              contact_name:
-                trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
-              phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
-            },
-          });
-
-          createForm.setFieldValue("factory_mode", "existing");
-          setCreatedFactoryOption({
-            id: createdFactory.id,
-            name: createdFactory.name,
-            subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
-          });
-          setCreatedLoadingAddressOption(createdAddress);
-          createForm.setFieldValue("factory_id", createdFactory.id);
-          createForm.setFieldValue("loading_address_id", createdAddress.id);
-          setFactoryCreateConfirmed(true);
-          setFactoryCreateConfirmShown(false);
-          factoryCreateConfirmOpenRef.current = false;
-          await queryClient.invalidateQueries({ queryKey: ["factories"] });
-          await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createdFactory.id] });
-          message.success("Фабрика создана");
-        } catch {
-          setFactoryCreateConfirmShown(false);
-          factoryCreateConfirmOpenRef.current = false;
-          message.error("Произошла ошибка");
-          return;
-        }
-      },
-      onCancel: () => {
-        setFactoryCreateConfirmShown(false);
-        factoryCreateConfirmOpenRef.current = false;
-      },
-    });
-  }, [
-    createCountriesQuery.data?.items,
-    queryClient,
-    createFactoryMode,
-    createForm,
-    createOpen,
-    createLoadingCityIdUi,
-    createLoadingPostcodeIdUi,
-    factoryCreateConfirmed,
-    factoryCreateConfirmShown,
-    message,
-    postcodeCitiesQuery.data?.items,
-    postcodeOptionsQuery.data?.items,
-  ]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -1454,17 +1329,102 @@ function OrdersPageContent() {
     }
   }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen]);
 
-  useEffect(() => {
-    if (!createOpen || !createLoadingPostcodeIdUi) return;
-    const cities = postcodeCitiesQuery.data?.items ?? [];
-    if (cities.length !== 1) return;
-    const onlyCityId = cities[0]?.id;
-    if (!onlyCityId) return;
-    createForm.setFieldValue("loading_city_id_ui", onlyCityId);
-    if (createFactoryMode === "create") {
-      createForm.setFieldValue(["create_factory", "loading_address", "city_id"], onlyCityId);
+  async function handleCreateFactoryFromCreateForm() {
+    try {
+      await createForm.validateFields([
+        "factory_country_id",
+        ["create_factory", "factory_name"],
+        ["create_factory", "loading_address", "name"],
+        ["create_factory", "loading_address", "address"],
+        "loading_postcode_id_ui",
+        "loading_city_id_ui",
+      ]);
+    } catch {
+      return;
     }
-  }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen, postcodeCitiesQuery.data?.items]);
+
+    const values = createForm.getFieldsValue(true) as OrderCreateForm;
+    const factoryName = trimOrUndefined(values.create_factory?.factory_name);
+    const countryId = values.factory_country_id;
+    const address = trimOrUndefined(values.create_factory?.loading_address?.address);
+    const loadingAddressName =
+      trimOrUndefined(values.create_factory?.loading_address?.name) ??
+      trimOrUndefined(values.create_factory?.loading_address?.address) ??
+      trimOrUndefined(values.create_factory?.factory_name) ??
+      "Основной адрес";
+    const postcodeId = values.loading_postcode_id_ui;
+    const cityId = values.loading_city_id_ui;
+    const primaryContactName =
+      trimOrUndefined(values.create_factory_contact?.full_name) ??
+      trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
+      "Primary Contact";
+    const primaryContactPhone =
+      trimOrUndefined(values.create_factory_contact?.phone) ??
+      trimOrUndefined(values.create_factory?.loading_address?.phone) ??
+      "+70000000000";
+    const primaryContactEmail =
+      trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+
+    if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
+      message.error("Заполните данные фабрики");
+      return;
+    }
+
+    setFactoryCreateSubmitting(true);
+    try {
+      const createdFactory = await apiRequest<Factory>("/api/factories", {
+        method: "POST",
+        body: {
+          name: factoryName,
+          country_id: countryId,
+          country: createCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+          city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
+          address,
+          postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
+          phone: trimOrUndefined(values.create_factory_contact?.phone),
+          primary_contact: {
+            full_name: primaryContactName,
+            phone: primaryContactPhone,
+            email: primaryContactEmail,
+          },
+        },
+      });
+
+      const createdAddress = await apiRequest<FactoryLoadingAddress>(
+        `/api/factories/${createdFactory.id}/loading-addresses`,
+        {
+          method: "POST",
+          body: {
+            name: loadingAddressName,
+            country_id: countryId,
+            postcode_id: postcodeId,
+            city_id: cityId,
+            address,
+            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
+            phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+          },
+        },
+      );
+
+      createForm.setFieldValue("factory_mode", "existing");
+      setCreatedFactoryOption({
+        id: createdFactory.id,
+        name: createdFactory.name,
+        subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+      });
+      setCreatedLoadingAddressOption(createdAddress);
+      createForm.setFieldValue("factory_id", createdFactory.id);
+      createForm.setFieldValue("loading_address_id", createdAddress.id);
+      setFactoryCreateConfirmed(true);
+      await queryClient.invalidateQueries({ queryKey: ["factories"] });
+      await queryClient.invalidateQueries({ queryKey: ["orders", "create-factory-contacts", createdFactory.id] });
+      message.success("Фабрика создана");
+    } catch {
+      message.error("Произошла ошибка");
+    } finally {
+      setFactoryCreateSubmitting(false);
+    }
+  }
 
   useEffect(() => {
     if (!createOpen) return;
@@ -1499,7 +1459,6 @@ function OrdersPageContent() {
     if (!editOpen) return;
     if (editFactoryMode === "create") {
       setEditFactoryCreateConfirmed(false);
-      setEditFactoryCreateConfirmShown(false);
       editForm.setFieldValue("factory_id", undefined);
       editForm.setFieldValue("loading_address_id", undefined);
       editForm.setFieldValue("factory_contact_id", undefined);
@@ -1519,138 +1478,8 @@ function OrdersPageContent() {
       return;
     }
     setEditFactoryCreateConfirmed(false);
-    setEditFactoryCreateConfirmShown(false);
     editForm.setFieldValue(["create_factory"], undefined);
   }, [editFactoryMode, editForm, editOpen, mergeEditDraft, selectedOrderId]);
-
-  useEffect(() => {
-    if (editFactoryCreateConfirmOpenRef.current) {
-      return;
-    }
-    if (!editOpen || editFactoryMode !== "create" || editFactoryCreateConfirmed || editFactoryCreateConfirmShown) {
-      return;
-    }
-    const factoryName = editForm.getFieldValue(["create_factory", "factory_name"]);
-    const loadingAddress = editForm.getFieldValue(["create_factory", "loading_address", "address"]);
-    const postcodeId = editForm.getFieldValue("loading_postcode_id_ui");
-    const cityId = editForm.getFieldValue("loading_city_id_ui");
-    if (!factoryName || !loadingAddress || !postcodeId || !cityId) {
-      return;
-    }
-    setEditFactoryCreateConfirmShown(true);
-    editFactoryCreateConfirmOpenRef.current = true;
-    Modal.confirm({
-      title: "Вы готовы создать фабрику?",
-      okText: "Да",
-      cancelText: "Нет",
-      onOk: async () => {
-        try {
-          const values = editForm.getFieldsValue(true) as OrderEditForm;
-          const factoryName = trimOrUndefined(values.create_factory?.factory_name);
-          const countryId = values.factory_country_id;
-          const address = trimOrUndefined(values.create_factory?.loading_address?.address);
-          const loadingAddressName =
-            trimOrUndefined(values.create_factory?.loading_address?.name) ??
-            trimOrUndefined(values.create_factory?.loading_address?.address) ??
-            trimOrUndefined(values.create_factory?.factory_name) ??
-            "Основной адрес";
-          const postcodeId = values.loading_postcode_id_ui;
-          const cityId = values.loading_city_id_ui;
-          const primaryContactName =
-            trimOrUndefined(values.create_factory_contact?.full_name) ??
-            trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
-            "Primary Contact";
-          const primaryContactPhone =
-            trimOrUndefined(values.create_factory_contact?.phone) ??
-            trimOrUndefined(values.create_factory?.loading_address?.phone) ??
-            "+70000000000";
-          const primaryContactEmail =
-            trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
-          if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
-            throw new Error("missing-factory-fields");
-          }
-
-          const createdFactory = await apiRequest<Factory>("/api/factories", {
-            method: "POST",
-            body: {
-              name: factoryName,
-              country_id: countryId,
-              country: editCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
-              city: editPostcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
-              address,
-              postcode: editPostcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
-              phone: trimOrUndefined(values.create_factory_contact?.phone),
-              primary_contact: {
-                full_name: primaryContactName,
-                phone: primaryContactPhone,
-                email: primaryContactEmail,
-              },
-            },
-          });
-
-          const createdAddress = await apiRequest<FactoryLoadingAddress>(`/api/factories/${createdFactory.id}/loading-addresses`, {
-            method: "POST",
-            body: {
-              name: loadingAddressName,
-              country_id: countryId,
-              postcode_id: postcodeId,
-              city_id: cityId,
-              address,
-              contact_name:
-                trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
-              phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
-            },
-          });
-
-          const nextPatch = {
-            factory_mode: "existing" as const,
-            factory_id: createdFactory.id,
-            loading_address_id: createdAddress.id,
-          };
-          editForm.setFieldsValue(nextPatch);
-          setEditCreatedFactoryOption({
-            id: createdFactory.id,
-            name: createdFactory.name,
-            subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
-          });
-          setEditCreatedLoadingAddressOption(createdAddress);
-          setEditFactoryCreateConfirmed(true);
-          setEditFactoryCreateConfirmShown(false);
-          editFactoryCreateConfirmOpenRef.current = false;
-          if (selectedOrderId) {
-            mergeEditDraft(selectedOrderId, nextPatch);
-          }
-          await queryClient.invalidateQueries({ queryKey: ["factories"] });
-          await queryClient.invalidateQueries({ queryKey: ["orders", "edit-factory-contacts", createdFactory.id] });
-          message.success("Фабрика создана");
-        } catch {
-          setEditFactoryCreateConfirmShown(false);
-          editFactoryCreateConfirmOpenRef.current = false;
-          message.error("Произошла ошибка");
-          return;
-        }
-      },
-      onCancel: () => {
-        setEditFactoryCreateConfirmShown(false);
-        editFactoryCreateConfirmOpenRef.current = false;
-      },
-    });
-  }, [
-    editCountriesQuery.data?.items,
-    editFactoryCreateConfirmed,
-    editFactoryCreateConfirmShown,
-    editFactoryMode,
-    editForm,
-    editLoadingCityIdUi,
-    editLoadingPostcodeIdUi,
-    editOpen,
-    editPostcodeCitiesQuery.data?.items,
-    editPostcodeOptionsQuery.data?.items,
-    mergeEditDraft,
-    message,
-    queryClient,
-    selectedOrderId,
-  ]);
 
   useEffect(() => {
     if (!editOpen) return;
@@ -1667,17 +1496,108 @@ function OrdersPageContent() {
     }
   }, [editFactoryMode, editForm, editLoadingPostcodeIdUi, editOpen]);
 
-  useEffect(() => {
-    if (!editOpen || !editLoadingPostcodeIdUi) return;
-    const cities = editPostcodeCitiesQuery.data?.items ?? [];
-    if (cities.length !== 1) return;
-    const onlyCityId = cities[0]?.id;
-    if (!onlyCityId) return;
-    editForm.setFieldValue("loading_city_id_ui", onlyCityId);
-    if (editFactoryMode === "create") {
-      editForm.setFieldValue(["create_factory", "loading_address", "city_id"], onlyCityId);
+  async function handleCreateFactoryFromEditForm() {
+    try {
+      await editForm.validateFields([
+        "factory_country_id",
+        ["create_factory", "factory_name"],
+        ["create_factory", "loading_address", "name"],
+        ["create_factory", "loading_address", "address"],
+        "loading_postcode_id_ui",
+        "loading_city_id_ui",
+      ]);
+    } catch {
+      return;
     }
-  }, [editFactoryMode, editForm, editLoadingPostcodeIdUi, editOpen, editPostcodeCitiesQuery.data?.items]);
+
+    const values = editForm.getFieldsValue(true) as OrderEditForm;
+    const factoryName = trimOrUndefined(values.create_factory?.factory_name);
+    const countryId = values.factory_country_id;
+    const address = trimOrUndefined(values.create_factory?.loading_address?.address);
+    const loadingAddressName =
+      trimOrUndefined(values.create_factory?.loading_address?.name) ??
+      trimOrUndefined(values.create_factory?.loading_address?.address) ??
+      trimOrUndefined(values.create_factory?.factory_name) ??
+      "Основной адрес";
+    const postcodeId = values.loading_postcode_id_ui;
+    const cityId = values.loading_city_id_ui;
+    const primaryContactName =
+      trimOrUndefined(values.create_factory_contact?.full_name) ??
+      trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
+      "Primary Contact";
+    const primaryContactPhone =
+      trimOrUndefined(values.create_factory_contact?.phone) ??
+      trimOrUndefined(values.create_factory?.loading_address?.phone) ??
+      "+70000000000";
+    const primaryContactEmail =
+      trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+
+    if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
+      message.error("Заполните данные фабрики");
+      return;
+    }
+
+    setEditFactoryCreateSubmitting(true);
+    try {
+      const createdFactory = await apiRequest<Factory>("/api/factories", {
+        method: "POST",
+        body: {
+          name: factoryName,
+          country_id: countryId,
+          country: editCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+          city: editPostcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
+          address,
+          postcode: editPostcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
+          phone: trimOrUndefined(values.create_factory_contact?.phone),
+          primary_contact: {
+            full_name: primaryContactName,
+            phone: primaryContactPhone,
+            email: primaryContactEmail,
+          },
+        },
+      });
+
+      const createdAddress = await apiRequest<FactoryLoadingAddress>(
+        `/api/factories/${createdFactory.id}/loading-addresses`,
+        {
+          method: "POST",
+          body: {
+            name: loadingAddressName,
+            country_id: countryId,
+            postcode_id: postcodeId,
+            city_id: cityId,
+            address,
+            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
+            phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+          },
+        },
+      );
+
+      const nextPatch = {
+        factory_mode: "existing" as const,
+        factory_id: createdFactory.id,
+        loading_address_id: createdAddress.id,
+      };
+      editForm.setFieldsValue(nextPatch);
+      setEditCreatedFactoryOption({
+        id: createdFactory.id,
+        name: createdFactory.name,
+        subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+      });
+      setEditCreatedLoadingAddressOption(createdAddress);
+      setEditFactoryCreateConfirmed(true);
+      if (selectedOrderId) {
+        mergeEditDraft(selectedOrderId, nextPatch);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["factories"] });
+      await queryClient.invalidateQueries({ queryKey: ["orders", "edit-factory-contacts", createdFactory.id] });
+      message.success("Фабрика создана");
+    } catch {
+      message.error("Произошла ошибка");
+    } finally {
+      setEditFactoryCreateSubmitting(false);
+    }
+  }
 
   function invalidateOrdersQueries(orderId?: number) {
     return Promise.all([
@@ -1963,8 +1883,7 @@ function OrdersPageContent() {
     setGoodsLineModalOpen(false);
     setGoodsLineEditIndex(null);
     setFactoryCreateConfirmed(false);
-    setFactoryCreateConfirmShown(false);
-    factoryCreateConfirmOpenRef.current = false;
+    setFactoryCreateSubmitting(false);
     resetCreateDraft();
     createForm.resetFields();
     createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
@@ -1981,8 +1900,7 @@ function OrdersPageContent() {
     setGoodsLineModalOpen(false);
     setGoodsLineEditIndex(null);
     setFactoryCreateConfirmed(false);
-    setFactoryCreateConfirmShown(false);
-    factoryCreateConfirmOpenRef.current = false;
+    setFactoryCreateSubmitting(false);
     resetCreateDraft();
     setCreateOpen(true);
     createForm.setFieldsValue(CREATE_ORDER_DRAFT_DEFAULTS as Partial<OrderCreateForm>);
@@ -3012,6 +2930,7 @@ function OrdersPageContent() {
     }
     setEditOpen(true);
     setIsEditMode(false);
+    setEditFactoryCreateSubmitting(false);
     deepLinkedOrderIdRef.current = deepLinkEditOrderId;
   }, [deepLinkEditOrderId, deepLinkOrderQuery.data?.order, editDraftsByOrderId, editForm, standaloneOrderView]);
 
@@ -3325,6 +3244,23 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     };
   }
 
+  function formatQuantityUnit(unitCode: string | undefined) {
+    if (!unitCode) return undefined;
+
+    const label = quantityUnitLabelByValue.get(unitCode) ?? unitCode;
+    const normalized = label.trim().toLowerCase();
+
+    if (["pcs", "piece", "pieces", "шт", "шт."].includes(normalized)) {
+      return "шт.";
+    }
+
+    if (["m2", "m²", "square meter", "square meters", "кв. м", "кв. м."].includes(normalized)) {
+      return "м²";
+    }
+
+    return label;
+  }
+
   function getGoodsLinePopupText(line: OrderCreateGoodsLineForm) {
     const itemTypeCode = trimOrUndefined(line.item_type);
     const customItemType = trimOrUndefined(line.custom_item_type);
@@ -3338,9 +3274,12 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     const weight = trimOrUndefined(line.weight_kg);
     const quantity = trimOrUndefined(line.quantity_value);
     const unitCode = trimOrUndefined(line.quantity_unit);
-    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : undefined;
+    const unit = formatQuantityUnit(unitCode);
     const name = [itemType, description].filter(Boolean).join(" ");
-    const details = [weight ? `${weight}кг` : undefined, quantity ? `${quantity}${unit ? ` ${unit}` : ""}` : undefined].filter(Boolean);
+    const details = [
+      weight ? `вес ${weight} кг` : undefined,
+      quantity ? `количество ${quantity}${unit ? ` ${unit}` : ""}` : undefined,
+    ].filter(Boolean);
     return [name || "Строка товара", ...details].join(" - ");
   }
 
@@ -3739,15 +3678,21 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     const customItemType = trimOrUndefined(line.custom_item_type);
     const itemTypeLabel =
       itemTypeCode === "other"
-        ? customItemType ?? "—"
+        ? customItemType
         : itemTypeCode
           ? (itemTypeLabelByValue.get(itemTypeCode) ?? itemTypeCode)
-          : "—";
-    const weight = trimOrUndefined(line.weight_kg) ?? "—";
-    const quantity = trimOrUndefined(line.quantity_value) ?? "—";
+          : undefined;
+    const weight = trimOrUndefined(line.weight_kg);
+    const quantity = trimOrUndefined(line.quantity_value);
     const unitCode = trimOrUndefined(line.quantity_unit);
-    const unit = unitCode ? (quantityUnitLabelByValue.get(unitCode) ?? unitCode) : "—";
-    return `${itemTypeLabel} + ${weight} + ${quantity} + ${unit}`;
+    const unit = formatQuantityUnit(unitCode);
+    const parts = [
+      itemTypeLabel,
+      weight ? `вес ${weight} кг` : undefined,
+      quantity ? `количество ${quantity}${unit ? ` ${unit}` : ""}` : undefined,
+    ].filter(Boolean);
+
+    return parts.join(" · ") || "Строка товара";
   }
 
   function openEditOrderGoodsLineModal() {
@@ -5013,6 +4958,19 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     />
                   </Form.Item>
 
+                  {createFactoryMode === "create" ? (
+                    <Form.Item className="crm-order-create-col">
+                      <Button
+                        block
+                        type="primary"
+                        loading={factoryCreateSubmitting}
+                        onClick={handleCreateFactoryFromCreateForm}
+                      >
+                        Создать фабрику
+                      </Button>
+                    </Form.Item>
+                  ) : null}
+
                   {(createFactoryMode === "existing" || factoryCreateConfirmed) ? (
                   <div className="crm-order-create-col crm-order-create-contact-block">
                     <div className="crm-order-create-contact-head">
@@ -6119,6 +6077,19 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   notFoundContent={editPostcodeCitiesQuery.isLoading ? "Загрузка..." : "Города не найдены"}
                 />
               </Form.Item>
+              {editFactoryMode === "create" ? (
+                <Form.Item>
+                  <Button
+                    block
+                    type="primary"
+                    loading={editFactoryCreateSubmitting}
+                    disabled={!isEditMode}
+                    onClick={handleCreateFactoryFromEditForm}
+                  >
+                    Создать фабрику
+                  </Button>
+                </Form.Item>
+              ) : null}
               <Form.Item name="loading_address_line" label="Адрес">
                 <Input />
               </Form.Item>
