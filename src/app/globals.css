@@ -916,6 +916,24 @@ body.crm-column-resizing * {
   min-height: calc(100vh - 120px);
 }
 
+.crm-order-activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.crm-order-activity-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.crm-order-activity-meta {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;
@@ -1026,10 +1044,6 @@ body.crm-column-resizing * {
   .crm-order-detail-layout {
     grid-template-columns: 1fr;
     gap: 0;
-  }
-
-  .crm-order-detail-right {
-    display: none;
   }
 
   .crm-toolbar-search .ant-input-search {

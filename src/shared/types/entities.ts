@@ -214,9 +214,7 @@ export type OrderListItem = {
   quote_price_amount: string | null;
   quote_price_currency: string | null;
   quote_price_currency_other_label?: string | null;
-  special_tariff_amount: string | null;
-  special_tariff_currency: string | null;
-  special_tariff_currency_other_label?: string | null;
+  special_tariff: string | null;
   quote_priced_at: string | null;
   quote_client_decision_at: string | null;
   factory_id: number;
@@ -313,6 +311,7 @@ export type OrderEditCard = {
   weight_coefficient_effective?: string | number | null;
   days_same_status?: number | null;
   latest_factory_request_at?: string | null;
+  status_history?: OrderStatusHistoryItem[];
 };
 
 export type OrderInternalEditRead = {
@@ -359,6 +358,7 @@ export type OrderWritePayload = {
   client_goods_value_amount?: string | null;
   client_goods_value_currency?: string | null;
   client_goods_value_currency_other_label?: string | null;
+  special_tariff?: string | null;
   pickup_date_from?: string | null;
   pickup_date_to?: string | null;
   assigned_forwarder_user_id?: number | null;

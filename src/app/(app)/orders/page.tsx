@@ -56,6 +56,7 @@ import {
   clampOrderCreateWizardStep,
   getOrderCreateWizardSteps,
 } from "@/shared/lib/order-create-wizard";
+import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
@@ -82,6 +83,7 @@ import type {
   OrderFilterParams,
   OrderInternalEditRead,
   OrderListItem,
+  OrderStatusHistoryItem,
   PaginatedResponse,
   Trip,
   UserAdmin,
@@ -465,6 +467,32 @@ function getOrderTripSourceMismatchMessage() {
   return "Заказ не совпадает с точками выбранного рейса";
 }
 
+function formatOrderActivityDate(value: string | null | undefined) {
+  return value ? dayjs(value).format("DD.MM.YYYY HH:mm") : "—";
+}
+
+function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
+  return (
+    <Card className="crm-panel crm-order-detail-right" title="Архив">
+      {items.length ? (
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          {items.map((item) => (
+            <div className="crm-order-activity-item" key={item.id}>
+              <Typography.Text>{getOrderActivityText(item)}</Typography.Text>
+              <Typography.Text type="secondary" className="crm-order-activity-meta">
+                {formatOrderActivityDate(item.created_at)} · Статус: {item.status_name} · Дата статуса:{" "}
+                {item.status_date ?? "—"} · Пользователь: {item.changed_by_user_id ?? "—"}
+              </Typography.Text>
+            </div>
+          ))}
+        </Space>
+      ) : (
+        <Typography.Text type="secondary">Нет событий</Typography.Text>
+      )}
+    </Card>
+  );
+}
+
 function normalizeCurrencyPayload(
   currency: string | undefined,
   otherLabel: string | undefined,
@@ -630,11 +658,7 @@ function OrdersPageContent() {
   const [assignForm] = Form.useForm<{ trip_id?: number }>();
   const [assignForwarderForm] = Form.useForm<{ assigned_forwarder_user_id?: number }>();
   const [pickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
-  const [specialTariffForm] = Form.useForm<{
-    amount?: number | null;
-    currency?: string;
-    special_tariff_currency_other_label?: string;
-  }>();
+  const [specialTariffForm] = Form.useForm<{ special_tariff?: string | null }>();
   const [requestToFactoryForm] = Form.useForm<{ comment?: string; template_id?: number }>();
   const [quotePriceForm] = Form.useForm<{
     amount: number;
@@ -667,11 +691,7 @@ function OrdersPageContent() {
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
   const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
-  const [bulkSpecialTariffForm] = Form.useForm<{
-    amount?: number | null;
-    currency?: string;
-    special_tariff_currency_other_label?: string;
-  }>();
+  const [bulkSpecialTariffForm] = Form.useForm<{ special_tariff?: string | null }>();
   const [bulkCommentForm] = Form.useForm<{ comment: string }>();
   const [factoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
   const [editFactoryContactQuickForm] = Form.useForm<{ full_name?: string; phone?: string; email?: string }>();
@@ -2749,27 +2769,24 @@ function OrdersPageContent() {
   const specialTariffMutation = useMutation({
     mutationFn: ({
       id,
-      amount,
-      currency,
-      special_tariff_currency_other_label,
+      special_tariff,
     }: {
       id: number;
-      amount?: number | null;
-      currency?: string;
-      special_tariff_currency_other_label?: string;
+      special_tariff?: string | null;
     }) => {
-      const normalized = normalizeCurrencyPayload(
-        currency,
-        special_tariff_currency_other_label,
-        "special_tariff_currency_other_label",
+      const formData = new FormData();
+      formData.set(
+        "payload",
+        JSON.stringify({
+          order: {
+            special_tariff: normalizeSpecialTariffText(special_tariff),
+          },
+        }),
       );
-      return apiRequest<OrderDetail>(`/api/orders/${id}/special-tariff`, {
-        method: "POST",
-        body: {
-          amount: amount ?? null,
-          currency: normalized.currency,
-          special_tariff_currency_other_label: normalized.otherLabel,
-        },
+
+      return apiRequest<OrderDetail>(`/api/orders/${id}`, {
+        method: "PATCH",
+        body: formData,
       });
     },
     onSuccess: async (_, values) => {
@@ -2971,9 +2988,7 @@ function OrdersPageContent() {
   function openSpecialTariff(record: OrderListItem) {
     setSelected(record);
     specialTariffForm.setFieldsValue({
-      amount: record.special_tariff_amount ? Number(record.special_tariff_amount) : undefined,
-      currency: record.special_tariff_currency ?? "EUR",
-      special_tariff_currency_other_label: record.special_tariff_currency_other_label ?? undefined,
+      special_tariff: record.special_tariff ?? undefined,
     });
     setSpecialTariffOpen(true);
   }
@@ -3539,12 +3554,10 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     },
     {
       title: "Спецтариф",
+      dataIndex: "special_tariff",
       key: "special_tariff",
-      width: 130,
-      render: (_, record) =>
-        record.special_tariff_amount
-          ? `${record.special_tariff_amount}${record.special_tariff_currency ? ` ${record.special_tariff_currency}` : ""}`
-          : "—",
+      width: 190,
+      render: (value: string | null | undefined) => value || "—",
     },
     {
       title: "Комм. склада",
@@ -6415,7 +6428,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           )}
         </Card>
       )}
-      <Card className="crm-panel crm-order-detail-right" />
+      <OrderActivityPanel items={editDetailQuery.data?.card?.status_history ?? []} />
       </div>
       ) : null}
 
@@ -6724,45 +6737,16 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
         <Form
           form={specialTariffForm}
           layout="vertical"
-          initialValues={{ currency: "EUR" }}
-          onFinish={(values: {
-            amount?: number | null;
-            currency?: string;
-            special_tariff_currency_other_label?: string;
-          }) => {
+          onFinish={(values: { special_tariff?: string | null }) => {
             if (!selected) return;
             specialTariffMutation.mutate({
               id: selected.id,
-              amount: values.amount,
-              currency: values.currency || "EUR",
-              special_tariff_currency_other_label: values.special_tariff_currency_other_label,
+              special_tariff: values.special_tariff,
             });
           }}
         >
-          <Form.Item name="amount" label="Сумма (пусто = очистить)">
-            <InputNumber min={0} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: "USD", value: "USD" },
-                { label: "EUR", value: "EUR" },
-                { label: "OTHER", value: "OTHER" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
-            {({ getFieldValue }) =>
-              getFieldValue("currency") === "OTHER" ? (
-                <Form.Item
-                  name="special_tariff_currency_other_label"
-                  label="Текст валюты для OTHER"
-                  rules={[{ required: true, message: "Укажите текст валюты" }]}
-                >
-                  <Input />
-                </Form.Item>
-              ) : null
-            }
+          <Form.Item name="special_tariff" label="Спецтариф (пусто = очистить)">
+            <Input.TextArea rows={4} maxLength={1000} showCount />
           </Form.Item>
         </Form>
       </Modal>
@@ -6980,52 +6964,14 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
         <Form
           form={bulkSpecialTariffForm}
           layout="vertical"
-          initialValues={{ currency: "EUR" }}
-          onFinish={(values: {
-            amount?: number | null;
-            currency?: string;
-            special_tariff_currency_other_label?: string;
-          }) => {
-            try {
-              const normalized = normalizeCurrencyPayload(
-                values.currency,
-                values.special_tariff_currency_other_label,
-                "special_tariff_currency_other_label",
-              );
-              runBulkMutation("special-tariff", {
-                amount: values.amount ?? null,
-                currency: normalized.currency,
-                special_tariff_currency_other_label: normalized.otherLabel,
-              });
-            } catch (error) {
-              message.error(error instanceof Error ? error.message : "Ошибка в валюте спецтарифа");
-            }
+          onFinish={(values: { special_tariff?: string | null }) => {
+            runBulkMutation("special-tariff", {
+              special_tariff: normalizeSpecialTariffText(values.special_tariff),
+            });
           }}
         >
-          <Form.Item name="amount" label="Сумма (пусто = очистить)">
-            <InputNumber min={0} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="currency" label="Валюта" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { label: "USD", value: "USD" },
-                { label: "EUR", value: "EUR" },
-                { label: "OTHER", value: "OTHER" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(prev, next) => prev.currency !== next.currency}>
-            {({ getFieldValue }) =>
-              getFieldValue("currency") === "OTHER" ? (
-                <Form.Item
-                  name="special_tariff_currency_other_label"
-                  label="Текст валюты для OTHER"
-                  rules={[{ required: true, message: "Укажите текст валюты" }]}
-                >
-                  <Input />
-                </Form.Item>
-              ) : null
-            }
+          <Form.Item name="special_tariff" label="Спецтариф (пусто = очистить)">
+            <Input.TextArea rows={4} maxLength={1000} showCount />
           </Form.Item>
         </Form>
       </Modal>
