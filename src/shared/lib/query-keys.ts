@@ -6,6 +6,8 @@ export const queryKeys = {
     me: ["users", "me"] as const,
     list: (params: unknown) => ["users", "list", params] as const,
     detail: (id: number) => ["users", "detail", id] as const,
+    lookupManagers: (params: unknown) => ["users", "lookups", "managers", params] as const,
+    lookupCities: (params: unknown) => ["users", "lookups", "cities", params] as const,
   },
   orders: {
     list: (params: unknown) => ["orders", "list", params] as const,

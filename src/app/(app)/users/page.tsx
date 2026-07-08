@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
+  AutoComplete,
   Button,
   Card,
   DatePicker,
@@ -21,7 +22,7 @@ import {
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import dayjs from "dayjs";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
@@ -31,8 +32,17 @@ import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { canManageUsers, canResetUserPassword, normalizeRoleName } from "@/shared/lib/rbac";
+import { buildUserWritePayload, requiredWhenForwarder } from "@/shared/lib/user-flow";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
-import type { PaginatedResponse, UserAdmin, UserFilterParams, UserWritePayload } from "@/shared/types/entities";
+import type {
+  Country,
+  PaginatedResponse,
+  UserAdmin,
+  UserCityLookupItem,
+  UserFilterParams,
+  UserManagerLookupItem,
+  UserWritePayload,
+} from "@/shared/types/entities";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -46,6 +56,20 @@ function parseBool(value: string | null): boolean | undefined {
   return undefined;
 }
 
+function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
+  if (!response) return [];
+  return Array.isArray(response) ? response : (response.items ?? []);
+}
+
+function countryLabel(country: Country) {
+  return country.name_en || country.name_ru;
+}
+
+function optionCountryId(option: unknown) {
+  const maybeOption = option as { countryId?: number };
+  return maybeOption.countryId;
+}
+
 function getParams(searchParams: URLSearchParams): UserFilterParams {
   return {
     page: parseNumber(searchParams.get("page")) ?? 1,
@@ -57,7 +81,6 @@ function getParams(searchParams: URLSearchParams): UserFilterParams {
     role_name: searchParams.get("role_name") ?? undefined,
     country: searchParams.get("country") ?? undefined,
     city: searchParams.get("city") ?? undefined,
-    is_logist: parseBool(searchParams.get("is_logist")),
     has_email: parseBool(searchParams.get("has_email")),
     has_orders: parseBool(searchParams.get("has_orders")),
     last_order_date_from: searchParams.get("last_order_date_from") ?? undefined,
@@ -76,8 +99,9 @@ type UserCreateForm = {
   phone?: string;
   country?: string;
   city?: string;
+  address?: string;
   is_active: boolean;
-  is_logist: boolean;
+  selectedCountryId?: number;
 };
 
 type UserEditForm = Omit<UserCreateForm, "password" | "company_name"> & {
@@ -101,6 +125,11 @@ function UsersPageContent() {
   const [editOpen, setEditOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [managerSearch, setManagerSearch] = useState("");
+  const [createCountrySearch, setCreateCountrySearch] = useState("");
+  const [editCountrySearch, setEditCountrySearch] = useState("");
+  const [createCitySearch, setCreateCitySearch] = useState("");
+  const [editCitySearch, setEditCitySearch] = useState("");
   const [selected, setSelected] = useState<UserAdmin | null>(null);
   const [createForm] = Form.useForm<UserCreateForm>();
   const [editForm] = Form.useForm<UserEditForm>();
@@ -109,11 +138,13 @@ function UsersPageContent() {
     query?: string;
     company_id?: number;
     role_name?: RoleName | string;
-    is_logist?: boolean;
     has_email?: boolean;
     has_orders?: boolean;
   }>();
   const createRoleName = Form.useWatch("role_name", createForm) as RoleName | string | undefined;
+  const editRoleName = Form.useWatch("role_name", editForm) as RoleName | string | undefined;
+  const createCountryId = Form.useWatch("selectedCountryId", createForm) as number | undefined;
+  const editCountryId = Form.useWatch("selectedCountryId", editForm) as number | undefined;
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
 
@@ -133,6 +164,103 @@ function UsersPageContent() {
       }),
     enabled: canWrite,
   });
+
+  const managersQuery = useQuery({
+    queryKey: queryKeys.users.lookupManagers({ query: managerSearch || undefined }),
+    queryFn: () =>
+      apiRequest<UserManagerLookupItem[] | { items: UserManagerLookupItem[] }>("/api/users/lookups/managers", {
+        query: { query: managerSearch || undefined },
+      }),
+    enabled: createOpen || editOpen,
+  });
+
+  const createCountriesQuery = useQuery({
+    queryKey: queryKeys.countries.list({ query: createCountrySearch || undefined, page: 1, page_size: 50 }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Country>>("/api/countries", {
+        query: { query: createCountrySearch || undefined, page: 1, page_size: 50 },
+      }),
+    enabled: createOpen,
+  });
+
+  const editCountriesQuery = useQuery({
+    queryKey: queryKeys.countries.list({ query: editCountrySearch || undefined, page: 1, page_size: 50 }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Country>>("/api/countries", {
+        query: { query: editCountrySearch || undefined, page: 1, page_size: 50 },
+      }),
+    enabled: editOpen,
+  });
+
+  const createCitiesQuery = useQuery({
+    queryKey: queryKeys.users.lookupCities({ country_id: createCountryId, query: createCitySearch || undefined }),
+    queryFn: () =>
+      apiRequest<UserCityLookupItem[] | { items: UserCityLookupItem[] }>("/api/users/lookups/cities", {
+        query: { country_id: createCountryId, query: createCitySearch || undefined },
+      }),
+    enabled: createOpen && Boolean(createCountryId),
+  });
+
+  const editCitiesQuery = useQuery({
+    queryKey: queryKeys.users.lookupCities({ country_id: editCountryId, query: editCitySearch || undefined }),
+    queryFn: () =>
+      apiRequest<UserCityLookupItem[] | { items: UserCityLookupItem[] }>("/api/users/lookups/cities", {
+        query: { country_id: editCountryId, query: editCitySearch || undefined },
+      }),
+    enabled: editOpen && Boolean(editCountryId),
+  });
+
+  const managerOptions = useMemo(
+    () =>
+      extractItems(managersQuery.data).map((manager) => ({
+        label: [manager.label || manager.full_name, manager.email].filter(Boolean).join(" · "),
+        value: manager.id,
+      })),
+    [managersQuery.data],
+  );
+
+  const createCountryOptions = useMemo(
+    () =>
+      (createCountriesQuery.data?.items ?? []).map((country) => ({
+        label: countryLabel(country),
+        value: countryLabel(country),
+        countryId: country.id,
+      })),
+    [createCountriesQuery.data?.items],
+  );
+
+  const editCountryOptions = useMemo(
+    () =>
+      (editCountriesQuery.data?.items ?? []).map((country) => ({
+        label: countryLabel(country),
+        value: countryLabel(country),
+        countryId: country.id,
+      })),
+    [editCountriesQuery.data?.items],
+  );
+
+  const createCityOptions = useMemo(
+    () => extractItems(createCitiesQuery.data).map((item) => ({ label: item.city, value: item.city })),
+    [createCitiesQuery.data],
+  );
+
+  const editCityOptions = useMemo(
+    () => extractItems(editCitiesQuery.data).map((item) => ({ label: item.city, value: item.city })),
+    [editCitiesQuery.data],
+  );
+
+  useEffect(() => {
+    if (!editOpen || editCountryId) return;
+    const currentCountry = editForm.getFieldValue("country");
+    if (!currentCountry) return;
+
+    const matchedCountry = editCountriesQuery.data?.items.find(
+      (country) => country.name_ru === currentCountry || country.name_en === currentCountry,
+    );
+    if (matchedCountry) {
+      editForm.setFieldValue("selectedCountryId", matchedCountry.id);
+    }
+  }, [editCountriesQuery.data?.items, editCountryId, editForm, editOpen]);
 
   const createMutation = useMutation({
     mutationFn: (payload: UserWritePayload) =>
@@ -262,11 +390,14 @@ function UsersPageContent() {
                 phone: record.phone ?? undefined,
                 country: record.country ?? undefined,
                 city: record.city ?? undefined,
+                address: record.address ?? undefined,
+                selectedCountryId: undefined,
                 is_active: record.is_active,
-                is_logist: record.is_logist,
                 total_orders: record.total_orders ?? undefined,
                 last_order_date: record.last_order_date ? dayjs(record.last_order_date) : undefined,
               });
+              setEditCountrySearch(record.country ?? "");
+              setEditCitySearch(record.city ?? "");
               setEditOpen(true);
             }}
           >
@@ -340,7 +471,6 @@ function UsersPageContent() {
             query: params.query,
             company_id: params.company_id,
             role_name: params.role_name,
-            is_logist: params.is_logist,
             has_email: params.has_email,
             has_orders: params.has_orders,
           }}
@@ -349,7 +479,6 @@ function UsersPageContent() {
               query: values.query,
               company_id: values.company_id,
               role_name: values.role_name,
-              is_logist: values.is_logist,
               has_email: values.has_email,
               has_orders: values.has_orders,
               page: 1,
@@ -368,16 +497,6 @@ function UsersPageContent() {
                 allowClear
                 placeholder="Роль"
                 options={roleOptions.map((role) => ({ label: role, value: role }))}
-              />
-            </Form.Item>
-            <Form.Item name="is_logist" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="Логист"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
               />
             </Form.Item>
             <Form.Item name="has_email" className="crm-col-2" style={{ marginBottom: 0 }}>
@@ -461,16 +580,14 @@ function UsersPageContent() {
         <Form<UserCreateForm>
           form={createForm}
           layout="vertical"
-          initialValues={{ is_active: true, is_logist: false }}
+          initialValues={{ is_active: true }}
           onFinish={(values) => {
-            const companyName = values.company_name?.trim();
-            createMutation.mutate({
-              ...values,
-              company_name: companyName || undefined,
-              is_active: isManagerActor ? true : values.is_active,
-            });
+            createMutation.mutate(buildUserWritePayload(values, { includeCompanyName: true, isManagerActor }));
           }}
         >
+          <Form.Item name="selectedCountryId" hidden>
+            <InputNumber />
+          </Form.Item>
           <Form.Item
             name="company_name"
             label="Название компании"
@@ -500,8 +617,17 @@ function UsersPageContent() {
           <Form.Item name="role_name" label="Роль" rules={[{ required: true }]}> 
             <Select options={roleOptions.map((role) => ({ label: role, value: role }))} />
           </Form.Item>
-          <Form.Item name="personal_manager_id" label="Персональный менеджер ID">
-            <InputNumber min={1} style={{ width: "100%" }} />
+          <Form.Item name="personal_manager_id" label="Персональный менеджер">
+            <Select
+              allowClear
+              showSearch
+              filterOption={false}
+              loading={managersQuery.isLoading}
+              options={managerOptions}
+              placeholder="Выберите менеджера"
+              onSearch={setManagerSearch}
+              notFoundContent={managersQuery.isLoading ? "Загрузка..." : "Менеджеры не найдены"}
+            />
           </Form.Item>
           <Form.Item name="email" label="Email">
             <Input />
@@ -509,17 +635,39 @@ function UsersPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="country" label="Страна">
-            <Input />
+          <Form.Item name="country" label="Страна" rules={[requiredWhenForwarder(createRoleName, "Выберите страну")]}>
+            <AutoComplete
+              allowClear
+              options={createCountryOptions}
+              placeholder="Начните вводить страну"
+              onSearch={setCreateCountrySearch}
+              onSelect={(value, option) => {
+                createForm.setFieldsValue({ country: value, selectedCountryId: optionCountryId(option), city: undefined });
+                setCreateCitySearch("");
+              }}
+              onChange={(value) => {
+                createForm.setFieldValue("country", value);
+                if (!value) {
+                  createForm.setFieldsValue({ selectedCountryId: undefined, city: undefined });
+                  setCreateCitySearch("");
+                }
+              }}
+            />
           </Form.Item>
-          <Form.Item name="city" label="Город">
+          <Form.Item name="city" label="Город" rules={[requiredWhenForwarder(createRoleName, "Выберите город")]}>
+            <AutoComplete
+              allowClear
+              disabled={!createCountryId}
+              options={createCityOptions}
+              placeholder={createCountryId ? "Начните вводить город" : "Сначала выберите страну"}
+              onSearch={setCreateCitySearch}
+            />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес" rules={[requiredWhenForwarder(createRoleName, "Укажите адрес")]}>
             <Input />
           </Form.Item>
           <Form.Item name="is_active" label="Активен" valuePropName="checked">
             <Switch disabled={isManagerActor} />
-          </Form.Item>
-          <Form.Item name="is_logist" label="Логист" valuePropName="checked">
-            <Switch />
           </Form.Item>
         </Form>
       </Modal>
@@ -539,23 +687,13 @@ function UsersPageContent() {
             if (!selected) return;
             updateMutation.mutate({
               id: selected.id,
-              payload: {
-                personal_manager_id: values.personal_manager_id,
-                full_name: values.full_name,
-                login: values.login,
-                role_name: values.role_name,
-                email: values.email,
-                phone: values.phone,
-                country: values.country,
-                city: values.city,
-                is_active: isManagerActor ? true : values.is_active,
-                is_logist: values.is_logist,
-                total_orders: values.total_orders,
-                last_order_date: values.last_order_date?.format("YYYY-MM-DD"),
-              },
+              payload: buildUserWritePayload(values, { isManagerActor }),
             });
           }}
         >
+          <Form.Item name="selectedCountryId" hidden>
+            <InputNumber />
+          </Form.Item>
           <Form.Item name="full_name" label="ФИО" rules={[{ required: true }]}> 
             <Input />
           </Form.Item>
@@ -565,8 +703,17 @@ function UsersPageContent() {
           <Form.Item name="role_name" label="Роль" rules={[{ required: true }]}> 
             <Select options={roleOptions.map((role) => ({ label: role, value: role }))} />
           </Form.Item>
-          <Form.Item name="personal_manager_id" label="Персональный менеджер ID">
-            <InputNumber min={1} style={{ width: "100%" }} />
+          <Form.Item name="personal_manager_id" label="Персональный менеджер">
+            <Select
+              allowClear
+              showSearch
+              filterOption={false}
+              loading={managersQuery.isLoading}
+              options={managerOptions}
+              placeholder="Выберите менеджера"
+              onSearch={setManagerSearch}
+              notFoundContent={managersQuery.isLoading ? "Загрузка..." : "Менеджеры не найдены"}
+            />
           </Form.Item>
           <Form.Item name="email" label="Email">
             <Input />
@@ -574,10 +721,35 @@ function UsersPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="country" label="Страна">
-            <Input />
+          <Form.Item name="country" label="Страна" rules={[requiredWhenForwarder(editRoleName, "Выберите страну")]}>
+            <AutoComplete
+              allowClear
+              options={editCountryOptions}
+              placeholder="Начните вводить страну"
+              onSearch={setEditCountrySearch}
+              onSelect={(value, option) => {
+                editForm.setFieldsValue({ country: value, selectedCountryId: optionCountryId(option), city: undefined });
+                setEditCitySearch("");
+              }}
+              onChange={(value) => {
+                editForm.setFieldValue("country", value);
+                if (!value) {
+                  editForm.setFieldsValue({ selectedCountryId: undefined, city: undefined });
+                  setEditCitySearch("");
+                }
+              }}
+            />
           </Form.Item>
-          <Form.Item name="city" label="Город">
+          <Form.Item name="city" label="Город" rules={[requiredWhenForwarder(editRoleName, "Выберите город")]}>
+            <AutoComplete
+              allowClear
+              disabled={!editCountryId}
+              options={editCityOptions}
+              placeholder={editCountryId ? "Начните вводить город" : "Сначала выберите страну"}
+              onSearch={setEditCitySearch}
+            />
+          </Form.Item>
+          <Form.Item name="address" label="Адрес" rules={[requiredWhenForwarder(editRoleName, "Укажите адрес")]}>
             <Input />
           </Form.Item>
           <Form.Item name="total_orders" label="Всего заказов">
@@ -588,9 +760,6 @@ function UsersPageContent() {
           </Form.Item>
           <Form.Item name="is_active" label="Активен" valuePropName="checked">
             <Switch disabled={isManagerActor} />
-          </Form.Item>
-          <Form.Item name="is_logist" label="Логист" valuePropName="checked">
-            <Switch />
           </Form.Item>
         </Form>
       </Modal>

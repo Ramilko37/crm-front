@@ -40,9 +40,9 @@ export type UserProfile = {
   phone: string | null;
   country: string | null;
   city: string | null;
+  address: string | null;
   role_name: RoleName | string;
   is_active: boolean;
-  is_logist: boolean;
   receives_newsletter: boolean;
   exclude_from_promotions: boolean;
 };
@@ -53,6 +53,7 @@ export type UserProfileUpdatePayload = {
   phone?: string;
   country?: string;
   city?: string;
+  address?: string;
   receives_newsletter?: boolean;
   exclude_from_promotions?: boolean;
 };
@@ -710,9 +711,9 @@ export type UserAdmin = {
   phone: string | null;
   country: string | null;
   city: string | null;
+  address: string | null;
   role_name: RoleName | string;
   is_active: boolean;
-  is_logist: boolean;
   total_orders: number | null;
   last_order_date: string | null;
 };
@@ -728,8 +729,8 @@ export type UserWritePayload = {
   phone?: string | null;
   country?: string | null;
   city?: string | null;
+  address?: string | null;
   is_active?: boolean;
-  is_logist?: boolean;
   total_orders?: number | null;
   last_order_date?: string | null;
 };
@@ -740,13 +741,23 @@ export type UserFilterParams = ListParams & {
   company_id?: number;
   role_name?: RoleName | string;
   personal_manager_id?: number;
-  is_logist?: boolean;
   country?: string;
   city?: string;
   has_email?: boolean;
   has_orders?: boolean;
   last_order_date_from?: string;
   last_order_date_to?: string;
+};
+
+export type UserManagerLookupItem = {
+  id: number;
+  full_name: string;
+  email: string | null;
+  label: string;
+};
+
+export type UserCityLookupItem = {
+  city: string;
 };
 
 export type PathPoint = {

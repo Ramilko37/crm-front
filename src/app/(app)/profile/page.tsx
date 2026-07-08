@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
+  AutoComplete,
   Button,
   Card,
   Descriptions,
@@ -12,21 +13,44 @@ import {
   Switch,
   Typography,
 } from "antd";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { apiRequest } from "@/shared/lib/api";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
+import { requiredWhenForwarder } from "@/shared/lib/user-flow";
 import { PageHeader } from "@/shared/ui/page-frame";
-import type { UserPasswordChangePayload, UserProfile, UserProfileUpdatePayload } from "@/shared/types/entities";
+import type {
+  Country,
+  PaginatedResponse,
+  UserCityLookupItem,
+  UserPasswordChangePayload,
+  UserProfile,
+  UserProfileUpdatePayload,
+} from "@/shared/types/entities";
 
 type ProfileForm = UserProfileUpdatePayload & {
   login: string;
   company_name?: string;
+  selectedCountryId?: number;
 };
 
 type PasswordForm = UserPasswordChangePayload;
+
+function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
+  if (!response) return [];
+  return Array.isArray(response) ? response : (response.items ?? []);
+}
+
+function countryLabel(country: Country) {
+  return country.name_en || country.name_ru;
+}
+
+function optionCountryId(option: unknown) {
+  const maybeOption = option as { countryId?: number };
+  return maybeOption.countryId;
+}
 
 export default function ProfilePage() {
   const queryClient = useQueryClient();
@@ -34,6 +58,9 @@ export default function ProfilePage() {
   const { message } = App.useApp();
   const [profileForm] = Form.useForm<ProfileForm>();
   const [passwordForm] = Form.useForm<PasswordForm>();
+  const [countrySearch, setCountrySearch] = useState("");
+  const [citySearch, setCitySearch] = useState("");
+  const selectedCountryId = Form.useWatch("selectedCountryId", profileForm) as number | undefined;
 
   const profileQuery = useQuery({
     queryKey: queryKeys.users.me,
@@ -41,6 +68,54 @@ export default function ProfilePage() {
     enabled: Boolean(authQuery.data && !authQuery.data.is_superuser),
     retry: false,
   });
+  const effectiveCountrySearch = countrySearch || profileQuery.data?.country || "";
+  const effectiveCitySearch = citySearch || profileQuery.data?.city || "";
+
+  const countriesQuery = useQuery({
+    queryKey: queryKeys.countries.list({ query: effectiveCountrySearch || undefined, page: 1, page_size: 50 }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Country>>("/api/countries", {
+        query: { query: effectiveCountrySearch || undefined, page: 1, page_size: 50 },
+      }),
+    enabled: Boolean(authQuery.data && !authQuery.data.is_superuser),
+  });
+
+  const citiesQuery = useQuery({
+    queryKey: queryKeys.users.lookupCities({ country_id: selectedCountryId, query: effectiveCitySearch || undefined }),
+    queryFn: () =>
+      apiRequest<UserCityLookupItem[] | { items: UserCityLookupItem[] }>("/api/users/lookups/cities", {
+        query: { country_id: selectedCountryId, query: effectiveCitySearch || undefined },
+      }),
+    enabled: Boolean(selectedCountryId),
+  });
+
+  const countryOptions = useMemo(
+    () =>
+      (countriesQuery.data?.items ?? []).map((country) => ({
+        label: countryLabel(country),
+        value: countryLabel(country),
+        countryId: country.id,
+      })),
+    [countriesQuery.data?.items],
+  );
+
+  const cityOptions = useMemo(
+    () => extractItems(citiesQuery.data).map((item) => ({ label: item.city, value: item.city })),
+    [citiesQuery.data],
+  );
+
+  useEffect(() => {
+    if (selectedCountryId) return;
+    const currentCountry = profileForm.getFieldValue("country");
+    if (!currentCountry) return;
+
+    const matchedCountry = countriesQuery.data?.items.find(
+      (country) => country.name_ru === currentCountry || country.name_en === currentCountry,
+    );
+    if (matchedCountry) {
+      profileForm.setFieldValue("selectedCountryId", matchedCountry.id);
+    }
+  }, [countriesQuery.data?.items, profileForm, selectedCountryId]);
 
   useEffect(() => {
     if (!profileQuery.data) {
@@ -55,6 +130,8 @@ export default function ProfilePage() {
       phone: profileQuery.data.phone ?? undefined,
       country: profileQuery.data.country ?? undefined,
       city: profileQuery.data.city ?? undefined,
+      address: profileQuery.data.address ?? undefined,
+      selectedCountryId: undefined,
       receives_newsletter: profileQuery.data.receives_newsletter,
       exclude_from_promotions: profileQuery.data.exclude_from_promotions,
     });
@@ -95,6 +172,7 @@ export default function ProfilePage() {
 
   const authContext = authQuery.data;
   const isSuperuser = Boolean(authContext?.is_superuser);
+  const profileRoleName = profileQuery.data?.role_name ?? authContext?.role_name;
 
   return (
     <Space orientation="vertical" size={16} className="crm-page-stack">
@@ -142,11 +220,15 @@ export default function ProfilePage() {
                   phone: values.phone,
                   country: values.country,
                   city: values.city,
+                  address: values.address,
                   receives_newsletter: values.receives_newsletter,
                   exclude_from_promotions: values.exclude_from_promotions,
                 });
               }}
             >
+              <Form.Item name="selectedCountryId" hidden>
+                <Input />
+              </Form.Item>
               <Form.Item name="login" label="Логин">
                 <Input disabled />
               </Form.Item>
@@ -162,10 +244,51 @@ export default function ProfilePage() {
               <Form.Item name="phone" label="Телефон">
                 <Input />
               </Form.Item>
-              <Form.Item name="country" label="Страна">
-                <Input />
+              <Form.Item
+                name="country"
+                label="Страна"
+                rules={[requiredWhenForwarder(profileRoleName, "Выберите страну")]}
+              >
+                <AutoComplete
+                  allowClear
+                  options={countryOptions}
+                  placeholder="Начните вводить страну"
+                  onSearch={setCountrySearch}
+                  onSelect={(value, option) => {
+                    profileForm.setFieldsValue({
+                      country: value,
+                      selectedCountryId: optionCountryId(option),
+                      city: undefined,
+                    });
+                    setCitySearch("");
+                  }}
+                  onChange={(value) => {
+                    profileForm.setFieldValue("country", value);
+                    if (!value) {
+                      profileForm.setFieldsValue({ selectedCountryId: undefined, city: undefined });
+                      setCitySearch("");
+                    }
+                  }}
+                />
               </Form.Item>
-              <Form.Item name="city" label="Город">
+              <Form.Item
+                name="city"
+                label="Город"
+                rules={[requiredWhenForwarder(profileRoleName, "Выберите город")]}
+              >
+                <AutoComplete
+                  allowClear
+                  disabled={!selectedCountryId}
+                  options={cityOptions}
+                  placeholder={selectedCountryId ? "Начните вводить город" : "Сначала выберите страну"}
+                  onSearch={setCitySearch}
+                />
+              </Form.Item>
+              <Form.Item
+                name="address"
+                label="Адрес"
+                rules={[requiredWhenForwarder(profileRoleName, "Укажите адрес")]}
+              >
                 <Input />
               </Form.Item>
               <Form.Item name="receives_newsletter" label="Получать рассылку" valuePropName="checked">

@@ -29,9 +29,9 @@ const forwarder: UserAdmin = {
   phone: "+7",
   country: "Russia",
   city: "Moscow",
+  address: "Tverskaya 1",
   role_name: "forwarder",
   is_active: true,
-  is_logist: false,
   total_orders: null,
   last_order_date: null,
 };

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-07-08
+
+### Users / Forwarder Contract
+- Фронт переведен на обновленный user flow из `FROWARDER.md`: `role_name` остается единственным role-полем, legacy `is_logist` больше не читается и не отправляется в user create/update/profile payload.
+- Для `role_name = "forwarder"` в admin create/edit и self-service profile edit теперь обязательны строковые поля `country`, `city`, `address`.
+- В user create/edit payload добавлен `address`; `country_id`, `city_id` и frontend-only `selectedCountryId` в backend user endpoints не отправляются.
+- Поле `personal_manager_id` в user form теперь выбирается через lookup активных менеджеров:
+  - frontend BFF: `GET /api/users/lookups/managers`
+  - backend target: `GET /api/v1/users/lookups/managers`
+- Для выбора адреса экспедитора добавлены BFF proxy:
+  - `GET /api/users/lookups/cities` -> `GET /api/v1/users/lookups/cities`
+  - страны продолжают идти через `GET /api/countries` -> `GET /api/v1/countries`
+- City lookup вызывается только после выбора страны; в финальный save payload попадают только строковые значения `country`, `city`, `address`.
+
+### Проверки
+- `./node_modules/.bin/tsc --noEmit`
+- `./node_modules/.bin/eslint` по измененным source/test файлам
+- `./node_modules/.bin/vitest run src/shared/lib/__tests__/user-flow.test.ts src/app/api/__tests__/contract-routes.test.ts src/shared/lib/__tests__/trip-point-forms.test.ts`
+
 ## 2026-05-22
 
 ### Edit Order (`/orders/[id]`)

@@ -60,6 +60,17 @@ describe("contract route mappings", () => {
     expect(proxyToBackend).toHaveBeenNthCalledWith(3, request, "/trips/lookups/forwarders");
   });
 
+  it("proxies user lookup endpoints used by user forms", async () => {
+    const managers = await import("@/app/api/users/lookups/managers/route");
+    const cities = await import("@/app/api/users/lookups/cities/route");
+
+    await managers.GET(request);
+    await cities.GET(request);
+
+    expect(proxyToBackend).toHaveBeenNthCalledWith(1, request, "/users/lookups/managers");
+    expect(proxyToBackend).toHaveBeenNthCalledWith(2, request, "/users/lookups/cities");
+  });
+
   it("proxies unified trip points endpoints", async () => {
     const points = await import("@/app/api/trips/[tripId]/points/route");
     const point = await import("@/app/api/trips/[tripId]/points/[tripPointId]/route");
