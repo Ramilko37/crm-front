@@ -24,6 +24,10 @@ type TripPointFormFieldsProps = {
   factoriesLoading?: boolean;
   forwardersLoading?: boolean;
   pathPointsLoading?: boolean;
+  onCountrySearch?: (value: string) => void;
+  onCitySearch?: (value: string) => void;
+  onFactorySearch?: (value: string) => void;
+  onForwarderSearch?: (value: string) => void;
 };
 
 export function TripPointFormFields({
@@ -38,39 +42,15 @@ export function TripPointFormFields({
   factoriesLoading,
   forwardersLoading,
   pathPointsLoading,
+  onCountrySearch,
+  onCitySearch,
+  onFactorySearch,
+  onForwarderSearch,
 }: TripPointFormFieldsProps) {
   const pointKind = Form.useWatch("point_kind", form) ?? "path";
   const loadingSource = Form.useWatch("loading_source", form) ?? "factory";
   const selectedCountryId = Form.useWatch("country_id", form);
   const selectedCity = Form.useWatch("city", form);
-
-  function applyFactorySnapshot(factoryId: number | undefined) {
-    const factory = factories.find((item) => item.id === factoryId);
-    if (!factory) return;
-
-    form.setFieldsValue({
-      name: factory.name,
-      address: factory.address ?? factory.name,
-      postcode: factory.postcode ?? undefined,
-      country: factory.country ?? undefined,
-      city: factory.city ?? undefined,
-      phone: factory.phone ?? undefined,
-    });
-  }
-
-  function applyForwarderSnapshot(forwarderId: number | undefined) {
-    const forwarder = forwarders.find((item) => item.id === forwarderId);
-    if (!forwarder) return;
-
-    form.setFieldsValue({
-      name: forwarder.company_name || forwarder.full_name || `Экспедитор #${forwarder.id}`,
-      address: [forwarder.country, forwarder.city].filter(Boolean).join(", ") || forwarder.full_name || undefined,
-      country: forwarder.country ?? undefined,
-      city: forwarder.city ?? undefined,
-      contact_name: forwarder.full_name ?? undefined,
-      phone: forwarder.phone ?? undefined,
-    });
-  }
 
   return (
     <>
@@ -91,12 +71,7 @@ export function TripPointFormFields({
               city: undefined,
               factory_id: undefined,
               forwarder_user_id: undefined,
-              name: undefined,
-              address: undefined,
-              postcode: undefined,
               country: undefined,
-              contact_name: undefined,
-              phone: undefined,
             });
           }}
         />
@@ -135,12 +110,7 @@ export function TripPointFormFields({
                   city: undefined,
                   factory_id: undefined,
                   forwarder_user_id: undefined,
-                  name: undefined,
-                  address: undefined,
-                  postcode: undefined,
                   country: undefined,
-                  contact_name: undefined,
-                  phone: undefined,
                 });
               }}
             />
@@ -149,13 +119,14 @@ export function TripPointFormFields({
           <Form.Item name="country_id" label="Страна" rules={[{ required: true, message: "Выберите страну" }]}>
             <Select
               showSearch
-              optionFilterProp="label"
+              filterOption={false}
               loading={countriesLoading}
               placeholder="Выберите страну"
               options={countries.map((country) => ({
                 label: country.name_ru,
                 value: country.id,
               }))}
+              onSearch={onCountrySearch}
               onChange={(value) => {
                 const country = countries.find((item) => item.id === value);
                 form.setFieldsValue({
@@ -164,11 +135,6 @@ export function TripPointFormFields({
                   city: undefined,
                   factory_id: undefined,
                   forwarder_user_id: undefined,
-                  name: undefined,
-                  address: undefined,
-                  postcode: undefined,
-                  contact_name: undefined,
-                  phone: undefined,
                 });
               }}
             />
@@ -177,7 +143,7 @@ export function TripPointFormFields({
           <Form.Item name="city" label="Город" rules={[{ required: true, message: "Выберите город" }]}>
             <Select
               showSearch
-              optionFilterProp="label"
+              filterOption={false}
               loading={citiesLoading}
               placeholder="Выберите город"
               disabled={!selectedCountryId}
@@ -185,16 +151,12 @@ export function TripPointFormFields({
                 label: city,
                 value: city,
               }))}
+              onSearch={onCitySearch}
               onChange={(value) => {
                 form.setFieldsValue({
                   city: value,
                   factory_id: undefined,
                   forwarder_user_id: undefined,
-                  name: undefined,
-                  address: undefined,
-                  postcode: undefined,
-                  contact_name: undefined,
-                  phone: undefined,
                 });
               }}
             />
@@ -208,7 +170,7 @@ export function TripPointFormFields({
             >
               <Select
                 showSearch
-                optionFilterProp="label"
+                filterOption={false}
                 loading={forwardersLoading}
                 placeholder="Выберите экспедитора"
                 disabled={!selectedCountryId || !selectedCity}
@@ -216,7 +178,7 @@ export function TripPointFormFields({
                   label: formatForwarderLocationLabel(forwarder),
                   value: forwarder.id,
                 }))}
-                onChange={(value) => applyForwarderSnapshot(value)}
+                onSearch={onForwarderSearch}
               />
             </Form.Item>
           ) : (
@@ -227,7 +189,7 @@ export function TripPointFormFields({
             >
               <Select
                 showSearch
-                optionFilterProp="label"
+                filterOption={false}
                 loading={factoriesLoading}
                 placeholder="Выберите фабрику"
                 disabled={!selectedCountryId || !selectedCity}
@@ -235,7 +197,7 @@ export function TripPointFormFields({
                   label: formatFactoryLocationLabel(factory),
                   value: factory.id,
                 }))}
-                onChange={(value) => applyFactorySnapshot(value)}
+                onSearch={onFactorySearch}
               />
             </Form.Item>
           )}
