@@ -80,6 +80,24 @@ export function toTripPointDateIso(value?: dayjs.Dayjs) {
   return value?.startOf("day").toISOString() ?? null;
 }
 
+export function buildTripPointLookupQuery({
+  countryId,
+  city,
+  query,
+}: {
+  countryId: number;
+  city?: string;
+  query: string;
+}) {
+  return {
+    country_id: countryId,
+    ...(city ? { city } : {}),
+    query,
+    page: 1,
+    page_size: 50,
+  };
+}
+
 export function buildTripPointInitialValues(record: TripPoint): TripPointFormValues {
   return {
     point_kind: record.is_loading_point ? "loading" : "path",
@@ -111,10 +129,6 @@ export function hasDuplicateTripPointSequence(
 
 export function buildTripPointPayload(
   values: TripPointFormValues,
-  _legacyContext?: {
-    factories: Factory[];
-    forwarders: TripForwarderLookupItem[];
-  },
 ): TripPointWritePayload {
   const sequence = values.sequence;
   if (!sequence || sequence < 1) {

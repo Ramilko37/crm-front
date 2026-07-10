@@ -28,6 +28,9 @@ type TripPointFormFieldsProps = {
   onCitySearch?: (value: string) => void;
   onFactorySearch?: (value: string) => void;
   onForwarderSearch?: (value: string) => void;
+  onLoadingSourceChange?: () => void;
+  onCountryChange?: () => void;
+  onCityChange?: () => void;
 };
 
 export function TripPointFormFields({
@@ -46,6 +49,9 @@ export function TripPointFormFields({
   onCitySearch,
   onFactorySearch,
   onForwarderSearch,
+  onLoadingSourceChange,
+  onCountryChange,
+  onCityChange,
 }: TripPointFormFieldsProps) {
   const pointKind = Form.useWatch("point_kind", form) ?? "path";
   const loadingSource = Form.useWatch("loading_source", form) ?? "factory";
@@ -73,6 +79,7 @@ export function TripPointFormFields({
               forwarder_user_id: undefined,
               country: undefined,
             });
+            onLoadingSourceChange?.();
           }}
         />
       </Form.Item>
@@ -112,6 +119,7 @@ export function TripPointFormFields({
                   forwarder_user_id: undefined,
                   country: undefined,
                 });
+                onLoadingSourceChange?.();
               }}
             />
           </Form.Item>
@@ -136,6 +144,7 @@ export function TripPointFormFields({
                   factory_id: undefined,
                   forwarder_user_id: undefined,
                 });
+                onCountryChange?.();
               }}
             />
           </Form.Item>
@@ -158,6 +167,7 @@ export function TripPointFormFields({
                   factory_id: undefined,
                   forwarder_user_id: undefined,
                 });
+                onCityChange?.();
               }}
             />
           </Form.Item>

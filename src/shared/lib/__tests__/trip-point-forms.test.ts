@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildTripPointLookupQuery,
   buildTripPointPayload,
   hasDuplicateTripPointSequence,
 } from "@/shared/lib/trip-point-forms";
@@ -46,7 +47,6 @@ describe("trip point form helpers", () => {
         sequence: 1,
         is_completed: false,
       },
-      { factories: [factory], forwarders: [forwarder] },
     );
 
     expect(payload).toEqual({
@@ -67,7 +67,6 @@ describe("trip point form helpers", () => {
         forwarder_user_id: forwarder.id,
         sequence: 2,
       },
-      { factories: [factory], forwarders: [forwarder] },
     );
 
     expect(payload).toEqual({
@@ -89,7 +88,6 @@ describe("trip point form helpers", () => {
           forwarder_user_id: forwarder.id,
           sequence: 1,
         },
-        { factories: [factory], forwarders: [forwarder] },
       ),
     ).toThrow("Выберите фабрику");
   });
@@ -102,7 +100,6 @@ describe("trip point form helpers", () => {
         sequence: 3,
         is_completed: true,
       },
-      { factories: [factory], forwarders: [forwarder] },
     );
 
     expect(payload).toMatchObject({
@@ -124,5 +121,15 @@ describe("trip point form helpers", () => {
     expect(hasDuplicateTripPointSequence(2, points)).toBe(true);
     expect(hasDuplicateTripPointSequence(2, points, 2)).toBe(false);
     expect(hasDuplicateTripPointSequence(3, points)).toBe(false);
+  });
+
+  it("builds a query-aware lookup request for a loading point", () => {
+    expect(buildTripPointLookupQuery({ countryId: 1, city: "Milan", query: "main" })).toEqual({
+      country_id: 1,
+      city: "Milan",
+      query: "main",
+      page: 1,
+      page_size: 50,
+    });
   });
 });

@@ -40,6 +40,7 @@ import { queryKeys } from "@/shared/lib/query-keys";
 import { isBackOfficeRole } from "@/shared/lib/rbac";
 import {
   buildTripPointInitialValues,
+  buildTripPointLookupQuery,
   buildTripPointPayload,
   formatTripCurrentStage,
   formatTripPointDate,
@@ -118,6 +119,10 @@ function TripDetailPageContent() {
   const [editTripOpen, setEditTripOpen] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [selectedPoint, setSelectedPoint] = useState<TripPoint | null>(null);
+  const [pointCountrySearch, setPointCountrySearch] = useState("");
+  const [pointCitySearch, setPointCitySearch] = useState("");
+  const [pointFactorySearch, setPointFactorySearch] = useState("");
+  const [pointForwarderSearch, setPointForwarderSearch] = useState("");
   const [ordersParams, setOrdersParams] = useState<TripOrdersParams>({
     page: 1,
     page_size: 20,
@@ -161,10 +166,10 @@ function TripDetailPageContent() {
   });
 
   const countriesQuery = useQuery({
-    queryKey: queryKeys.countries.list({ page: 1, page_size: 250 }),
+    queryKey: queryKeys.countries.list({ page: 1, page_size: 50, query: pointCountrySearch }),
     queryFn: () =>
       apiRequest<PaginatedResponse<Country>>("/api/countries", {
-        query: { page: 1, page_size: 250 },
+        query: { page: 1, page_size: 50, query: pointCountrySearch },
       }),
     enabled: pointModalOpen && pointKind === "loading",
   });
@@ -180,16 +185,13 @@ function TripDetailPageContent() {
   const factoryCitiesQuery = useQuery({
     queryKey: queryKeys.trips.lookupCities({
       country_id: pointCountryId,
+      query: pointCitySearch,
       page: 1,
       page_size: 50,
     }),
     queryFn: () =>
       apiRequest<PaginatedResponse<TripCityLookupItem>>("/api/trips/lookups/cities", {
-        query: {
-          page: 1,
-          page_size: 50,
-          country_id: pointCountryId,
-        },
+        query: buildTripPointLookupQuery({ countryId: pointCountryId!, query: pointCitySearch }),
       }),
     enabled:
       pointModalOpen &&
@@ -199,50 +201,41 @@ function TripDetailPageContent() {
   });
 
   const countries = useMemo(() => countriesQuery.data?.items ?? [], [countriesQuery.data?.items]);
-  const selectedPointCountry = useMemo(
-    () => countries.find((country) => country.id === pointCountryId),
-    [countries, pointCountryId],
-  );
-  const selectedPointFactoryCountry = selectedPointCountry?.name_en || selectedPointCountry?.name_ru || pointCountryName;
-
   const pointFactoriesQuery = useQuery({
     queryKey: queryKeys.factories.list({
       scope: "trip-point-factories",
-      country: selectedPointFactoryCountry,
+      country_id: pointCountryId,
       city: pointCity,
+      query: pointFactorySearch,
       page: 1,
-      page_size: 200,
+      page_size: 50,
     }),
     queryFn: () =>
       apiRequest<PaginatedResponse<Factory>>("/api/factories", {
-        query: {
-          page: 1,
-          page_size: 200,
-          country: selectedPointFactoryCountry,
+        query: buildTripPointLookupQuery({
+          countryId: pointCountryId!,
           city: pointCity,
-        },
+          query: pointFactorySearch,
+        }),
       }),
     enabled:
       pointModalOpen &&
       pointKind === "loading" &&
       pointLoadingSource !== "forwarder" &&
-      Boolean(selectedPointFactoryCountry) &&
+      Boolean(pointCountryId) &&
       Boolean(pointCity),
   });
 
   const forwarderCitiesQuery = useQuery({
     queryKey: queryKeys.trips.lookupForwarderCities({
       country_id: pointCountryId,
+      query: pointCitySearch,
       page: 1,
       page_size: 50,
     }),
     queryFn: () =>
       apiRequest<PaginatedResponse<TripCityLookupItem>>("/api/trips/lookups/forwarder-cities", {
-        query: {
-          page: 1,
-          page_size: 50,
-          country_id: pointCountryId,
-        },
+        query: buildTripPointLookupQuery({ countryId: pointCountryId!, query: pointCitySearch }),
       }),
     enabled:
       pointModalOpen &&
@@ -255,17 +248,17 @@ function TripDetailPageContent() {
     queryKey: queryKeys.trips.lookupForwarders({
       country_id: pointCountryId,
       city: pointCity,
+      query: pointForwarderSearch,
       page: 1,
       page_size: 250,
     }),
     queryFn: () =>
       apiRequest<PaginatedResponse<TripForwarderLookupItem>>("/api/trips/lookups/forwarders", {
-        query: {
-          page: 1,
-          page_size: 250,
-          country_id: pointCountryId,
+        query: buildTripPointLookupQuery({
+          countryId: pointCountryId!,
           city: pointCity,
-        },
+          query: pointForwarderSearch,
+        }),
       }),
     enabled:
       pointModalOpen &&
@@ -281,13 +274,29 @@ function TripDetailPageContent() {
   const factoryCityOptions = useMemo(() => uniqueSortedCities(factoryCitiesQuery.data?.items ?? []), [factoryCitiesQuery.data?.items]);
   const forwarderCityOptions = useMemo(() => uniqueSortedCities(forwarderCitiesQuery.data?.items ?? []), [forwarderCitiesQuery.data?.items]);
   const pointCityOptions = pointLoadingSource === "forwarder" ? forwarderCityOptions : factoryCityOptions;
-  const pointPayloadFactories = useMemo(() => {
+  const selectedPointFactory = useMemo<Factory | null>(() => {
+    if (!selectedPoint?.factory_id) return null;
+
+    return {
+      id: selectedPoint.factory_id,
+      country_id: pointCountryId ?? null,
+      name: selectedPoint.name || `Фабрика #${selectedPoint.factory_id}`,
+      country: selectedPoint.country,
+      city: selectedPoint.city,
+      address: selectedPoint.address,
+      postcode: selectedPoint.postcode,
+      phone: selectedPoint.phone,
+      primary_email: null,
+      certificate_status: null,
+    };
+  }, [pointCountryId, selectedPoint]);
+  const pointFactoryOptions = useMemo(() => {
     const byId = new Map<number, Factory>();
-    for (const factory of [...factories, ...pointFactories]) {
+    for (const factory of [...pointFactories, ...(selectedPointFactory ? [selectedPointFactory] : [])]) {
       byId.set(factory.id, factory);
     }
     return Array.from(byId.values());
-  }, [factories, pointFactories]);
+  }, [pointFactories, selectedPointFactory]);
   const pathPoints = useMemo(() => pathPointsCatalogQuery.data?.items ?? [], [pathPointsCatalogQuery.data?.items]);
   const pointForwarders = useMemo(() => pointForwardersQuery.data?.items ?? [], [pointForwardersQuery.data?.items]);
   const selectedPointForwarder = useMemo<TripForwarderLookupItem | null>(() => {
@@ -302,7 +311,7 @@ function TripDetailPageContent() {
       label: [selectedPoint.name, selectedPoint.contact_name].filter(Boolean).join(" / ") || selectedPoint.name,
     };
   }, [selectedPoint]);
-  const pointPayloadForwarders = useMemo(() => {
+  const pointForwarderOptions = useMemo(() => {
     const byId = new Map<number, TripForwarderLookupItem>();
     for (const forwarder of [...pointForwarders, ...(selectedPointForwarder ? [selectedPointForwarder] : [])]) {
       byId.set(forwarder.id, forwarder);
@@ -311,8 +320,8 @@ function TripDetailPageContent() {
   }, [pointForwarders, selectedPointForwarder]);
 
   const pointContext = useMemo(
-    () => ({ factories, pathPoints, forwarders: pointPayloadForwarders }),
-    [factories, pathPoints, pointPayloadForwarders],
+    () => ({ factories, pathPoints, forwarders: pointForwarderOptions }),
+    [factories, pathPoints, pointForwarderOptions],
   );
 
   useEffect(() => {
@@ -353,10 +362,7 @@ function TripDetailPageContent() {
         throw new Error("Sequence должен быть уникален внутри рейса");
       }
 
-      const payload = buildTripPointPayload(
-        { ...values, sequence },
-        { factories: pointPayloadFactories, forwarders: pointPayloadForwarders },
-      );
+      const payload = buildTripPointPayload({ ...values, sequence });
 
       if (selectedPoint) {
         const updatePayload: TripPointUpdatePayload = payload;
@@ -400,6 +406,10 @@ function TripDetailPageContent() {
 
   function openCreatePoint() {
     setSelectedPoint(null);
+    setPointCountrySearch("");
+    setPointCitySearch("");
+    setPointFactorySearch("");
+    setPointForwarderSearch("");
     pointForm.resetFields();
     pointForm.setFieldsValue({
       point_kind: "path",
@@ -410,8 +420,23 @@ function TripDetailPageContent() {
     setPointModalOpen(true);
   }
 
+  function resetPointSourceSearches() {
+    setPointCitySearch("");
+    setPointFactorySearch("");
+    setPointForwarderSearch("");
+  }
+
+  function resetPointCitySearches() {
+    setPointFactorySearch("");
+    setPointForwarderSearch("");
+  }
+
   function openEditPoint(record: TripPoint) {
     setSelectedPoint(record);
+    setPointCountrySearch("");
+    setPointCitySearch("");
+    setPointFactorySearch("");
+    setPointForwarderSearch("");
     pointForm.setFieldsValue(buildTripPointInitialValues(record));
     setPointModalOpen(true);
   }
@@ -746,8 +771,8 @@ function TripDetailPageContent() {
             form={pointForm}
             countries={countries}
             cities={pointCityOptions}
-            factories={pointFactories}
-            forwarders={pointPayloadForwarders}
+            factories={pointFactoryOptions}
+            forwarders={pointForwarderOptions}
             pathPoints={pathPoints}
             countriesLoading={countriesQuery.isLoading}
             citiesLoading={
@@ -758,6 +783,13 @@ function TripDetailPageContent() {
             factoriesLoading={pointFactoriesQuery.isLoading}
             forwardersLoading={pointForwardersQuery.isLoading}
             pathPointsLoading={pathPointsCatalogQuery.isLoading}
+            onCountrySearch={setPointCountrySearch}
+            onCitySearch={setPointCitySearch}
+            onFactorySearch={setPointFactorySearch}
+            onForwarderSearch={setPointForwarderSearch}
+            onLoadingSourceChange={resetPointSourceSearches}
+            onCountryChange={resetPointSourceSearches}
+            onCityChange={resetPointCitySearches}
           />
         </Form>
       </Modal>
