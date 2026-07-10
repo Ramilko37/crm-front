@@ -1,13 +1,6 @@
 import dayjs from "dayjs";
 
-import type {
-  Factory,
-  PathPoint,
-  TripCurrentStage,
-  TripForwarderLookupItem,
-  TripPoint,
-  TripPointWritePayload,
-} from "@/shared/types/entities";
+import type { Factory, PathPoint, TripCurrentStage, TripForwarderLookupItem, TripPoint, TripPointWritePayload } from "@/shared/types/entities";
 
 export type TripPointKind = "path" | "loading";
 export type TripLoadingSource = "factory" | "forwarder";
@@ -95,13 +88,8 @@ export function buildTripPointInitialValues(record: TripPoint): TripPointFormVal
     factory_id: record.factory_id ?? undefined,
     forwarder_user_id: record.forwarder_user_id ?? undefined,
     sequence: record.sequence,
-    name: record.name ?? undefined,
-    address: record.address ?? undefined,
-    postcode: record.postcode ?? undefined,
     country: record.country ?? undefined,
     city: record.city ?? undefined,
-    contact_name: record.contact_name ?? undefined,
-    phone: record.phone ?? undefined,
     planned_at: record.planned_at ? dayjs(record.planned_at) : undefined,
     actual_at: record.actual_at ? dayjs(record.actual_at) : undefined,
     is_completed: record.is_completed,
@@ -123,7 +111,7 @@ export function hasDuplicateTripPointSequence(
 
 export function buildTripPointPayload(
   values: TripPointFormValues,
-  context: {
+  _legacyContext?: {
     factories: Factory[];
     forwarders: TripForwarderLookupItem[];
   },
@@ -149,22 +137,14 @@ export function buildTripPointPayload(
   }
 
   if (values.loading_source === "factory") {
-    const factory = context.factories.find((item) => item.id === values.factory_id);
-    if (!factory) {
+    if (!values.factory_id) {
       throw new Error("Выберите фабрику");
     }
 
     return {
       sequence,
       is_loading_point: true,
-      factory_id: factory.id,
-      name: values.name?.trim() || factory.name,
-      address: values.address?.trim() || factory.address?.trim() || factory.name,
-      postcode: values.postcode?.trim() || factory.postcode,
-      country: values.country?.trim() || factory.country,
-      city: values.city?.trim() || factory.city,
-      contact_name: values.contact_name?.trim() || null,
-      phone: values.phone?.trim() || factory.phone,
+      factory_id: values.factory_id,
       planned_at: toTripPointDateIso(values.planned_at),
       actual_at: toTripPointDateIso(values.actual_at),
       is_completed: values.is_completed ?? false,
@@ -172,25 +152,14 @@ export function buildTripPointPayload(
   }
 
   if (values.loading_source === "forwarder") {
-    const forwarder = context.forwarders.find((item) => item.id === values.forwarder_user_id);
-    if (!forwarder) {
+    if (!values.forwarder_user_id) {
       throw new Error("Выберите экспедитора");
     }
-
-    const address = values.address?.trim() || [forwarder.country, forwarder.city].filter(Boolean).join(", ");
-    const displayName = forwarder.company_name || forwarder.full_name || `Экспедитор #${forwarder.id}`;
 
     return {
       sequence,
       is_loading_point: true,
-      forwarder_user_id: forwarder.id,
-      name: values.name?.trim() || displayName,
-      address: address || displayName,
-      postcode: values.postcode?.trim() || null,
-      country: values.country?.trim() || forwarder.country,
-      city: values.city?.trim() || forwarder.city,
-      contact_name: values.contact_name?.trim() || forwarder.full_name || null,
-      phone: values.phone?.trim() || forwarder.phone || null,
+      forwarder_user_id: values.forwarder_user_id,
       planned_at: toTripPointDateIso(values.planned_at),
       actual_at: toTripPointDateIso(values.actual_at),
       is_completed: values.is_completed ?? false,

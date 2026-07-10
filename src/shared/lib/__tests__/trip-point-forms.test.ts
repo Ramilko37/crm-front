@@ -37,7 +37,7 @@ const forwarder: UserAdmin = {
 };
 
 describe("trip point form helpers", () => {
-  it("builds factory loading point payload with factory_id only", () => {
+  it("builds factory loading point payload with its source id only", () => {
     const payload = buildTripPointPayload(
       {
         point_kind: "loading",
@@ -49,39 +49,49 @@ describe("trip point form helpers", () => {
       { factories: [factory], forwarders: [forwarder] },
     );
 
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
+      sequence: 1,
       is_loading_point: true,
       factory_id: factory.id,
-      name: factory.name,
-      address: factory.address,
-      country: factory.country,
-      city: factory.city,
+      planned_at: null,
+      actual_at: null,
       is_completed: false,
     });
-    expect(payload.forwarder_user_id).toBeUndefined();
   });
 
-  it("builds forwarder loading point payload with forwarder_user_id only", () => {
+  it("builds forwarder loading point payload with its source id only", () => {
     const payload = buildTripPointPayload(
       {
         point_kind: "loading",
         loading_source: "forwarder",
         forwarder_user_id: forwarder.id,
         sequence: 2,
-        address: "Warehouse Street 10",
       },
       { factories: [factory], forwarders: [forwarder] },
     );
 
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
+      sequence: 2,
       is_loading_point: true,
       forwarder_user_id: forwarder.id,
-      name: forwarder.full_name,
-      address: "Warehouse Street 10",
-      contact_name: forwarder.full_name,
-      phone: forwarder.phone,
+      planned_at: null,
+      actual_at: null,
+      is_completed: false,
     });
-    expect(payload.factory_id).toBeUndefined();
+  });
+
+  it("rejects a loading point whose selected source id does not match its mode", () => {
+    expect(() =>
+      buildTripPointPayload(
+        {
+          point_kind: "loading",
+          loading_source: "factory",
+          forwarder_user_id: forwarder.id,
+          sequence: 1,
+        },
+        { factories: [factory], forwarders: [forwarder] },
+      ),
+    ).toThrow("Выберите фабрику");
   });
 
   it("builds path point payload with is_loading_point false", () => {
