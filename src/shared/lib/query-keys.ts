@@ -14,7 +14,10 @@ export const queryKeys = {
     detail: (id: number) => ["orders", "detail", id] as const,
     documents: (id: number) => ["orders", "documents", id] as const,
     statusHistory: (id: number) => ["orders", "status-history", id] as const,
-    chatMessages: (id: number) => ["orders", "chat-messages", id] as const,
+    chatMessages: (id: number, page?: number | "latest") =>
+      page === undefined
+        ? (["orders", "chat-messages", id] as const)
+        : (["orders", "chat-messages", id, page] as const),
     certificate: (id: number) => ["orders", "certificate", id] as const,
     clientMessages: (params: unknown) => ["orders", "client-messages", params] as const,
   },

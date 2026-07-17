@@ -11,6 +11,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -28,6 +29,7 @@ import {
   Steps,
   Table,
   Tag,
+  Tabs,
   Typography,
   Upload,
 } from "antd";
@@ -40,6 +42,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { OrderChatPanel } from "@/features/orders/order-chat-panel";
 import { apiRequest } from "@/shared/lib/api";
 import {
   formatEnumCode,
@@ -66,6 +69,7 @@ import { useOrderEditDraftStore } from "@/shared/stores/order-edit-draft-store";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
+  ClientMessageInboxItem,
   ClientOrderCreateMetadata,
   Postcode,
   PostcodeCity,
@@ -473,7 +477,7 @@ function formatOrderActivityDate(value: string | null | undefined) {
 
 function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
   return (
-    <Card className="crm-panel crm-order-detail-right" title="Архив">
+    <>
       {items.length ? (
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           {items.map((item) => (
@@ -489,7 +493,7 @@ function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
       ) : (
         <Typography.Text type="secondary">Нет событий</Typography.Text>
       )}
-    </Card>
+    </>
   );
 }
 
@@ -585,6 +589,9 @@ function OrdersPageContent() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createStep, setCreateStep] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
+  const [orderSidePanel, setOrderSidePanel] = useState<"chat" | "archive">(
+    searchParams.get("panel") === "archive" ? "archive" : "chat",
+  );
   const [isEditMode, setIsEditMode] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -808,6 +815,11 @@ function OrdersPageContent() {
   }, []);
 
   useEffect(() => {
+    const requestedPanel = searchParams.get("panel") === "archive" ? "archive" : "chat";
+    setOrderSidePanel((current) => (current === requestedPanel ? current : requestedPanel));
+  }, [searchParams]);
+
+  useEffect(() => {
     const nextStep = clampOrderCreateWizardStep(createStep, currentCreateOrderType);
     if (nextStep !== createStep) {
       setCreateStep(nextStep);
@@ -932,7 +944,7 @@ function OrdersPageContent() {
   const deepLinkOrderQuery = useQuery({
     queryKey: deepLinkEditOrderId ? queryKeys.orders.detail(deepLinkEditOrderId) : ["orders", "deep-link", "none"],
     queryFn: () => apiRequest<OrderInternalEditRead>(`/api/orders/${deepLinkEditOrderId}`),
-    enabled: standaloneOrderView && Boolean(deepLinkEditOrderId) && canWriteOrder,
+    enabled: standaloneOrderView && Boolean(deepLinkEditOrderId) && meQuery.isSuccess,
   });
 
   const createMetadataQuery = useQuery({
@@ -2920,6 +2932,34 @@ function OrdersPageContent() {
 
   function openView(record: OrderListItem) {
     router.push(`/orders/${record.id}`);
+  }
+
+  function clearOrderChatUnread(orderId: number) {
+    queryClient.setQueryData<OrderInternalEditRead>(queryKeys.orders.detail(orderId), (detail) => {
+      if (!detail) return detail;
+      return {
+        ...detail,
+        card: {
+          ...detail.card,
+          has_unread_client_messages: false,
+          unread_client_messages_count: 0,
+        },
+      };
+    });
+    queryClient.setQueriesData<PaginatedResponse<ClientMessageInboxItem>>(
+      { queryKey: ["orders", "client-messages"] },
+      (previous) =>
+        previous
+          ? {
+              ...previous,
+              items: previous.items.map((item) =>
+                item.order_id === orderId
+                  ? { ...item, has_unread_client_messages: false, unread_client_messages_count: 0 }
+                  : item,
+              ),
+            }
+          : previous,
+    );
   }
 
   useEffect(() => {
@@ -5792,7 +5832,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             {editDetailQuery.data?.order?.status_date ? dayjs(editDetailQuery.data.order.status_date).format("DD.MM.YYYY HH:mm") : "—"}
           </Typography.Text>
           <Typography.Text type="secondary">Изменил: —</Typography.Text>
-          {!isEditMode ? (
+          {canWriteOrderUi && !isEditMode ? (
             <Button type="primary" onClick={() => setIsEditMode(true)}>
               Редактировать
             </Button>
@@ -6428,7 +6468,48 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           )}
         </Card>
       )}
-      <OrderActivityPanel items={editDetailQuery.data?.card?.status_history ?? []} />
+      <Card className="crm-panel crm-order-detail-right">
+        <Tabs
+          activeKey={orderSidePanel}
+          destroyOnHidden
+          onChange={(key) => setOrderSidePanel(key === "archive" ? "archive" : "chat")}
+          items={[
+            {
+              key: "chat",
+              label: (
+                <Badge
+                  count={
+                    meQuery.data?.is_superuser || !["administrator", "manager", "logist"].includes(normalizedRole)
+                      ? 0
+                      : (editDetailQuery.data?.card?.unread_client_messages_count ?? 0)
+                  }
+                  size="small"
+                >
+                  <span>Чат</span>
+                </Badge>
+              ),
+              children:
+                selectedOrderId && meQuery.data ? (
+                  <OrderChatPanel
+                    orderId={selectedOrderId}
+                    active={orderSidePanel === "chat"}
+                    documents={editDetailQuery.data?.documents ?? []}
+                    currentUser={meQuery.data}
+                    unreadCount={editDetailQuery.data?.card?.unread_client_messages_count ?? 0}
+                    onUnreadCleared={() => clearOrderChatUnread(selectedOrderId)}
+                  />
+                ) : (
+                  <Typography.Text type="secondary">Загрузка чата...</Typography.Text>
+                ),
+            },
+            {
+              key: "archive",
+              label: "Архив",
+              children: <OrderActivityPanel items={editDetailQuery.data?.card?.status_history ?? []} />,
+            },
+          ]}
+        />
+      </Card>
       </div>
       ) : null}
 

@@ -91,4 +91,12 @@ describe("contract route mappings", () => {
 
     expect(proxyToBackend).toHaveBeenCalledWith(request, "/trips/7/orders");
   });
+
+  it("proxies order chat mark-as-read endpoint", async () => {
+    const read = await import("@/app/api/orders/[orderId]/chat-messages/read/route");
+
+    await read.POST(request, { params: Promise.resolve({ orderId: "42" }) });
+
+    expect(proxyToBackend).toHaveBeenCalledWith(request, "/orders/42/chat-messages/read");
+  });
 });

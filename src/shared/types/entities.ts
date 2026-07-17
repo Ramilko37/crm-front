@@ -138,7 +138,22 @@ export type OrderChatMessage = {
   author_role_name: string | null;
   is_from_client: boolean;
   message: string;
-  created_at: string;
+  documents: OrderChatDocument[];
+  created_at: string | null;
+};
+
+export type OrderChatDocument = {
+  id: number;
+  order_id: number | null;
+  document_type: string | null;
+  file_name: string;
+  file_path: string;
+  uploaded_at: string | null;
+};
+
+export type OrderChatMeta = {
+  has_unread_client_messages: boolean;
+  unread_client_messages_count: number;
 };
 
 export type OrderCertificate = {
@@ -312,6 +327,9 @@ export type OrderEditCard = {
   days_same_status?: number | null;
   latest_factory_request_at?: string | null;
   status_history?: OrderStatusHistoryItem[];
+  chat_messages?: OrderChatMessage[];
+  has_unread_client_messages?: boolean;
+  unread_client_messages_count?: number;
 };
 
 export type OrderInternalEditRead = {
@@ -1002,4 +1020,6 @@ export type ClientMessageInboxItem = {
   latest_message_at: string | null;
   latest_client_message_at: string | null;
   client_messages_count: number;
+  has_unread_client_messages: boolean;
+  unread_client_messages_count: number;
 };

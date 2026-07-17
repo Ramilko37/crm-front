@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Form, Input, InputNumber, Pagination, Space, Table, Typography } from "antd";
+import { Badge, Button, Card, Form, Input, InputNumber, Pagination, Space, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -72,7 +72,11 @@ function ClientMessagesPageContent() {
       title: "Заказ",
       key: "order",
       width: 180,
-      render: (_, row) => <Link href={`/orders/${row.order_id}`}>{renderOrderNumber(row.order_number)}</Link>,
+      render: (_, row) => (
+        <Badge count={row.unread_client_messages_count} size="small">
+          <Link href={`/orders/${row.order_id}?panel=chat`}>{renderOrderNumber(row.order_number)}</Link>
+        </Badge>
+      ),
     },
     {
       title: "Компания",
@@ -118,7 +122,7 @@ function ClientMessagesPageContent() {
       key: "actions",
       width: 130,
       render: (_, row) => (
-        <Button size="small" type="link" onClick={() => router.push(`/orders/${row.order_id}`)}>
+        <Button size="small" type="link" onClick={() => router.push(`/orders/${row.order_id}?panel=chat`)}>
           Открыть
         </Button>
       ),
@@ -195,6 +199,7 @@ function ClientMessagesPageContent() {
           loading={listQuery.isLoading}
           dataSource={rows}
           columns={columns}
+          rowClassName={(row) => (row.has_unread_client_messages ? "crm-client-message-unread" : "")}
           pagination={false}
           scroll={{ x: 1400 }}
           locale={{ emptyText: "Нет сообщений" }}
