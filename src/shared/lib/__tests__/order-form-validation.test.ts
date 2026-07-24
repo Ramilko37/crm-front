@@ -1,6 +1,8 @@
 import type { NamePath } from "antd/es/form/interface";
 
 import {
+  factoryMatchesSelectedCountry,
+  mergeDefinedOrderFormValues,
   normalizeOrderCurrency,
   resolvePostcodeCitySelection,
   shouldClearOrderCurrencyOtherLabel,
@@ -10,6 +12,7 @@ import {
   isCommercialOrderType,
 } from "@/shared/lib/order-form-validation";
 import type { ApiValidationIssue } from "@/shared/lib/errors";
+import type { Country } from "@/shared/types/entities";
 
 describe("order form validation", () => {
   it("requires commercial fields for delivery-like order types only", () => {
@@ -44,6 +47,36 @@ describe("order form validation", () => {
     expect(shouldClearOrderCurrencyOtherLabel(undefined)).toBe(false);
     expect(shouldClearOrderCurrencyOtherLabel("OTHER")).toBe(false);
     expect(shouldClearOrderCurrencyOtherLabel("EUR")).toBe(true);
+  });
+
+  it("does not let submit values from an unmounted wizard step erase preserved OTHER currency", () => {
+    expect(
+      mergeDefinedOrderFormValues(
+        { client_goods_value_currency: "OTHER", client_goods_value_currency_other_label: "CHF" },
+        { client_goods_value_currency: "OTHER", client_goods_value_currency_other_label: "CHF" },
+        { client_goods_value_currency: undefined, client_goods_value_currency_other_label: undefined },
+      ),
+    ).toEqual({ client_goods_value_currency: "OTHER", client_goods_value_currency_other_label: "CHF" });
+
+    expect(
+      mergeDefinedOrderFormValues(
+        { client_goods_value_currency: "OTHER", client_goods_value_currency_other_label: "CHF" },
+        { client_goods_value_currency: "EUR", client_goods_value_currency_other_label: undefined },
+        { client_goods_value_currency: undefined, client_goods_value_currency_other_label: undefined },
+      ),
+    ).toEqual({ client_goods_value_currency: "EUR", client_goods_value_currency_other_label: undefined });
+  });
+
+  it("filters factory options by the selected country even when the backend returns broader results", () => {
+    const countries: Country[] = [
+      { id: 1, name_en: "Åland Islands", name_ru: "Аландские острова", iso2: "AX", iso3: "ALA" },
+      { id: 2, name_en: "Austria", name_ru: "Австрия", iso2: "AT", iso3: "AUT" },
+    ];
+
+    expect(factoryMatchesSelectedCountry({ country_id: 1, country: "Austria" }, 1, countries)).toBe(true);
+    expect(factoryMatchesSelectedCountry({ country_id: null, country: "Åland Islands" }, 1, countries)).toBe(true);
+    expect(factoryMatchesSelectedCountry({ country_id: null, country: "Austria" }, 1, countries)).toBe(false);
+    expect(factoryMatchesSelectedCountry({ country_id: 2, country: "Austria" }, 1, countries)).toBe(false);
   });
 
   it("keeps request metrics optional but rejects provided non-positive values", () => {

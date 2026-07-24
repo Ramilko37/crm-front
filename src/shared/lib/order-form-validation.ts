@@ -2,6 +2,8 @@ import type { NamePath } from "antd/es/form/interface";
 
 import type { OrderType } from "@/shared/lib/domain-enums";
 import type { ApiValidationIssue } from "@/shared/lib/errors";
+import { findCountry } from "@/shared/lib/countries";
+import type { Country } from "@/shared/types/entities";
 
 export type OrderDecimalFailureReason = "required" | "invalid_number" | "must_be_positive";
 
@@ -128,6 +130,32 @@ export function normalizeOrderCurrency(
 
 export function shouldClearOrderCurrencyOtherLabel(currency: string | null | undefined) {
   return Boolean(currency) && currency !== "OTHER";
+}
+
+export function mergeDefinedOrderFormValues<T extends Record<string, unknown>>(
+  draftValues: Partial<T>,
+  snapshotValues: Partial<T>,
+  submitValues: Partial<T> = {},
+) {
+  const result: Partial<T> = { ...draftValues, ...snapshotValues };
+  Object.entries(submitValues).forEach(([key, value]) => {
+    if (value !== undefined) {
+      result[key as keyof T] = value as T[keyof T];
+    }
+  });
+  return result;
+}
+
+export function factoryMatchesSelectedCountry(
+  factory: { country_id?: number | null; country?: string | null },
+  selectedCountryId: number | null | undefined,
+  countries: Country[],
+) {
+  if (!selectedCountryId) return true;
+  if (typeof factory.country_id === "number") {
+    return factory.country_id === selectedCountryId;
+  }
+  return findCountry(countries, factory.country)?.id === selectedCountryId;
 }
 
 export function validateOrderFormValues(values: OrderFormValidationValues): OrderFormValidationResult {

@@ -68,8 +68,10 @@ import {
 import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
 import {
+  factoryMatchesSelectedCountry,
   isCommercialOrderType,
   mapOrderValidationIssueToNamePath,
+  mergeDefinedOrderFormValues,
   resolvePostcodeCitySelection,
   shouldClearOrderCurrencyOtherLabel,
   validateOrderDecimal,
@@ -1129,37 +1131,45 @@ function OrdersPageContent() {
         const response = await apiRequest<PaginatedResponse<ClientFactoryListItem>>("/api/client/factories", {
           query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
         });
-        return response.items.map((factory) => ({
-          id: factory.id,
-          name: factory.name,
-          subtitle: [
-            formatCountryEnglishName(
-              countryDirectory.countries,
-              factory.country,
-              "country_id" in factory && typeof factory.country_id === "number"
-                ? factory.country_id
-                : undefined,
-            ),
-            factory.city,
-          ]
-            .filter(Boolean)
-            .join(", "),
-        }));
+        return response.items
+          .filter((factory) =>
+            factoryMatchesSelectedCountry(factory, createFactoryCountryId, countryDirectory.countries),
+          )
+          .map((factory) => ({
+            id: factory.id,
+            name: factory.name,
+            subtitle: [
+              formatCountryEnglishName(
+                countryDirectory.countries,
+                factory.country,
+                "country_id" in factory && typeof factory.country_id === "number"
+                  ? factory.country_id
+                  : undefined,
+              ),
+              factory.city,
+            ]
+              .filter(Boolean)
+              .join(", "),
+          }));
       }
 
       const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
         query: { page: 1, page_size: 200, sort_desc: false, country_id: createFactoryCountryId },
       });
-      return response.items.map((factory) => ({
-        id: factory.id,
-        name: factory.name,
-        subtitle: [
-          formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
-          factory.city,
-        ]
-          .filter(Boolean)
-          .join(", "),
-      }));
+      return response.items
+        .filter((factory) =>
+          factoryMatchesSelectedCountry(factory, createFactoryCountryId, countryDirectory.countries),
+        )
+        .map((factory) => ({
+          id: factory.id,
+          name: factory.name,
+          subtitle: [
+            formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
+            factory.city,
+          ]
+            .filter(Boolean)
+            .join(", "),
+        }));
     },
     enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
   });
@@ -1173,16 +1183,20 @@ function OrdersPageContent() {
       const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
         query: { page: 1, page_size: 200, sort_desc: false, country_id: editFactoryCountryId },
       });
-      return response.items.map((factory) => ({
-        id: factory.id,
-        name: factory.name,
-        subtitle: [
-          formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
-          factory.city,
-        ]
-          .filter(Boolean)
-          .join(", "),
-      }));
+      return response.items
+        .filter((factory) =>
+          factoryMatchesSelectedCountry(factory, editFactoryCountryId, countryDirectory.countries),
+        )
+        .map((factory) => ({
+          id: factory.id,
+          name: factory.name,
+          subtitle: [
+            formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
+            factory.city,
+          ]
+            .filter(Boolean)
+            .join(", "),
+        }));
     },
     enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
   });
@@ -4931,7 +4945,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               return;
             }
             const draftPayload = (createDraft as Partial<OrderCreateForm>) ?? {};
-            const nextValues = { ...draftPayload, ...snapshot, ...values };
+            const nextValues = mergeDefinedOrderFormValues<OrderCreateForm>(draftPayload, snapshot, values) as OrderCreateForm;
             if (!validateCreateOrderBeforeSubmit(nextValues)) {
               return;
             }
@@ -5127,6 +5141,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                         createForm.setFieldValue("loading_city_id_ui", undefined);
                         createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
                         createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                        setCreatedFactoryOption(null);
+                        setCreatedLoadingAddressOption(null);
                         setPostcodeQuery("");
                         setPostcodeQueryDebounced("");
                       }}
@@ -6304,6 +6320,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     editForm.setFieldValue("loading_city_id_ui", undefined);
                     editForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
                     editForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
+                    setEditCreatedFactoryOption(null);
+                    setEditCreatedLoadingAddressOption(null);
                     editForm.setFieldValue("loading_address_line", undefined);
                     editForm.setFieldValue("loading_address_fax", undefined);
                     editForm.setFieldValue("factory_contact_email", undefined);
