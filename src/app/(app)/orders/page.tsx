@@ -71,6 +71,7 @@ import {
   isCommercialOrderType,
   mapOrderValidationIssueToNamePath,
   resolvePostcodeCitySelection,
+  shouldClearOrderCurrencyOtherLabel,
   validateOrderDecimal,
   validateOrderFormValues,
 } from "@/shared/lib/order-form-validation";
@@ -799,7 +800,10 @@ function OrdersPageContent() {
     () => ((createDraft.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
     [createDraft.goods_lines],
   );
-  const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", createForm);
+  const createClientGoodsValueCurrency = Form.useWatch("client_goods_value_currency", {
+    form: createForm,
+    preserve: true,
+  });
   const createOrderType = Form.useWatch("order_type", createForm);
   const createSelfDelivery = Boolean(Form.useWatch("self_delivery", createForm));
   const createCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", createForm));
@@ -826,7 +830,10 @@ function OrdersPageContent() {
   const editLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", editForm) as number | undefined;
   const editSelfDelivery = Boolean(Form.useWatch("self_delivery", editForm));
   const editCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", editForm));
-  const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
+  const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", {
+    form: editForm,
+    preserve: true,
+  });
   const editMeasurementStatus = Form.useWatch("measurement_status", editForm);
   const editWeighingStatus = Form.useWatch("weighing_status", editForm);
   const currentEditOrderType = (selected?.order_type ?? "delivery") as OrderType;
@@ -1594,7 +1601,7 @@ function OrdersPageContent() {
 
   useEffect(() => {
     if (!createOpen) return;
-    if (createClientGoodsValueCurrency !== "OTHER") {
+    if (shouldClearOrderCurrencyOtherLabel(createClientGoodsValueCurrency)) {
       createForm.setFieldValue("client_goods_value_currency_other_label", undefined);
     }
   }, [createClientGoodsValueCurrency, createForm, createOpen]);
@@ -2272,7 +2279,7 @@ function OrdersPageContent() {
 
   useEffect(() => {
     if (!editOpen) return;
-    if (editClientGoodsCurrency !== "OTHER") {
+    if (shouldClearOrderCurrencyOtherLabel(editClientGoodsCurrency)) {
       editForm.setFieldValue("client_goods_value_currency_other_label", undefined);
     }
   }, [editClientGoodsCurrency, editForm, editOpen]);

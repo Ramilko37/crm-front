@@ -3,6 +3,7 @@ import type { NamePath } from "antd/es/form/interface";
 import {
   normalizeOrderCurrency,
   resolvePostcodeCitySelection,
+  shouldClearOrderCurrencyOtherLabel,
   validateOrderDecimal,
   validateOrderFormValues,
   mapOrderValidationIssueToNamePath,
@@ -37,6 +38,12 @@ describe("order form validation", () => {
       currency: "OTHER",
       otherLabel: "CHF",
     });
+  });
+
+  it("does not clear OTHER label when currency watcher is temporarily unregistered", () => {
+    expect(shouldClearOrderCurrencyOtherLabel(undefined)).toBe(false);
+    expect(shouldClearOrderCurrencyOtherLabel("OTHER")).toBe(false);
+    expect(shouldClearOrderCurrencyOtherLabel("EUR")).toBe(true);
   });
 
   it("keeps request metrics optional but rejects provided non-positive values", () => {

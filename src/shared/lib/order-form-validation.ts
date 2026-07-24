@@ -126,6 +126,10 @@ export function normalizeOrderCurrency(
   };
 }
 
+export function shouldClearOrderCurrencyOtherLabel(currency: string | null | undefined) {
+  return Boolean(currency) && currency !== "OTHER";
+}
+
 export function validateOrderFormValues(values: OrderFormValidationValues): OrderFormValidationResult {
   const commercial = isCommercialOrderType(values.order_type);
   const fieldErrors: OrderFormFieldError[] = [];
