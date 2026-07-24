@@ -26,16 +26,18 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import { findCountry, getCountryEnglishName } from "@/shared/lib/countries";
 import { ROLE_NAMES, type RoleName } from "@/shared/lib/domain-enums";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { canManageUsers, canResetUserPassword, normalizeRoleName } from "@/shared/lib/rbac";
 import { buildUserWritePayload, requiredWhenForwarder } from "@/shared/lib/user-flow";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type {
-  Country,
   PaginatedResponse,
   UserAdmin,
   UserCityLookupItem,
@@ -59,15 +61,6 @@ function parseBool(value: string | null): boolean | undefined {
 function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
   if (!response) return [];
   return Array.isArray(response) ? response : (response.items ?? []);
-}
-
-function countryLabel(country: Country) {
-  return country.name_en || country.name_ru;
-}
-
-function optionCountryId(option: unknown) {
-  const maybeOption = option as { countryId?: number };
-  return maybeOption.countryId;
 }
 
 function getParams(searchParams: URLSearchParams): UserFilterParams {
@@ -126,8 +119,6 @@ function UsersPageContent() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [managerSearch, setManagerSearch] = useState("");
-  const [createCountrySearch, setCreateCountrySearch] = useState("");
-  const [editCountrySearch, setEditCountrySearch] = useState("");
   const [createCitySearch, setCreateCitySearch] = useState("");
   const [editCitySearch, setEditCitySearch] = useState("");
   const [selected, setSelected] = useState<UserAdmin | null>(null);
@@ -145,6 +136,7 @@ function UsersPageContent() {
   const editRoleName = Form.useWatch("role_name", editForm) as RoleName | string | undefined;
   const createCountryId = Form.useWatch("selectedCountryId", createForm) as number | undefined;
   const editCountryId = Form.useWatch("selectedCountryId", editForm) as number | undefined;
+  const countryDirectory = useCountryDirectory();
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
 
@@ -174,24 +166,6 @@ function UsersPageContent() {
     enabled: createOpen || editOpen,
   });
 
-  const createCountriesQuery = useQuery({
-    queryKey: queryKeys.countries.list({ query: createCountrySearch || undefined, page: 1, page_size: 50 }),
-    queryFn: () =>
-      apiRequest<PaginatedResponse<Country>>("/api/countries", {
-        query: { query: createCountrySearch || undefined, page: 1, page_size: 50 },
-      }),
-    enabled: createOpen,
-  });
-
-  const editCountriesQuery = useQuery({
-    queryKey: queryKeys.countries.list({ query: editCountrySearch || undefined, page: 1, page_size: 50 }),
-    queryFn: () =>
-      apiRequest<PaginatedResponse<Country>>("/api/countries", {
-        query: { query: editCountrySearch || undefined, page: 1, page_size: 50 },
-      }),
-    enabled: editOpen,
-  });
-
   const createCitiesQuery = useQuery({
     queryKey: queryKeys.users.lookupCities({ country_id: createCountryId, query: createCitySearch || undefined }),
     queryFn: () =>
@@ -219,26 +193,6 @@ function UsersPageContent() {
     [managersQuery.data],
   );
 
-  const createCountryOptions = useMemo(
-    () =>
-      (createCountriesQuery.data?.items ?? []).map((country) => ({
-        label: countryLabel(country),
-        value: countryLabel(country),
-        countryId: country.id,
-      })),
-    [createCountriesQuery.data?.items],
-  );
-
-  const editCountryOptions = useMemo(
-    () =>
-      (editCountriesQuery.data?.items ?? []).map((country) => ({
-        label: countryLabel(country),
-        value: countryLabel(country),
-        countryId: country.id,
-      })),
-    [editCountriesQuery.data?.items],
-  );
-
   const createCityOptions = useMemo(
     () => extractItems(createCitiesQuery.data).map((item) => ({ label: item.city, value: item.city })),
     [createCitiesQuery.data],
@@ -254,13 +208,14 @@ function UsersPageContent() {
     const currentCountry = editForm.getFieldValue("country");
     if (!currentCountry) return;
 
-    const matchedCountry = editCountriesQuery.data?.items.find(
-      (country) => country.name_ru === currentCountry || country.name_en === currentCountry,
-    );
+    const matchedCountry = findCountry(countryDirectory.countries, currentCountry);
     if (matchedCountry) {
-      editForm.setFieldValue("selectedCountryId", matchedCountry.id);
+      editForm.setFieldsValue({
+        selectedCountryId: matchedCountry.id,
+        country: getCountryEnglishName(matchedCountry) ?? undefined,
+      });
     }
-  }, [editCountriesQuery.data?.items, editCountryId, editForm, editOpen]);
+  }, [countryDirectory.countries, editCountryId, editForm, editOpen]);
 
   const createMutation = useMutation({
     mutationFn: (payload: UserWritePayload) =>
@@ -396,7 +351,6 @@ function UsersPageContent() {
                 total_orders: record.total_orders ?? undefined,
                 last_order_date: record.last_order_date ? dayjs(record.last_order_date) : undefined,
               });
-              setEditCountrySearch(record.country ?? "");
               setEditCitySearch(record.city ?? "");
               setEditOpen(true);
             }}
@@ -585,8 +539,8 @@ function UsersPageContent() {
             createMutation.mutate(buildUserWritePayload(values, { includeCompanyName: true, isManagerActor }));
           }}
         >
-          <Form.Item name="selectedCountryId" hidden>
-            <InputNumber />
+          <Form.Item name="country" hidden>
+            <Input />
           </Form.Item>
           <Form.Item
             name="company_name"
@@ -635,22 +589,21 @@ function UsersPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="country" label="Страна" rules={[requiredWhenForwarder(createRoleName, "Выберите страну")]}>
-            <AutoComplete
+          <Form.Item
+            name="selectedCountryId"
+            label="Страна"
+            rules={[requiredWhenForwarder(createRoleName, "Выберите страну")]}
+          >
+            <CountrySelect
               allowClear
-              options={createCountryOptions}
               placeholder="Начните вводить страну"
-              onSearch={setCreateCountrySearch}
-              onSelect={(value, option) => {
-                createForm.setFieldsValue({ country: value, selectedCountryId: optionCountryId(option), city: undefined });
+              onChange={(countryId, country) => {
+                createForm.setFieldsValue({
+                  country: getCountryEnglishName(country) ?? undefined,
+                  selectedCountryId: countryId,
+                  city: undefined,
+                });
                 setCreateCitySearch("");
-              }}
-              onChange={(value) => {
-                createForm.setFieldValue("country", value);
-                if (!value) {
-                  createForm.setFieldsValue({ selectedCountryId: undefined, city: undefined });
-                  setCreateCitySearch("");
-                }
               }}
             />
           </Form.Item>
@@ -691,8 +644,8 @@ function UsersPageContent() {
             });
           }}
         >
-          <Form.Item name="selectedCountryId" hidden>
-            <InputNumber />
+          <Form.Item name="country" hidden>
+            <Input />
           </Form.Item>
           <Form.Item name="full_name" label="ФИО" rules={[{ required: true }]}> 
             <Input />
@@ -721,22 +674,21 @@ function UsersPageContent() {
           <Form.Item name="phone" label="Телефон">
             <Input />
           </Form.Item>
-          <Form.Item name="country" label="Страна" rules={[requiredWhenForwarder(editRoleName, "Выберите страну")]}>
-            <AutoComplete
+          <Form.Item
+            name="selectedCountryId"
+            label="Страна"
+            rules={[requiredWhenForwarder(editRoleName, "Выберите страну")]}
+          >
+            <CountrySelect
               allowClear
-              options={editCountryOptions}
               placeholder="Начните вводить страну"
-              onSearch={setEditCountrySearch}
-              onSelect={(value, option) => {
-                editForm.setFieldsValue({ country: value, selectedCountryId: optionCountryId(option), city: undefined });
+              onChange={(countryId, country) => {
+                editForm.setFieldsValue({
+                  country: getCountryEnglishName(country) ?? undefined,
+                  selectedCountryId: countryId,
+                  city: undefined,
+                });
                 setEditCitySearch("");
-              }}
-              onChange={(value) => {
-                editForm.setFieldValue("country", value);
-                if (!value) {
-                  editForm.setFieldsValue({ selectedCountryId: undefined, city: undefined });
-                  setEditCitySearch("");
-                }
               }}
             />
           </Form.Item>

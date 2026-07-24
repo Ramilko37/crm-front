@@ -1,6 +1,6 @@
 "use client";
 
-import { Checkbox, DatePicker, Form, Select, Segmented } from "antd";
+import { Checkbox, DatePicker, Form, Input, Select, Segmented } from "antd";
 
 import {
   formatFactoryLocationLabel,
@@ -10,21 +10,20 @@ import {
   type TripPointFormValues,
   type TripPointKind,
 } from "@/shared/lib/trip-point-forms";
-import type { Country, Factory, PathPoint, TripForwarderLookupItem } from "@/shared/types/entities";
+import { getCountryEnglishName } from "@/shared/lib/countries";
+import { CountrySelect } from "@/shared/ui/country-select";
+import type { Factory, PathPoint, TripForwarderLookupItem } from "@/shared/types/entities";
 
 type TripPointFormFieldsProps = {
   form: ReturnType<typeof Form.useForm<TripPointFormValues>>[0];
-  countries: Country[];
   cities: string[];
   factories: Factory[];
   forwarders: TripForwarderLookupItem[];
   pathPoints: PathPoint[];
-  countriesLoading?: boolean;
   citiesLoading?: boolean;
   factoriesLoading?: boolean;
   forwardersLoading?: boolean;
   pathPointsLoading?: boolean;
-  onCountrySearch?: (value: string) => void;
   onCitySearch?: (value: string) => void;
   onFactorySearch?: (value: string) => void;
   onForwarderSearch?: (value: string) => void;
@@ -35,17 +34,14 @@ type TripPointFormFieldsProps = {
 
 export function TripPointFormFields({
   form,
-  countries,
   cities,
   factories,
   forwarders,
   pathPoints,
-  countriesLoading,
   citiesLoading,
   factoriesLoading,
   forwardersLoading,
   pathPointsLoading,
-  onCountrySearch,
   onCitySearch,
   onFactorySearch,
   onForwarderSearch,
@@ -60,6 +56,10 @@ export function TripPointFormFields({
 
   return (
     <>
+      <Form.Item name="country" hidden>
+        <Input />
+      </Form.Item>
+
       <Form.Item name="point_kind" label="Тип точки" rules={[{ required: true }]}>
         <Segmented
           block
@@ -125,21 +125,13 @@ export function TripPointFormFields({
           </Form.Item>
 
           <Form.Item name="country_id" label="Страна" rules={[{ required: true, message: "Выберите страну" }]}>
-            <Select
-              showSearch
-              filterOption={false}
-              loading={countriesLoading}
+            <CountrySelect
+              allowClear
               placeholder="Выберите страну"
-              options={countries.map((country) => ({
-                label: country.name_ru,
-                value: country.id,
-              }))}
-              onSearch={onCountrySearch}
-              onChange={(value) => {
-                const country = countries.find((item) => item.id === value);
+              onChange={(countryId, country) => {
                 form.setFieldsValue({
-                  country_id: value,
-                  country: country?.name_ru,
+                  country_id: countryId,
+                  country: getCountryEnglishName(country) ?? undefined,
                   city: undefined,
                   factory_id: undefined,
                   forwarder_user_id: undefined,

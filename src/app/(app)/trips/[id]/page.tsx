@@ -25,7 +25,9 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { TripPointFormFields } from "@/features/trips/trip-point-form-fields";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import { findCountry, formatCountryEnglishName } from "@/shared/lib/countries";
 import {
   formatEnumCode,
   ORDER_STATUS_VALUES,
@@ -53,7 +55,6 @@ import {
 import { PageHeader } from "@/shared/ui/page-frame";
 import type {
   Factory,
-  Country,
   OrderListItem,
   PaginatedResponse,
   PathPoint,
@@ -119,7 +120,6 @@ function TripDetailPageContent() {
   const [editTripOpen, setEditTripOpen] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [selectedPoint, setSelectedPoint] = useState<TripPoint | null>(null);
-  const [pointCountrySearch, setPointCountrySearch] = useState("");
   const [pointCitySearch, setPointCitySearch] = useState("");
   const [pointFactorySearch, setPointFactorySearch] = useState("");
   const [pointForwarderSearch, setPointForwarderSearch] = useState("");
@@ -135,6 +135,7 @@ function TripDetailPageContent() {
   const pointCountryId = Form.useWatch("country_id", pointForm);
   const pointCountryName = Form.useWatch("country", pointForm);
   const pointCity = Form.useWatch("city", pointForm);
+  const countryDirectory = useCountryDirectory();
 
   const detailQuery = useQuery({
     queryKey: queryKeys.trips.detail(tripId),
@@ -165,15 +166,6 @@ function TripDetailPageContent() {
       }),
   });
 
-  const countriesQuery = useQuery({
-    queryKey: queryKeys.countries.list({ page: 1, page_size: 50, query: pointCountrySearch }),
-    queryFn: () =>
-      apiRequest<PaginatedResponse<Country>>("/api/countries", {
-        query: { page: 1, page_size: 50, query: pointCountrySearch },
-      }),
-    enabled: pointModalOpen && pointKind === "loading",
-  });
-
   const factoriesQuery = useQuery({
     queryKey: queryKeys.factories.list({ page: 1, page_size: 200 }),
     queryFn: () =>
@@ -200,7 +192,6 @@ function TripDetailPageContent() {
       Boolean(pointCountryId),
   });
 
-  const countries = useMemo(() => countriesQuery.data?.items ?? [], [countriesQuery.data?.items]);
   const pointFactoriesQuery = useQuery({
     queryKey: queryKeys.factories.list({
       scope: "trip-point-factories",
@@ -281,7 +272,7 @@ function TripDetailPageContent() {
       id: selectedPoint.factory_id,
       country_id: pointCountryId ?? null,
       name: selectedPoint.name || `Фабрика #${selectedPoint.factory_id}`,
-      country: selectedPoint.country,
+      country: formatCountryEnglishName(countryDirectory.countries, selectedPoint.country, pointCountryId),
       city: selectedPoint.city,
       address: selectedPoint.address,
       postcode: selectedPoint.postcode,
@@ -289,7 +280,7 @@ function TripDetailPageContent() {
       primary_email: null,
       certificate_status: null,
     };
-  }, [pointCountryId, selectedPoint]);
+  }, [countryDirectory.countries, pointCountryId, selectedPoint]);
   const pointFactoryOptions = useMemo(() => {
     const byId = new Map<number, Factory>();
     for (const factory of [...pointFactories, ...(selectedPointFactory ? [selectedPointFactory] : [])]) {
@@ -305,12 +296,12 @@ function TripDetailPageContent() {
       id: selectedPoint.forwarder_user_id,
       full_name: selectedPoint.contact_name,
       company_name: selectedPoint.name,
-      country: selectedPoint.country,
+      country: formatCountryEnglishName(countryDirectory.countries, selectedPoint.country, pointCountryId),
       city: selectedPoint.city,
       phone: selectedPoint.phone,
       label: [selectedPoint.name, selectedPoint.contact_name].filter(Boolean).join(" / ") || selectedPoint.name,
     };
-  }, [selectedPoint]);
+  }, [countryDirectory.countries, pointCountryId, selectedPoint]);
   const pointForwarderOptions = useMemo(() => {
     const byId = new Map<number, TripForwarderLookupItem>();
     for (const forwarder of [...pointForwarders, ...(selectedPointForwarder ? [selectedPointForwarder] : [])]) {
@@ -326,17 +317,14 @@ function TripDetailPageContent() {
 
   useEffect(() => {
     if (!pointModalOpen || pointKind !== "loading" || pointCountryId || !pointCountryName) return;
-    const matchedCountry = countries.find(
-      (country) =>
-        country.name_ru === pointCountryName ||
-        country.name_en === pointCountryName ||
-        country.iso2 === pointCountryName ||
-        country.iso3 === pointCountryName,
-    );
+    const matchedCountry = findCountry(countryDirectory.countries, pointCountryName);
     if (matchedCountry) {
-      pointForm.setFieldValue("country_id", matchedCountry.id);
+      pointForm.setFieldsValue({
+        country_id: matchedCountry.id,
+        country: matchedCountry.name_en ?? undefined,
+      });
     }
-  }, [countries, pointCountryId, pointCountryName, pointForm, pointKind, pointModalOpen]);
+  }, [countryDirectory.countries, pointCountryId, pointCountryName, pointForm, pointKind, pointModalOpen]);
 
   const updateTripMutation = useMutation({
     mutationFn: (payload: TripWritePayload) =>
@@ -406,7 +394,6 @@ function TripDetailPageContent() {
 
   function openCreatePoint() {
     setSelectedPoint(null);
-    setPointCountrySearch("");
     setPointCitySearch("");
     setPointFactorySearch("");
     setPointForwarderSearch("");
@@ -433,7 +420,6 @@ function TripDetailPageContent() {
 
   function openEditPoint(record: TripPoint) {
     setSelectedPoint(record);
-    setPointCountrySearch("");
     setPointCitySearch("");
     setPointFactorySearch("");
     setPointForwarderSearch("");
@@ -461,7 +447,14 @@ function TripDetailPageContent() {
     {
       title: "Адрес",
       key: "address",
-      render: (_, record) => [record.address, record.city, record.country].filter(Boolean).join(", ") || "—",
+      render: (_, record) =>
+        [
+          record.address,
+          record.city,
+          formatCountryEnglishName(countryDirectory.countries, record.country),
+        ]
+          .filter(Boolean)
+          .join(", ") || "—",
     },
     {
       title: "План",
@@ -537,7 +530,12 @@ function TripDetailPageContent() {
       sortOrder: orderSortOrderFor("ready_date"),
       render: (value: string | null) => value ?? "—",
     },
-    { title: "Страна", dataIndex: "country", key: "country", render: (value: string | null) => value ?? "—" },
+    {
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      render: (value: string | null) => formatCountryEnglishName(countryDirectory.countries, value),
+    },
     {
       title: "Экспедитор",
       dataIndex: "forwarder_name",
@@ -769,12 +767,10 @@ function TripDetailPageContent() {
         >
           <TripPointFormFields
             form={pointForm}
-            countries={countries}
             cities={pointCityOptions}
             factories={pointFactoryOptions}
             forwarders={pointForwarderOptions}
             pathPoints={pathPoints}
-            countriesLoading={countriesQuery.isLoading}
             citiesLoading={
               pointLoadingSource === "forwarder"
                 ? forwarderCitiesQuery.isLoading
@@ -783,7 +779,6 @@ function TripDetailPageContent() {
             factoriesLoading={pointFactoriesQuery.isLoading}
             forwardersLoading={pointForwardersQuery.isLoading}
             pathPointsLoading={pathPointsCatalogQuery.isLoading}
-            onCountrySearch={setPointCountrySearch}
             onCitySearch={setPointCitySearch}
             onFactorySearch={setPointFactorySearch}
             onForwarderSearch={setPointForwarderSearch}

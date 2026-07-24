@@ -48,6 +48,7 @@ export const queryKeys = {
   countries: {
     list: (params: unknown) => ["countries", "list", params] as const,
     detail: (id: number) => ["countries", "detail", id] as const,
+    options: (scope: "staff" | "client") => ["countries", "options", scope] as const,
   },
   normativeDocuments: {
     list: (params: unknown) => ["normative-documents", "list", params] as const,

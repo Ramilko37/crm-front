@@ -32,7 +32,9 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import { formatCountryEnglishName, getCountryEnglishName } from "@/shared/lib/countries";
 import {
   formatEnumCode,
   TRIP_STATUS_VALUES,
@@ -45,6 +47,7 @@ import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { isBackOfficeRole } from "@/shared/lib/rbac";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { buildTripPointPayload, buildTripPointLookupQuery } from "@/shared/lib/trip-point-forms";
 import type {
   BulkMutationResponse,
@@ -193,6 +196,7 @@ function TripsPageContent() {
 
   const meQuery = useCurrentUser(true);
   const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
+  const countryDirectory = useCountryDirectory();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false);
@@ -201,7 +205,6 @@ function TripsPageContent() {
   const [routeDrawerOpen, setRouteDrawerOpen] = useState(false);
   const [pointOpen, setPointOpen] = useState(false);
   const [pointKind, setPointKind] = useState<"loading" | "path">("loading");
-  const [countrySearch, setCountrySearch] = useState("");
   const [citySearch, setCitySearch] = useState("");
   const [factorySearch, setFactorySearch] = useState("");
   const [forwarderSearch, setForwarderSearch] = useState("");
@@ -266,15 +269,6 @@ function TripsPageContent() {
         query: { page: 1, page_size: 50 },
       }),
     enabled: Boolean(selected?.id) && ordersDrawerOpen,
-  });
-
-  const countriesQuery = useQuery({
-    queryKey: queryKeys.countries.list({ query: countrySearch || undefined, page: 1, page_size: 300 }),
-    queryFn: () =>
-      apiRequest<PaginatedResponse<Country>>("/api/countries", {
-        query: { query: countrySearch || undefined, page: 1, page_size: 300 },
-      }),
-    enabled: pointOpen && pointKind === "loading",
   });
 
   const tripCitiesQuery = useQuery({
@@ -440,7 +434,6 @@ function TripsPageContent() {
   function openPointModal(kind: "loading" | "path") {
     const nextSequence = (tripPointsQuery.data?.items?.length ?? selected?.points?.length ?? 0) + 1;
     setPointKind(kind);
-    setCountrySearch("");
     setCitySearch("");
     setFactorySearch("");
     setForwarderSearch("");
@@ -455,11 +448,10 @@ function TripsPageContent() {
     setPointOpen(true);
   }
 
-  function selectCountry(countryId: number | undefined) {
-    const country = countriesQuery.data?.items.find((item) => item.id === countryId);
+  function selectCountry(countryId: number | undefined, country: Country | undefined) {
     pointForm.setFieldsValue({
       country_id: countryId,
-      country: country?.name_ru,
+      country: getCountryEnglishName(country) ?? undefined,
       city: undefined,
       factory_id: undefined,
       forwarder_user_id: undefined,
@@ -1004,7 +996,11 @@ function TripsPageContent() {
                   <div className="crm-trip-point-head">
                     <div>
                       <Typography.Text strong>
-                        {point.sequence}. {point.name || point.city || point.country || `Точка #${point.id}`}
+                        {point.sequence}.{" "}
+                        {point.name ||
+                          point.city ||
+                          formatCountryEnglishName(countryDirectory.countries, point.country) ||
+                          `Точка #${point.id}`}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {point.is_loading_point ? "Точка погрузки" : "Путевая точка"}
@@ -1019,7 +1015,9 @@ function TripsPageContent() {
                     </Checkbox>
                   </div>
                   <div className="crm-trip-point-meta">
-                    <span>Страна: {compactText(point.country)}</span>
+                    <span>
+                      Страна: {formatCountryEnglishName(countryDirectory.countries, point.country)}
+                    </span>
                     <span>Город: {compactText(point.city)}</span>
                     <span>Адрес: {compactText(point.address)}</span>
                     <span>План: {formatDate(point.planned_at)}</span>
@@ -1105,18 +1103,10 @@ function TripsPageContent() {
 
               <div className="crm-trip-point-form-grid">
                 <Form.Item name="country_id" label="Страна" rules={[{ required: true }]}>
-                  <Select
-                    showSearch
+                  <CountrySelect
                     allowClear
-                    filterOption={false}
                     placeholder="Страна"
-                    loading={countriesQuery.isLoading}
-                    onSearch={setCountrySearch}
                     onChange={selectCountry}
-                    options={(countriesQuery.data?.items ?? []).map((country) => ({
-                      value: country.id,
-                      label: country.name_ru,
-                    }))}
                   />
                 </Form.Item>
                 <Form.Item name="city" label="Город" rules={[{ required: true }]}>
@@ -1160,7 +1150,17 @@ function TripsPageContent() {
                     onChange={selectFactory}
                     options={(factoriesLookupQuery.data?.items ?? []).map((factory) => ({
                       value: factory.id,
-                      label: [factory.name, factory.city, factory.country].filter(Boolean).join(" · "),
+                      label: [
+                        factory.name,
+                        factory.city,
+                        formatCountryEnglishName(
+                          countryDirectory.countries,
+                          factory.country,
+                          factory.country_id,
+                        ),
+                      ]
+                        .filter(Boolean)
+                        .join(" · "),
                     }))}
                   />
                 </Form.Item>

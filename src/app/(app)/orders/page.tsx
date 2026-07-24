@@ -43,7 +43,13 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { OrderChatPanel } from "@/features/orders/order-chat-panel";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import {
+  findCountry,
+  formatCountryEnglishName,
+  getCountryEnglishName,
+} from "@/shared/lib/countries";
 import {
   formatEnumCode,
   ORDER_STATUS_VALUES,
@@ -66,6 +72,7 @@ import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
 import { CREATE_ORDER_DRAFT_DEFAULTS, useOrderCreateDraftStore } from "@/shared/stores/order-create-draft-store";
 import { useOrderEditDraftStore } from "@/shared/stores/order-edit-draft-store";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   BulkMutationResponse,
@@ -76,6 +83,7 @@ import type {
   DictionaryOption,
   ClientFactoryDetail,
   ClientFactoryListItem,
+  Country,
   Factory,
   FactoryLoadingAddress,
   MeasurementPayload,
@@ -565,6 +573,8 @@ function OrdersPageContent() {
   const meQuery = useCurrentUser(true);
   const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
   const isClientRole = normalizedRole === "client" && !meQuery.data?.is_superuser;
+  const countryDirectoryScope = isClientRole ? "client" : "staff";
+  const countryDirectory = useCountryDirectory(countryDirectoryScope);
   const canWriteOrder =
     meQuery.data?.is_superuser ||
     ["administrator", "manager", "logist", "accountant", "warehouse"].includes(normalizedRole);
@@ -739,7 +749,6 @@ function OrdersPageContent() {
   const editFactoryCountryId = Form.useWatch("factory_country_id", editForm) as number | undefined;
   const editLoadingAddressId = Form.useWatch("loading_address_id", editForm) as number | undefined;
   const editLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", editForm) as number | undefined;
-  const editLoadingCityIdUi = Form.useWatch("loading_city_id_ui", editForm) as number | undefined;
   const editSelfDelivery = Boolean(Form.useWatch("self_delivery", editForm));
   const editCertificateIntentEnabled = Boolean(Form.useWatch("certificate_intent_enabled", editForm));
   const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
@@ -1038,7 +1047,18 @@ function OrdersPageContent() {
         return response.items.map((factory) => ({
           id: factory.id,
           name: factory.name,
-          subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+          subtitle: [
+            formatCountryEnglishName(
+              countryDirectory.countries,
+              factory.country,
+              "country_id" in factory && typeof factory.country_id === "number"
+                ? factory.country_id
+                : undefined,
+            ),
+            factory.city,
+          ]
+            .filter(Boolean)
+            .join(", "),
         }));
       }
 
@@ -1048,7 +1068,12 @@ function OrdersPageContent() {
       return response.items.map((factory) => ({
         id: factory.id,
         name: factory.name,
-        subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+        subtitle: [
+          formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
+          factory.city,
+        ]
+          .filter(Boolean)
+          .join(", "),
       }));
     },
     enabled: createOpen && canCreate && createFactoryMode === "existing" && Boolean(createFactoryCountryId),
@@ -1066,7 +1091,12 @@ function OrdersPageContent() {
       return response.items.map((factory) => ({
         id: factory.id,
         name: factory.name,
-        subtitle: [factory.country, factory.city].filter(Boolean).join(", "),
+        subtitle: [
+          formatCountryEnglishName(countryDirectory.countries, factory.country, factory.country_id),
+          factory.city,
+        ]
+          .filter(Boolean)
+          .join(", "),
       }));
     },
     enabled: editOpen && canWriteOrder && Boolean(editFactoryCountryId),
@@ -1088,32 +1118,6 @@ function OrdersPageContent() {
         query: { page: 1, page_size: 200 },
       }),
     enabled: editOpen && canWriteOrder && Boolean(editFactoryId),
-  });
-
-  const createCountriesQuery = useQuery({
-    queryKey: ["orders", "create-countries", isClientRole],
-    queryFn: () =>
-      isClientRole
-        ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
-            query: { page: 1, page_size: 200 },
-          })
-        : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
-            query: { page: 1, page_size: 200 },
-          }),
-    enabled: createOpen && canCreate,
-  });
-
-  const editCountriesQuery = useQuery({
-    queryKey: ["orders", "edit-countries", isClientRole],
-    queryFn: () =>
-      isClientRole
-        ? apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/client/countries", {
-            query: { page: 1, page_size: 200 },
-          })
-        : apiRequest<PaginatedResponse<{ id: number; name_ru: string }>>("/api/countries", {
-            query: { page: 1, page_size: 200 },
-          }),
-    enabled: editOpen && canWriteOrder,
   });
 
   const loadingAddressesQuery = useQuery({
@@ -1191,7 +1195,6 @@ function OrdersPageContent() {
   });
 
   const createLoadingPostcodeIdUi = Form.useWatch("loading_postcode_id_ui", createForm) as number | undefined;
-  const createLoadingCityIdUi = Form.useWatch("loading_city_id_ui", createForm) as number | undefined;
 
   const postcodeCitiesQuery = useQuery({
     queryKey: ["orders", "create-postcode-cities", isClientRole, createLoadingPostcodeIdUi],
@@ -1409,7 +1412,7 @@ function OrdersPageContent() {
         body: {
           name: factoryName,
           country_id: countryId,
-          country: createCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+          country: getCountryEnglishName(findCountry(countryDirectory.countries, countryId)),
           city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
           address,
           postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
@@ -1442,7 +1445,16 @@ function OrdersPageContent() {
       setCreatedFactoryOption({
         id: createdFactory.id,
         name: createdFactory.name,
-        subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+        subtitle: [
+          formatCountryEnglishName(
+            countryDirectory.countries,
+            createdFactory.country,
+            createdFactory.country_id,
+          ),
+          createdFactory.city,
+        ]
+          .filter(Boolean)
+          .join(", "),
       });
       setCreatedLoadingAddressOption(createdAddress);
       createForm.setFieldValue("factory_id", createdFactory.id);
@@ -1576,7 +1588,7 @@ function OrdersPageContent() {
         body: {
           name: factoryName,
           country_id: countryId,
-          country: editCountriesQuery.data?.items?.find((country) => country.id === countryId)?.name_ru,
+          country: getCountryEnglishName(findCountry(countryDirectory.countries, countryId)),
           city: editPostcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
           address,
           postcode: editPostcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
@@ -1614,7 +1626,16 @@ function OrdersPageContent() {
       setEditCreatedFactoryOption({
         id: createdFactory.id,
         name: createdFactory.name,
-        subtitle: [createdFactory.country, createdFactory.city].filter(Boolean).join(", "),
+        subtitle: [
+          formatCountryEnglishName(
+            countryDirectory.countries,
+            createdFactory.country,
+            createdFactory.country_id,
+          ),
+          createdFactory.city,
+        ]
+          .filter(Boolean)
+          .join(", "),
       });
       setEditCreatedLoadingAddressOption(createdAddress);
       setEditFactoryCreateConfirmed(true);
@@ -3279,7 +3300,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     const address =
       getStringValue(user as unknown as Record<string, unknown> | undefined, ["address", "legal_address", "actual_address"]) ??
       getStringValue(source, ["forwarder_address", "assigned_forwarder_address", "address"]) ??
-      [user?.country, user?.city].filter(Boolean).join(", ");
+      [formatCountryEnglishName(countryDirectory.countries, user?.country), user?.city].filter(Boolean).join(", ");
 
     return address || "—";
   }
@@ -3457,7 +3478,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
       dataIndex: "country",
       key: "country",
       width: 120,
-      render: (value: string | null | undefined) => value ?? "—",
+      render: (value: string | null | undefined) => formatCountryEnglishName(countryDirectory.countries, value),
     },
     {
       title: "Название фабрики",
@@ -3975,10 +3996,6 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
   }, [editForm, editOpen, selectedEditLoadingAddress]);
   const priceCoefficient = formatRatio(createClientGoodsValueAmount, createDeclaredVolumeM3);
   const weightCoefficient = formatRatio(createDeclaredVolumeM3, createDeclaredTotalWeightKg);
-  const createCountryOptions = (createCountriesQuery.data?.items ?? []).map((country) => ({
-    label: country.name_ru,
-    value: country.id,
-  }));
   const selfDeliveryForwarderOptions = (
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.self_delivery_forwarder_options ?? []
   ).map((forwarder) => ({
@@ -4017,10 +4034,6 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
       label: `${item.email}${item.is_primary ? " (primary)" : ""}`,
       value: item.id,
     }));
-  const editCountryOptions = (editCountriesQuery.data?.items ?? []).map((country) => ({
-    label: country.name_ru,
-    value: country.id,
-  }));
   const editFactoryOptionSource =
     editCreatedFactoryOption && !(editFactoryOptionsQuery.data ?? []).some((factory) => factory.id === editCreatedFactoryOption.id)
       ? [editCreatedFactoryOption, ...(editFactoryOptionsQuery.data ?? [])]
@@ -4147,8 +4160,18 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
               <Input placeholder="Поиск" allowClear />
             </Form.Item>
-            <Form.Item name="country" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Input placeholder="Страна" allowClear />
+            <Form.Item
+              name="country"
+              className="crm-col-2"
+              style={{ marginBottom: 0 }}
+              getValueProps={(countryName?: string) => ({
+                value: findCountry(countryDirectory.countries, countryName)?.id,
+              })}
+              getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
+                getCountryEnglishName(country) ?? undefined
+              }
+            >
+              <CountrySelect scope={countryDirectoryScope} allowClear placeholder="Страна" />
             </Form.Item>
             <Form.Item name="status_names" className="crm-col-4" style={{ marginBottom: 0 }}>
               <Select
@@ -4807,11 +4830,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     rules={[{ required: true, message: "Выберите страну" }]}
                     className="crm-order-create-col"
                   >
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      loading={createCountriesQuery.isLoading}
-                      options={createCountryOptions}
+                    <CountrySelect
+                      scope={countryDirectoryScope}
                       onChange={() => {
                         createForm.setFieldValue("factory_id", undefined);
                         createForm.setFieldValue("loading_address_id", undefined);
@@ -5936,14 +5956,10 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                 <Input />
               </Form.Item>
               <Form.Item name="factory_country_id" label="Страна">
-                <Select
-                  showSearch
-                  optionFilterProp="label"
+                <CountrySelect
+                  scope={countryDirectoryScope}
                   allowClear
-                  loading={editCountriesQuery.isLoading}
                   disabled={!isEditMode || !canWriteOrder}
-                  notFoundContent={editCountriesQuery.isLoading ? "Загрузка..." : "Страны не найдены"}
-                  options={editCountryOptions}
                   placeholder="Выберите страну"
                   onChange={() => {
                     editForm.setFieldValue("factory_mode", "existing");

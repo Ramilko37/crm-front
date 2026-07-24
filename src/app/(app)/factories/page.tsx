@@ -10,7 +10,6 @@ import {
   Form,
   Grid,
   Input,
-  InputNumber,
   Modal,
   Pagination,
   Popconfirm,
@@ -29,7 +28,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import {
+  findCountry,
+  formatCountryEnglishName,
+  getCountryEnglishName,
+} from "@/shared/lib/countries";
 import {
   FACTORY_CERTIFICATE_STATUS_VALUES,
   formatEnumCode,
@@ -39,8 +44,10 @@ import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { isBackOfficeRole } from "@/shared/lib/rbac";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type {
+  Country,
   Factory,
   FactoryCertificate,
   FactoryEmail,
@@ -143,6 +150,7 @@ function FactoriesPageContent() {
 
   const meQuery = useCurrentUser(true);
   const canMutate = isBackOfficeRole(meQuery.data?.role_name, meQuery.data?.is_superuser);
+  const countryDirectory = useCountryDirectory();
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -457,7 +465,10 @@ function FactoriesPageContent() {
     editForm.setFieldsValue({
       ...record,
       country_id: record.country_id ?? undefined,
-      country: record.country ?? undefined,
+      country:
+        getCountryEnglishName(
+          findCountry(countryDirectory.countries, record.country_id ?? record.country),
+        ) ?? undefined,
       city: record.city ?? undefined,
       address: record.address ?? undefined,
       postcode: record.postcode ?? undefined,
@@ -529,7 +540,8 @@ function FactoriesPageContent() {
       key: "country",
       sorter: true,
       sortOrder: sortOrderFor("country"),
-      render: (v) => v ?? "-",
+      render: (value, record) =>
+        formatCountryEnglishName(countryDirectory.countries, value, record.country_id),
       width: 150,
     },
     {
@@ -690,7 +702,13 @@ function FactoriesPageContent() {
 
   const loadingAddressColumns: ColumnsType<FactoryLoadingAddress> = [
     { title: "ID", dataIndex: "id", key: "id", width: 90 },
-    { title: "Страна ID", dataIndex: "country_id", key: "country_id", width: 110, render: (v) => v ?? "-" },
+    {
+      title: "Страна",
+      dataIndex: "country_id",
+      key: "country_id",
+      width: 140,
+      render: (countryId) => formatCountryEnglishName(countryDirectory.countries, undefined, countryId),
+    },
     { title: "Город", dataIndex: "city", key: "city", width: 140, render: (v) => v ?? "-" },
     { title: "Адрес", dataIndex: "address", key: "address", render: (v) => v ?? "-" },
     { title: "Индекс", dataIndex: "postcode", key: "postcode", width: 120, render: (v) => v ?? "-" },
@@ -794,8 +812,21 @@ function FactoriesPageContent() {
             <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
               <Input placeholder="Поиск по названию или email" allowClear />
             </Form.Item>
-            <Form.Item name="country" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Input placeholder="Страна" allowClear />
+            <Form.Item
+              name="country"
+              className="crm-col-3"
+              style={{ marginBottom: 0 }}
+              getValueProps={(countryName?: string) => ({
+                value: findCountry(countryDirectory.countries, countryName)?.id,
+              })}
+              getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
+                getCountryEnglishName(country) ?? undefined
+              }
+            >
+              <CountrySelect
+                allowClear
+                placeholder="Страна"
+              />
             </Form.Item>
             <Form.Item name="city" className="crm-col-3" style={{ marginBottom: 0 }}>
               <Input placeholder="Город" allowClear />
@@ -853,7 +884,13 @@ function FactoriesPageContent() {
                   <div className="crm-row-meta">
                     <div className="crm-row-meta-item">
                       Страна
-                      <strong>{record.country ?? "-"}</strong>
+                      <strong>
+                        {formatCountryEnglishName(
+                          countryDirectory.countries,
+                          record.country,
+                          record.country_id,
+                        )}
+                      </strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Город
@@ -935,11 +972,20 @@ function FactoriesPageContent() {
           <Form.Item name="name" label="Название" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="country_id" label="ID страны">
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="country" label="Страна">
+          <Form.Item name="country" hidden>
             <Input />
+          </Form.Item>
+          <Form.Item name="country_id" label="Страна" rules={[{ required: true, message: "Выберите страну" }]}>
+            <CountrySelect
+              allowClear
+              onChange={(countryId, country) => {
+                createForm.setFieldsValue({
+                  country_id: countryId,
+                  country: getCountryEnglishName(country) ?? undefined,
+                  city: undefined,
+                });
+              }}
+            />
           </Form.Item>
           <Form.Item name="city" label="Город">
             <Input />
@@ -987,11 +1033,20 @@ function FactoriesPageContent() {
           <Form.Item name="name" label="Название">
             <Input />
           </Form.Item>
-          <Form.Item name="country_id" label="ID страны">
-            <InputNumber min={1} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="country" label="Страна">
+          <Form.Item name="country" hidden>
             <Input />
+          </Form.Item>
+          <Form.Item name="country_id" label="Страна" rules={[{ required: true, message: "Выберите страну" }]}>
+            <CountrySelect
+              allowClear
+              onChange={(countryId, country) => {
+                editForm.setFieldsValue({
+                  country_id: countryId,
+                  country: getCountryEnglishName(country) ?? undefined,
+                  city: undefined,
+                });
+              }}
+            />
           </Form.Item>
           <Form.Item name="city" label="Город">
             <Input />
@@ -1156,8 +1211,17 @@ function FactoriesPageContent() {
                       onFinish={(values) => createLoadingAddressMutation.mutate(values)}
                     >
                       <div className="crm-filter-grid">
-                        <Form.Item name="country_id" label="Страна ID" className="crm-col-2" style={{ marginBottom: 8 }}>
-                          <InputNumber min={1} style={{ width: "100%" }} />
+                        <Form.Item name="country_id" label="Страна" className="crm-col-2" style={{ marginBottom: 8 }}>
+                          <CountrySelect
+                            allowClear
+                            onChange={(countryId) => {
+                              loadingAddressCreateForm.setFieldsValue({
+                                country_id: countryId,
+                                city: undefined,
+                                postcode: undefined,
+                              });
+                            }}
+                          />
                         </Form.Item>
                         <Form.Item name="city" label="Город" className="crm-col-3" style={{ marginBottom: 8 }}>
                           <Input />
@@ -1306,8 +1370,17 @@ function FactoriesPageContent() {
             });
           }}
         >
-          <Form.Item name="country_id" label="Страна ID">
-            <InputNumber min={1} style={{ width: "100%" }} />
+          <Form.Item name="country_id" label="Страна">
+            <CountrySelect
+              allowClear
+              onChange={(countryId) => {
+                loadingAddressEditForm.setFieldsValue({
+                  country_id: countryId,
+                  city: undefined,
+                  postcode: undefined,
+                });
+              }}
+            />
           </Form.Item>
           <Form.Item name="city" label="Город">
             <Input />

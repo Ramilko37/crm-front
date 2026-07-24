@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildUserWritePayload, isForwarderRole } from "@/shared/lib/user-flow";
+import { buildUserWritePayload, isForwarderRole, requiredWhenForwarder } from "@/shared/lib/user-flow";
 
 describe("user flow helpers", () => {
   it("builds forwarder write payload without legacy frontend-only fields", () => {
@@ -45,5 +45,12 @@ describe("user flow helpers", () => {
     expect(isForwarderRole("forwarder")).toBe(true);
     expect(isForwarderRole("logist")).toBe(false);
     expect(isForwarderRole(undefined)).toBe(false);
+  });
+
+  it("accepts a selected numeric country id for a forwarder", async () => {
+    const rule = requiredWhenForwarder("forwarder", "Выберите страну");
+
+    await expect(rule.validator(undefined, 39)).resolves.toBeUndefined();
+    await expect(rule.validator(undefined, undefined)).rejects.toThrow("Выберите страну");
   });
 });

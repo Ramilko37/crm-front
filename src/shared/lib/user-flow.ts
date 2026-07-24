@@ -44,7 +44,8 @@ export function requiredWhenForwarder(roleName: RoleName | string | null | undef
   return {
     validator: async (_: unknown, value: unknown) => {
       const stringValue = typeof value === "string" ? value.trim() : "";
-      if (isForwarderRole(roleName) && !stringValue) {
+      const hasNumericValue = typeof value === "number" && Number.isFinite(value) && value > 0;
+      if (isForwarderRole(roleName) && !stringValue && !hasNumericValue) {
         throw new Error(message);
       }
     },

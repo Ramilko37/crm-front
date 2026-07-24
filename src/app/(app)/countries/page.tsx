@@ -44,7 +44,7 @@ function getParams(searchParams: URLSearchParams): CountryFilterParams {
   return {
     page: parseNumber(searchParams.get("page")) ?? 1,
     page_size: parseNumber(searchParams.get("page_size")) ?? 50,
-    sort_by: searchParams.get("sort_by") ?? undefined,
+    sort_by: searchParams.get("sort_by") ?? "name_en",
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
     query: searchParams.get("query") ?? undefined,
     iso2: searchParams.get("iso2") ?? undefined,
@@ -54,7 +54,7 @@ function getParams(searchParams: URLSearchParams): CountryFilterParams {
 
 type CountryForm = {
   name_ru: string;
-  name_en?: string;
+  name_en: string;
   iso2: string;
   iso3?: string;
 };
@@ -163,7 +163,14 @@ function CountriesPageContent() {
   }
 
   const columns: ColumnsType<Country> = [
-    { title: "ID", dataIndex: "id", key: "id", width: 90, sorter: true, sortOrder: sortOrderFor("id") },
+    {
+      title: "Название (EN)",
+      dataIndex: "name_en",
+      key: "name_en",
+      sorter: true,
+      sortOrder: sortOrderFor("name_en"),
+      render: (value) => value ?? "Требуется заполнить",
+    },
     {
       title: "Название (RU)",
       dataIndex: "name_ru",
@@ -171,7 +178,6 @@ function CountriesPageContent() {
       sorter: true,
       sortOrder: sortOrderFor("name_ru"),
     },
-    { title: "Название (EN)", dataIndex: "name_en", key: "name_en", render: (value) => value ?? "-" },
     {
       title: "ISO2",
       dataIndex: "iso2",
@@ -330,7 +336,7 @@ function CountriesPageContent() {
           <Form.Item name="name_ru" label="Название (RU)" rules={[{ required: true }]}> 
             <Input />
           </Form.Item>
-          <Form.Item name="name_en" label="Название (EN)">
+          <Form.Item name="name_en" label="Название (EN)" rules={[{ required: true, message: "Укажите английское название" }]}>
             <Input />
           </Form.Item>
           <Form.Item name="iso2" label="ISO2" rules={[{ required: true }]}> 
@@ -343,7 +349,7 @@ function CountriesPageContent() {
       </Modal>
 
       <Modal
-        title={`Изменить страну #${selected?.id ?? ""}`}
+        title={`Изменить страну: ${selected?.name_en || selected?.name_ru || ""}`}
         open={editOpen}
         destroyOnHidden
         onCancel={() => setEditOpen(false)}
@@ -361,7 +367,7 @@ function CountriesPageContent() {
           <Form.Item name="name_ru" label="Название (RU)" rules={[{ required: true }]}> 
             <Input />
           </Form.Item>
-          <Form.Item name="name_en" label="Название (EN)">
+          <Form.Item name="name_en" label="Название (EN)" rules={[{ required: true, message: "Укажите английское название" }]}>
             <Input />
           </Form.Item>
           <Form.Item name="iso2" label="ISO2" rules={[{ required: true }]}> 
