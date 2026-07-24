@@ -67,6 +67,13 @@ import {
 } from "@/shared/lib/order-create-wizard";
 import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
+import {
+  isCommercialOrderType,
+  mapOrderValidationIssueToNamePath,
+  resolvePostcodeCitySelection,
+  validateOrderDecimal,
+  validateOrderFormValues,
+} from "@/shared/lib/order-form-validation";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { parseSearchArray, setSearchPatch } from "@/shared/lib/query-string";
 import { normalizeRoleName } from "@/shared/lib/rbac";
@@ -452,6 +459,11 @@ const REQUEST_DOCUMENT_TYPE_OPTIONS = [
   { label: "ZIP", value: "zip" },
 ];
 const REQUEST_BACKEND_DOCUMENT_TYPE = "goods_description_docs";
+const ORDER_CURRENCY_OPTIONS = [
+  { label: "USD", value: "USD" },
+  { label: "EUR", value: "EUR" },
+  { label: "OTHER", value: "OTHER" },
+];
 const COMPACT_CREATE_MODAL_WIDTH = 720;
 function formatRatio(numerator: string | undefined, denominator: string | undefined) {
   const nextNumerator = Number(numerator);
@@ -511,8 +523,8 @@ function normalizeCurrencyPayload(
   otherLabelFieldName: string,
 ) {
   const normalizedCurrency = (currency || "EUR").toUpperCase();
-  if (!["USD", "EUR", "RUB", "OTHER"].includes(normalizedCurrency)) {
-    throw new Error("Валюта должна быть USD, EUR, RUB или OTHER");
+  if (!["USD", "EUR", "OTHER"].includes(normalizedCurrency)) {
+    throw new Error("Валюта должна быть USD, EUR или OTHER");
   }
 
   const normalizedOtherLabel = trimOrUndefined(otherLabel);
@@ -527,6 +539,69 @@ function normalizeCurrencyPayload(
     currency: normalizedCurrency,
     otherLabel: normalizedCurrency === "OTHER" ? normalizedOtherLabel : undefined,
   };
+}
+
+function asNamePathArray(name: NamePath) {
+  return Array.isArray(name) ? name : [name];
+}
+
+function sameNamePath(left: NamePath, right: NamePath) {
+  return JSON.stringify(asNamePathArray(left)) === JSON.stringify(asNamePathArray(right));
+}
+
+function getOrderDecimalMessage(
+  fieldName: "client_goods_value_amount" | "declared_volume_m3" | "declared_total_weight_kg",
+  reason: "required" | "invalid_number" | "must_be_positive",
+) {
+  const messages = {
+    client_goods_value_amount: {
+      required: "Укажите сумму инвойса",
+      invalid_number: "Сумма инвойса должна быть числом",
+      must_be_positive: "Сумма инвойса должна быть больше 0",
+    },
+    declared_volume_m3: {
+      required: "Укажите заявленный объем",
+      invalid_number: "Заявленный объем должен быть числом",
+      must_be_positive: "Заявленный объем должен быть больше 0",
+    },
+    declared_total_weight_kg: {
+      required: "Укажите заявленный вес",
+      invalid_number: "Заявленный вес должен быть числом",
+      must_be_positive: "Заявленный вес должен быть больше 0",
+    },
+  };
+  return messages[fieldName][reason];
+}
+
+function createDecimalRule(
+  fieldName: "client_goods_value_amount" | "declared_volume_m3" | "declared_total_weight_kg",
+  required: boolean,
+) {
+  return {
+    validator(_: unknown, value: string | undefined) {
+      const result = validateOrderDecimal(value, { required });
+      if (result.ok) {
+        return Promise.resolve();
+      }
+      return Promise.reject(new Error(getOrderDecimalMessage(fieldName, result.reason)));
+    },
+  };
+}
+
+function getOrderBackendIssueMessage(name: NamePath, fallback: string) {
+  const key = asNamePathArray(name).at(-1);
+  if (key === "invoice_number") return "Укажите номер инвойса";
+  if (key === "client_goods_value_amount") return "Проверьте сумму инвойса";
+  if (key === "client_goods_value_currency") return "Выберите валюту";
+  if (key === "client_goods_value_currency_other_label") return "Для валюты OTHER укажите текстовое обозначение валюты";
+  if (key === "declared_volume_m3") return "Проверьте заявленный объем";
+  if (key === "declared_total_weight_kg") return "Проверьте заявленный вес";
+  if (key === "loading_postcode_id_ui" || key === "postcode_id") return "Выберите индекс";
+  if (key === "loading_city_id_ui" || key === "city_id") return "Выберите город";
+  if (key === "company_contact_id") return "Выберите контакт компании";
+  if (key === "factory_contact_id") return "Выберите email контакта фабрики";
+  if (key === "loading_address_id") return "Выберите адрес погрузки";
+  return fallback;
 }
 
 function getParams(searchParams: URLSearchParams): OrderFilterParams {
@@ -754,6 +829,9 @@ function OrdersPageContent() {
   const editClientGoodsCurrency = Form.useWatch("client_goods_value_currency", editForm);
   const editMeasurementStatus = Form.useWatch("measurement_status", editForm);
   const editWeighingStatus = Form.useWatch("weighing_status", editForm);
+  const currentEditOrderType = (selected?.order_type ?? "delivery") as OrderType;
+  const isCommercialCreate = isCommercialOrderType(currentCreateOrderType);
+  const isCommercialEdit = isCommercialOrderType(currentEditOrderType);
   const editDraftRecord = selectedOrderId ? editDraftsByOrderId[selectedOrderId] : undefined;
   const editGoodsLineRowsFromForm = Form.useWatch("goods_lines", editForm) as OrderCreateGoodsLineForm[] | undefined;
   const editGoodsLineRows = useMemo(
@@ -1240,6 +1318,34 @@ function OrdersPageContent() {
     enabled: editOpen && editFactoryLoadingAddressModalOpen && Boolean(editLoadingAddressQuickPostcodeId),
   });
 
+  useEffect(() => {
+    if (!factoryLoadingAddressModalOpen || !loadingAddressQuickPostcodeId || loadingAddressQuickCitiesQuery.isLoading) return;
+    const currentCityId = factoryLoadingAddressQuickForm.getFieldValue("city_id") as number | undefined;
+    const selection = resolvePostcodeCitySelection(currentCityId, loadingAddressQuickCitiesQuery.data?.items ?? []);
+    if (selection.reason === "kept" || selection.reason === "multiple") return;
+    factoryLoadingAddressQuickForm.setFieldValue("city_id", selection.value);
+  }, [
+    factoryLoadingAddressModalOpen,
+    factoryLoadingAddressQuickForm,
+    loadingAddressQuickCitiesQuery.data?.items,
+    loadingAddressQuickCitiesQuery.isLoading,
+    loadingAddressQuickPostcodeId,
+  ]);
+
+  useEffect(() => {
+    if (!editFactoryLoadingAddressModalOpen || !editLoadingAddressQuickPostcodeId || editLoadingAddressQuickCitiesQuery.isLoading) return;
+    const currentCityId = editFactoryLoadingAddressQuickForm.getFieldValue("city_id") as number | undefined;
+    const selection = resolvePostcodeCitySelection(currentCityId, editLoadingAddressQuickCitiesQuery.data?.items ?? []);
+    if (selection.reason === "kept" || selection.reason === "multiple") return;
+    editFactoryLoadingAddressQuickForm.setFieldValue("city_id", selection.value);
+  }, [
+    editFactoryLoadingAddressModalOpen,
+    editFactoryLoadingAddressQuickForm,
+    editLoadingAddressQuickCitiesQuery.data?.items,
+    editLoadingAddressQuickCitiesQuery.isLoading,
+    editLoadingAddressQuickPostcodeId,
+  ]);
+
   const toEditFormValues = useCallback(
     (detail: OrderInternalEditRead): OrderEditForm => {
       const order = detail.order;
@@ -1363,6 +1469,22 @@ function OrdersPageContent() {
       createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], createLoadingPostcodeIdUi);
     }
   }, [createFactoryMode, createForm, createLoadingPostcodeIdUi, createOpen]);
+
+  useEffect(() => {
+    if (!createOpen || createFactoryMode !== "create" || !createLoadingPostcodeIdUi || postcodeCitiesQuery.isLoading) return;
+    const currentCityId = createForm.getFieldValue("loading_city_id_ui") as number | undefined;
+    const selection = resolvePostcodeCitySelection(currentCityId, postcodeCitiesQuery.data?.items ?? []);
+    if (selection.reason === "kept" || selection.reason === "multiple") return;
+    createForm.setFieldValue("loading_city_id_ui", selection.value);
+    createForm.setFieldValue(["create_factory", "loading_address", "city_id"], selection.value);
+  }, [
+    createFactoryMode,
+    createForm,
+    createLoadingPostcodeIdUi,
+    createOpen,
+    postcodeCitiesQuery.data?.items,
+    postcodeCitiesQuery.isLoading,
+  ]);
 
   async function handleCreateFactoryFromCreateForm() {
     try {
@@ -1539,6 +1661,22 @@ function OrdersPageContent() {
       editForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], editLoadingPostcodeIdUi);
     }
   }, [editFactoryMode, editForm, editLoadingPostcodeIdUi, editOpen]);
+
+  useEffect(() => {
+    if (!editOpen || editFactoryMode !== "create" || !editLoadingPostcodeIdUi || editPostcodeCitiesQuery.isLoading) return;
+    const currentCityId = editForm.getFieldValue("loading_city_id_ui") as number | undefined;
+    const selection = resolvePostcodeCitySelection(currentCityId, editPostcodeCitiesQuery.data?.items ?? []);
+    if (selection.reason === "kept" || selection.reason === "multiple") return;
+    editForm.setFieldValue("loading_city_id_ui", selection.value);
+    editForm.setFieldValue(["create_factory", "loading_address", "city_id"], selection.value);
+  }, [
+    editFactoryMode,
+    editForm,
+    editLoadingPostcodeIdUi,
+    editOpen,
+    editPostcodeCitiesQuery.data?.items,
+    editPostcodeCitiesQuery.isLoading,
+  ]);
 
   async function handleCreateFactoryFromEditForm() {
     try {
@@ -1780,12 +1918,62 @@ function OrdersPageContent() {
     },
   });
 
+  function scrollCreateToField(name: NamePath) {
+    const targetStep = getCreateStepIndexForField(name);
+    if (targetStep >= 0 && targetStep !== createStep) {
+      setCreateStep(targetStep);
+    }
+    window.setTimeout(() => createForm.scrollToField(name, { block: "center" }), 0);
+  }
+
+  function getCreateStepIndexForField(name: NamePath) {
+    return createWizardSteps.findIndex((_, stepIndex) =>
+      getCreateStepFieldNames(stepIndex).some((fieldName) => sameNamePath(fieldName, name)),
+    );
+  }
+
+  function applyCreateFieldErrors(fieldErrors: Array<{ name: NamePath; message: string }>) {
+    if (!fieldErrors.length) return false;
+    const sortedFieldErrors = [...fieldErrors].sort((left, right) => {
+      const leftStep = getCreateStepIndexForField(left.name);
+      const rightStep = getCreateStepIndexForField(right.name);
+      return (leftStep === -1 ? Number.MAX_SAFE_INTEGER : leftStep) - (rightStep === -1 ? Number.MAX_SAFE_INTEGER : rightStep);
+    });
+    createForm.setFields(
+      sortedFieldErrors.map((fieldError) => ({ name: fieldError.name, errors: [fieldError.message] })) as Parameters<
+        typeof createForm.setFields
+      >[0],
+    );
+    scrollCreateToField(sortedFieldErrors[0].name);
+    return true;
+  }
+
+  function applyEditFieldErrors(fieldErrors: Array<{ name: NamePath; message: string }>) {
+    if (!fieldErrors.length) return false;
+    editForm.setFields(
+      fieldErrors.map((fieldError) => ({ name: fieldError.name, errors: [fieldError.message] })) as Parameters<
+        typeof editForm.setFields
+      >[0],
+    );
+    window.setTimeout(() => editForm.scrollToField(fieldErrors[0].name, { block: "center" }), 0);
+    return true;
+  }
+
+  function applyStructured422FieldErrors(error: ApiError, target: "create" | "edit") {
+    const fieldErrors = error.issues.flatMap((issue) => {
+      const name = mapOrderValidationIssueToNamePath(issue);
+      if (!name) return [];
+      return [{ name, message: getOrderBackendIssueMessage(name, issue.msg) }];
+    });
+    return target === "create" ? applyCreateFieldErrors(fieldErrors) : applyEditFieldErrors(fieldErrors);
+  }
+
   function applyCreate422FieldErrors(detail: string) {
     const text = detail.toLowerCase();
-    const fieldErrors: Array<{ name: (string | number)[]; errors: string[] }> = [];
+    const fieldErrors: Array<{ name: NamePath; message: string }> = [];
 
     const mark = (name: (string | number)[] | string, messageText: string) => {
-      fieldErrors.push({ name: Array.isArray(name) ? name : [name], errors: [messageText] });
+      fieldErrors.push({ name: Array.isArray(name) ? name : [name], message: messageText });
     };
 
     if (text.includes("invoice_company_name")) {
@@ -1835,10 +2023,12 @@ function OrdersPageContent() {
 
     if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
       mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
+      mark("loading_postcode_id_ui", "Выберите индекс");
     }
 
     if (text.includes("loading_address.city_id") || text.includes("create_city")) {
       mark(["create_factory", "loading_address", "city_id"], "Выберите город");
+      mark("loading_city_id_ui", "Выберите город");
     }
 
     if (text.includes("additional_description")) {
@@ -1868,19 +2058,14 @@ function OrdersPageContent() {
       mark("factory_country_id", "Проверьте страну фабрики и соответствие выбранных данных");
     }
 
-    if (!fieldErrors.length) {
-      return false;
-    }
-
-    createForm.setFields(fieldErrors as Parameters<typeof createForm.setFields>[0]);
-    return true;
+    return applyCreateFieldErrors(fieldErrors);
   }
 
   function applyEdit422FieldErrors(detail: string) {
     const text = detail.toLowerCase();
-    const fieldErrors: Array<{ name: (string | number)[]; errors: string[] }> = [];
+    const fieldErrors: Array<{ name: NamePath; message: string }> = [];
     const mark = (name: (string | number)[] | string, messageText: string) => {
-      fieldErrors.push({ name: Array.isArray(name) ? name : [name], errors: [messageText] });
+      fieldErrors.push({ name: Array.isArray(name) ? name : [name], message: messageText });
     };
 
     if (text.includes("company_contact_id")) {
@@ -1923,9 +2108,87 @@ function OrdersPageContent() {
       mark("goods_lines", "Проверьте строки товаров");
     }
 
-    if (!fieldErrors.length) return false;
-    editForm.setFields(fieldErrors as Parameters<typeof editForm.setFields>[0]);
-    return true;
+    return applyEditFieldErrors(fieldErrors);
+  }
+
+  function validateCreateOrderBeforeSubmit(values: OrderCreateForm) {
+    const isRequestOrder = (values.order_type ?? "delivery") === "request";
+    const validation = validateOrderFormValues({
+      order_type: values.order_type,
+      invoice_number: values.invoice_number,
+      client_goods_value_amount: values.client_goods_value_amount,
+      client_goods_value_currency: values.client_goods_value_currency,
+      client_goods_value_currency_other_label: values.client_goods_value_currency_other_label,
+      declared_volume_m3: values.declared_volume_m3,
+      declared_total_weight_kg: values.declared_total_weight_kg,
+    });
+    const fieldErrors: Array<{ name: NamePath; message: string }> = validation.ok ? [] : [...validation.fieldErrors];
+
+    if (!isRequestOrder && values.factory_mode === "create") {
+      if (!values.loading_postcode_id_ui) {
+        fieldErrors.push({ name: ["loading_postcode_id_ui"], message: "Выберите индекс" });
+      }
+      if (!values.loading_city_id_ui) {
+        fieldErrors.push({ name: ["loading_city_id_ui"], message: "Выберите город" });
+      }
+    }
+
+    if (!isRequestOrder && values.factory_mode !== "create" && selectedLoadingAddress) {
+      if (!selectedLoadingAddress.postcode_id || !selectedLoadingAddress.city_id) {
+        fieldErrors.push({
+          name: ["loading_address_id"],
+          message: "Выберите адрес с индексом и городом или добавьте новый адрес",
+        });
+      }
+    }
+
+    if (fieldErrors.length) {
+      applyCreateFieldErrors(fieldErrors);
+      return null;
+    }
+
+    if (isRequestOrder) {
+      return {};
+    }
+    return validation.ok ? validation.values : null;
+  }
+
+  function validateEditOrderBeforeSubmit(values: OrderEditForm) {
+    const validation = validateOrderFormValues({
+      order_type: currentEditOrderType,
+      invoice_number: values.invoice_number,
+      client_goods_value_amount: values.client_goods_value_amount,
+      client_goods_value_currency: values.client_goods_value_currency,
+      client_goods_value_currency_other_label: values.client_goods_value_currency_other_label,
+      declared_volume_m3: values.declared_volume_m3,
+      declared_total_weight_kg: values.declared_total_weight_kg,
+    });
+    const fieldErrors: Array<{ name: NamePath; message: string }> = validation.ok ? [] : [...validation.fieldErrors];
+
+    if (values.factory_mode === "create") {
+      if (!values.loading_postcode_id_ui) {
+        fieldErrors.push({ name: ["loading_postcode_id_ui"], message: "Выберите индекс" });
+      }
+      if (!values.loading_city_id_ui) {
+        fieldErrors.push({ name: ["loading_city_id_ui"], message: "Выберите город" });
+      }
+    }
+
+    if (values.factory_mode !== "create" && selectedEditLoadingAddress) {
+      if (!selectedEditLoadingAddress.postcode_id || !selectedEditLoadingAddress.city_id) {
+        fieldErrors.push({
+          name: ["loading_address_id"],
+          message: "Выберите адрес с индексом и городом или добавьте новый адрес",
+        });
+      }
+    }
+
+    if (fieldErrors.length) {
+      applyEditFieldErrors(fieldErrors);
+      return null;
+    }
+
+    return validation.ok ? validation.values : null;
   }
 
   function closeAndResetCreateModal() {
@@ -2121,7 +2384,17 @@ function OrdersPageContent() {
 
     if (stepKey === "factory") {
       if (isClientRole) {
-        return ["factory_mode", "factory_country_id", "factory_id", "loading_address_id", "ready_date", "pickup_date_from", "pickup_date_to"];
+        return [
+          "factory_mode",
+          "factory_country_id",
+          "factory_id",
+          "loading_address_id",
+          "loading_postcode_id_ui",
+          "loading_city_id_ui",
+          "ready_date",
+          "pickup_date_from",
+          "pickup_date_to",
+        ];
       }
 
       const names: NamePath[] = [
@@ -2132,6 +2405,8 @@ function OrdersPageContent() {
         "factory_mode",
         "factory_country_id",
         "factory_contact_id",
+        "loading_postcode_id_ui",
+        "loading_city_id_ui",
       ];
 
       names.push("assigned_forwarder_user_id");
@@ -2249,6 +2524,10 @@ function OrdersPageContent() {
 
   async function resolveRequestFactorySelection(values: OrderCreateForm) {
     if (values.factory_country_id && values.factory_id && values.loading_address_id && values.factory_contact_id) {
+      const selectedAddress = allLoadingAddresses.find((address) => address.id === values.loading_address_id);
+      if (selectedAddress && (!selectedAddress.postcode_id || !selectedAddress.city_id)) {
+        throw new Error("Для создания заявки выберите адрес погрузки с индексом и городом");
+      }
       return {
         factory_mode: "existing",
         country_id: values.factory_country_id,
@@ -2267,14 +2546,14 @@ function OrdersPageContent() {
 
       const [addresses, contacts] = await Promise.all([
         apiRequest<PaginatedResponse<FactoryLoadingAddress>>(`/api/factories/${factory.id}/loading-addresses`, {
-          query: { page: 1, page_size: 1 },
+          query: { page: 1, page_size: 20 },
         }),
         apiRequest<PaginatedResponse<FactoryContactOption> | FactoryContactOption[]>(`/api/factories/${factory.id}/contacts`, {
           query: { page: 1, page_size: 1 },
         }),
       ]);
 
-      const address = addresses.items[0];
+      const address = addresses.items.find((item) => Boolean(item.id && item.postcode_id && item.city_id));
       const contactItems = Array.isArray(contacts) ? contacts : contacts.items;
       const contact = contactItems[0];
       if (!address?.id || !contact?.id) continue;
@@ -2288,7 +2567,7 @@ function OrdersPageContent() {
       };
     }
 
-    throw new Error("Для создания заявки нужна фабрика с адресом погрузки и контактом");
+    throw new Error("Для создания заявки нужна фабрика с адресом погрузки, индексом, городом и контактом");
   }
 
   const createMutation = useMutation({
@@ -2464,17 +2743,10 @@ function OrdersPageContent() {
         }
       }
 
-      const clientGoodsValueCurrency = trimOrUndefined(values.client_goods_value_currency);
-      if (clientGoodsValueCurrency && !["USD", "EUR", "RUB", "OTHER"].includes(clientGoodsValueCurrency)) {
-        throw new Error("Валюта стоимости товара должна быть USD, EUR, RUB или OTHER");
+      const normalizedOrderValues = validateCreateOrderBeforeSubmit(values);
+      if (!normalizedOrderValues) {
+        throw new Error("Проверьте поля заказа");
       }
-      const clientGoodsValueCurrencyOtherLabel = trimOrUndefined(values.client_goods_value_currency_other_label);
-      if (clientGoodsValueCurrency === "OTHER" && !clientGoodsValueCurrencyOtherLabel) {
-        throw new Error("Для валюты OTHER укажите текстовое обозначение валюты");
-      }
-      if (clientGoodsValueCurrency && clientGoodsValueCurrency !== "OTHER" && clientGoodsValueCurrencyOtherLabel) {
-        throw new Error("Текстовое обозначение валюты допустимо только для OTHER");
-        }
 
       const orderPayload: Record<string, unknown> = {
         order_number: trimOrUndefined(values.order_number),
@@ -2486,14 +2758,13 @@ function OrdersPageContent() {
         pickup_date_to: values.pickup_date_to?.format("YYYY-MM-DD"),
         invoice_on_other_company: Boolean(values.invoice_on_other_company),
         invoice_company_name: trimOrUndefined(values.invoice_company_name),
-        invoice_number: trimOrUndefined(values.invoice_number),
-        declared_volume_m3: trimOrUndefined(values.declared_volume_m3),
-        declared_total_weight_kg: trimOrUndefined(values.declared_total_weight_kg),
+        invoice_number: normalizedOrderValues.invoice_number,
+        declared_volume_m3: normalizedOrderValues.declared_volume_m3,
+        declared_total_weight_kg: normalizedOrderValues.declared_total_weight_kg,
         cargo_places_qty: values.cargo_places_qty,
-        client_goods_value_amount: trimOrUndefined(values.client_goods_value_amount),
-        client_goods_value_currency: clientGoodsValueCurrency,
-        client_goods_value_currency_other_label:
-          clientGoodsValueCurrency === "OTHER" ? clientGoodsValueCurrencyOtherLabel : undefined,
+        client_goods_value_amount: normalizedOrderValues.client_goods_value_amount,
+        client_goods_value_currency: normalizedOrderValues.client_goods_value_currency,
+        client_goods_value_currency_other_label: normalizedOrderValues.client_goods_value_currency_other_label,
         product_characteristic_codes: values.product_characteristic_codes,
         additional_description: trimOrUndefined(values.additional_description),
         comment: trimOrUndefined(values.comment),
@@ -2567,7 +2838,10 @@ function OrdersPageContent() {
       }
       if (error instanceof ApiError) {
         if (error.status === 422) {
-          applyCreate422FieldErrors(error.detail);
+          const applied = applyStructured422FieldErrors(error, "create") || applyCreate422FieldErrors(error.detail);
+          if (applied) {
+            return;
+          }
         }
         message.error(error.detail);
         return;
@@ -2587,11 +2861,10 @@ function OrdersPageContent() {
           Object.entries(source).filter(([, value]) => value !== undefined),
         ) as Partial<T>;
 
-      const normalizedCurrency = normalizeCurrencyPayload(
-        payload.client_goods_value_currency,
-        payload.client_goods_value_currency_other_label,
-        "client_goods_value_currency_other_label",
-      );
+      const normalizedOrderValues = validateEditOrderBeforeSubmit(payload);
+      if (!normalizedOrderValues) {
+        throw new Error("Проверьте поля заказа");
+      }
 
       const orderPayload = compact({
         order_date: payload.order_date?.format("YYYY-MM-DD"),
@@ -2610,13 +2883,13 @@ function OrdersPageContent() {
         certificate_intent: payload.certificate_intent_enabled
           ? trimOrUndefined(payload.certificate_intent) ?? null
           : null,
-        invoice_number: trimOrUndefined(payload.invoice_number),
-        client_goods_value_amount: trimOrUndefined(payload.client_goods_value_amount),
-        client_goods_value_currency: normalizedCurrency.currency,
-        client_goods_value_currency_other_label: normalizedCurrency.otherLabel ?? null,
-        declared_volume_m3: trimOrUndefined(payload.declared_volume_m3),
+        invoice_number: normalizedOrderValues.invoice_number,
+        client_goods_value_amount: normalizedOrderValues.client_goods_value_amount,
+        client_goods_value_currency: normalizedOrderValues.client_goods_value_currency,
+        client_goods_value_currency_other_label: normalizedOrderValues.client_goods_value_currency_other_label ?? null,
+        declared_volume_m3: normalizedOrderValues.declared_volume_m3,
         volume_m3: trimOrUndefined(payload.volume_m3),
-        declared_total_weight_kg: trimOrUndefined(payload.declared_total_weight_kg),
+        declared_total_weight_kg: normalizedOrderValues.declared_total_weight_kg,
         cargo_places_qty: payload.cargo_places_qty,
         measurement_payload: payload.measurement_status ? { status: payload.measurement_status } : undefined,
         actual_volume_m3: trimOrUndefined(payload.actual_volume_m3),
@@ -2697,7 +2970,10 @@ function OrdersPageContent() {
     onError: (error) => {
       if (error instanceof ApiError) {
         if (error.status === 422) {
-          applyEdit422FieldErrors(error.detail);
+          const applied = applyStructured422FieldErrors(error, "edit") || applyEdit422FieldErrors(error.detail);
+          if (applied) {
+            return;
+          }
         }
         message.error(error.detail);
         return;
@@ -4648,7 +4924,11 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               return;
             }
             const draftPayload = (createDraft as Partial<OrderCreateForm>) ?? {};
-            createMutation.mutate({ ...draftPayload, ...snapshot, ...values });
+            const nextValues = { ...draftPayload, ...snapshot, ...values };
+            if (!validateCreateOrderBeforeSubmit(nextValues)) {
+              return;
+            }
+            createMutation.mutate(nextValues);
           }}
         >
           {createWizardStepKey === "base" ? (
@@ -4838,6 +5118,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                         createForm.setFieldValue("factory_contact_id", undefined);
                         createForm.setFieldValue("loading_postcode_id_ui", undefined);
                         createForm.setFieldValue("loading_city_id_ui", undefined);
+                        createForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
+                        createForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
                         setPostcodeQuery("");
                         setPostcodeQueryDebounced("");
                       }}
@@ -4866,6 +5148,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                         onChange={() => {
                           createForm.setFieldValue("loading_address_id", undefined);
                           createForm.setFieldValue("factory_contact_id", undefined);
+                          createForm.setFieldValue("loading_postcode_id_ui", undefined);
+                          createForm.setFieldValue("loading_city_id_ui", undefined);
                         }}
                         dropdownRender={(menu) => (
                           <>
@@ -4923,7 +5207,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                       label="Название адреса"
                       rules={[{ required: true }]}
                       className="crm-order-create-col"
-                    >
+                      >
                       <Select
                         showSearch
                         optionFilterProp="label"
@@ -4933,6 +5217,12 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                           label: (address.name?.trim() || address.address || "Адрес") + (address.is_primary ? " (Primary)" : ""),
                           value: address.id,
                         }))}
+                        onChange={(value) => {
+                          if (!value) {
+                            createForm.setFieldValue("loading_postcode_id_ui", undefined);
+                            createForm.setFieldValue("loading_city_id_ui", undefined);
+                          }
+                        }}
                         dropdownRender={(menu) => (
                           <>
                             {menu}
@@ -4994,12 +5284,17 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     </Form.Item>
                   ) : null}
 
-                  <Form.Item name="loading_postcode_id_ui" label="Индекс" className="crm-order-create-col">
+                  <Form.Item
+                    name="loading_postcode_id_ui"
+                    label="Индекс"
+                    rules={createFactoryMode === "create" ? [{ required: true, message: "Выберите индекс" }] : undefined}
+                    className="crm-order-create-col"
+                  >
                     <Select
                       showSearch
                       filterOption={false}
                       allowClear
-                      disabled={!createFactoryCountryId}
+                      disabled={!createFactoryCountryId || createFactoryMode === "existing"}
                       loading={postcodeOptionsQuery.isLoading}
                       options={postcodeOptions}
                       onSearch={(value) => setPostcodeQuery(value)}
@@ -5015,10 +5310,15 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     />
                   </Form.Item>
 
-                  <Form.Item name="loading_city_id_ui" label="Город" className="crm-order-create-col">
+                  <Form.Item
+                    name="loading_city_id_ui"
+                    label="Город"
+                    rules={createFactoryMode === "create" ? [{ required: true, message: "Выберите город" }] : undefined}
+                    className="crm-order-create-col"
+                  >
                     <Select
                       allowClear
-                      disabled={!createLoadingPostcodeIdUi}
+                      disabled={!createLoadingPostcodeIdUi || createFactoryMode === "existing"}
                       loading={postcodeCitiesQuery.isLoading}
                       options={cityOptions}
                       onChange={(value) => {
@@ -5171,20 +5471,28 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   Данные заказа
                 </Typography.Title>
                 <div className="crm-order-create-grid">
-                  <Form.Item name="invoice_number" label="Номер инвойса" className="crm-order-create-col">
+                  <Form.Item
+                    name="invoice_number"
+                    label="Номер инвойса"
+                    rules={isCommercialCreate ? [{ required: true, message: "Укажите номер инвойса" }] : undefined}
+                    className="crm-order-create-col"
+                  >
                     <Input />
                   </Form.Item>
                   <Form.Item label="Валюта" className="crm-order-create-col">
                     <div className="crm-order-currency-row">
-                      <Form.Item name="client_goods_value_currency" noStyle>
+                      <Form.Item
+                        name="client_goods_value_currency"
+                        className="crm-order-currency-inline-item"
+                        rules={
+                          isCommercialCreate
+                            ? [{ required: true, message: "Выберите валюту" }]
+                            : undefined
+                        }
+                      >
                         <Select
                           className="crm-order-currency-select"
-                          options={[
-                            { label: "USD", value: "USD" },
-                            { label: "RUB", value: "RUB" },
-                            { label: "EUR", value: "EUR" },
-                            { label: "OTHER", value: "OTHER" },
-                          ]}
+                          options={ORDER_CURRENCY_OPTIONS}
                         />
                       </Form.Item>
                       {createClientGoodsValueCurrency === "OTHER" ? (
@@ -5198,15 +5506,30 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                       ) : null}
                     </div>
                   </Form.Item>
-                  <Form.Item name="client_goods_value_amount" label="Сумма" className="crm-order-create-col">
+                  <Form.Item
+                    name="client_goods_value_amount"
+                    label="Сумма инвойса"
+                    rules={[createDecimalRule("client_goods_value_amount", isCommercialCreate)]}
+                    className="crm-order-create-col"
+                  >
                     <Input />
                   </Form.Item>
-                  <Form.Item name="declared_volume_m3" label="Заявленный объем, м3" className="crm-order-create-col">
-                    <Input />
+                  <Form.Item
+                    name="declared_volume_m3"
+                    label="Заявленный объем"
+                    rules={[createDecimalRule("declared_volume_m3", isCommercialCreate)]}
+                    className="crm-order-create-col"
+                  >
+                    <Input addonAfter="м³" />
                   </Form.Item>
                   <div className="crm-order-create-col crm-order-inline-pair">
-                    <Form.Item name="declared_total_weight_kg" label="Вес, кг" className="crm-order-inline-pair-item">
-                      <Input />
+                    <Form.Item
+                      name="declared_total_weight_kg"
+                      label="Вес"
+                      rules={[createDecimalRule("declared_total_weight_kg", isCommercialCreate)]}
+                      className="crm-order-inline-pair-item"
+                    >
+                      <Input addonAfter="кг" />
                     </Form.Item>
                     <Form.Item name="cargo_places_qty" label="Кол-во мест" className="crm-order-inline-pair-item">
                       <InputNumber min={0} style={{ width: "100%" }} />
@@ -5872,6 +6195,9 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           }}
           onFinish={(values) => {
             if (!selected) return;
+            if (!validateEditOrderBeforeSubmit(values)) {
+              return;
+            }
             updateMutation.mutate({ id: selected.id, payload: values });
           }}
         >
@@ -5969,6 +6295,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     editForm.setFieldValue(["create_factory"], undefined);
                     editForm.setFieldValue("loading_postcode_id_ui", undefined);
                     editForm.setFieldValue("loading_city_id_ui", undefined);
+                    editForm.setFieldValue(["create_factory", "loading_address", "postcode_id"], undefined);
+                    editForm.setFieldValue(["create_factory", "loading_address", "city_id"], undefined);
                     editForm.setFieldValue("loading_address_line", undefined);
                     editForm.setFieldValue("loading_address_fax", undefined);
                     editForm.setFieldValue("factory_contact_email", undefined);
@@ -5992,6 +6320,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     onChange={() => {
                       editForm.setFieldValue("loading_address_id", undefined);
                       editForm.setFieldValue("factory_contact_id", undefined);
+                      editForm.setFieldValue("loading_postcode_id_ui", undefined);
+                      editForm.setFieldValue("loading_city_id_ui", undefined);
                       editForm.setFieldValue("factory_contact_email", undefined);
                       editForm.setFieldValue("factory_contact_name", undefined);
                       editForm.setFieldValue("factory_contact_phone", undefined);
@@ -6057,6 +6387,12 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     loading={editLoadingAddressesQuery.isLoading}
                     disabled={!isEditMode || !editFactoryId}
                     options={editLoadingAddressOptions}
+                    onChange={(value) => {
+                      if (!value) {
+                        editForm.setFieldValue("loading_postcode_id_ui", undefined);
+                        editForm.setFieldValue("loading_city_id_ui", undefined);
+                      }
+                    }}
                     dropdownRender={(menu) => (
                       <>
                         {menu}
@@ -6111,14 +6447,18 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   />
                 </Form.Item>
               ) : null}
-              <Form.Item name="loading_postcode_id_ui" label="Индекс">
+              <Form.Item
+                name="loading_postcode_id_ui"
+                label="Индекс"
+                rules={editFactoryMode === "create" ? [{ required: true, message: "Выберите индекс" }] : undefined}
+              >
                 <Select
                   showSearch
                   filterOption={false}
                   allowClear
                   loading={editPostcodeOptionsQuery.isLoading}
                   options={editPostcodeOptions}
-                  disabled={!isEditMode || !editFactoryCountryId}
+                  disabled={!isEditMode || !editFactoryCountryId || editFactoryMode === "existing"}
                   onSearch={(value) => setEditPostcodeQuery(value)}
                   onChange={(value) => {
                     editForm.setFieldValue("loading_city_id_ui", undefined);
@@ -6131,12 +6471,16 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   notFoundContent={editPostcodeOptionsQuery.isLoading ? "Загрузка..." : "Индексы не найдены"}
                 />
               </Form.Item>
-              <Form.Item name="loading_city_id_ui" label="Город">
+              <Form.Item
+                name="loading_city_id_ui"
+                label="Город"
+                rules={editFactoryMode === "create" ? [{ required: true, message: "Выберите город" }] : undefined}
+              >
                 <Select
                   allowClear
                   loading={editPostcodeCitiesQuery.isLoading}
                   options={editCityOptions}
-                  disabled={!isEditMode || !editLoadingPostcodeIdUi}
+                  disabled={!isEditMode || !editLoadingPostcodeIdUi || editFactoryMode === "existing"}
                   onChange={(value) => {
                     if (editFactoryMode === "create") {
                       editForm.setFieldValue(["create_factory", "loading_address", "city_id"], value ?? undefined);
@@ -6247,27 +6591,38 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
 
           <div className="crm-order-create-section">
             <div className="crm-order-create-grid">
-              <Form.Item name="invoice_number" label="Номер инвойса/проформы">
+              <Form.Item
+                name="invoice_number"
+                label="Номер инвойса/проформы"
+                rules={isCommercialEdit ? [{ required: true, message: "Укажите номер инвойса" }] : undefined}
+              >
                 <Input />
               </Form.Item>
-              <Form.Item name="client_goods_value_amount" label="Стоимость товара от клиента">
+              <Form.Item
+                name="client_goods_value_amount"
+                label="Стоимость товара от клиента"
+                rules={[createDecimalRule("client_goods_value_amount", isCommercialEdit)]}
+              >
                 <Input />
               </Form.Item>
               <Form.Item label="Валюта">
                 <div className="crm-order-currency-row">
-                  <Form.Item name="client_goods_value_currency" noStyle>
+                  <Form.Item
+                    name="client_goods_value_currency"
+                    className="crm-order-currency-inline-item"
+                    rules={isCommercialEdit ? [{ required: true, message: "Выберите валюту" }] : undefined}
+                  >
                     <Select
                       className="crm-order-currency-select"
-                      options={[
-                        { label: "USD", value: "USD" },
-                        { label: "RUB", value: "RUB" },
-                        { label: "EUR", value: "EUR" },
-                        { label: "OTHER", value: "OTHER" },
-                      ]}
+                      options={ORDER_CURRENCY_OPTIONS}
                     />
                   </Form.Item>
                   {editClientGoodsCurrency === "OTHER" ? (
-                    <Form.Item name="client_goods_value_currency_other_label" className="crm-order-currency-inline-item">
+                    <Form.Item
+                      name="client_goods_value_currency_other_label"
+                      rules={[{ required: true, message: "Укажите валюту" }]}
+                      className="crm-order-currency-inline-item"
+                    >
                       <Input className="crm-order-currency-select" placeholder="Введите валюту" />
                     </Form.Item>
                   ) : null}
@@ -6297,14 +6652,22 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   <Button disabled={!isEditMode} onClick={openEditOrderGoodsLineModal}>Добавить строку товара</Button>
                 </Space>
               </Form.Item>
-              <Form.Item name="declared_volume_m3" label="Заявленный клиентом объем, м3">
-                <Input />
+              <Form.Item
+                name="declared_volume_m3"
+                label="Заявленный клиентом объем"
+                rules={[createDecimalRule("declared_volume_m3", isCommercialEdit)]}
+              >
+                <Input addonAfter="м³" />
               </Form.Item>
-              <Form.Item name="volume_m3" label="Объем из инвойса, м3">
-                <Input />
+              <Form.Item name="volume_m3" label="Объем из инвойса">
+                <Input addonAfter="м³" />
               </Form.Item>
-              <Form.Item name="declared_total_weight_kg" label="Суммарный вес товаров, кг">
-                <Input />
+              <Form.Item
+                name="declared_total_weight_kg"
+                label="Суммарный вес товаров"
+                rules={[createDecimalRule("declared_total_weight_kg", isCommercialEdit)]}
+              >
+                <Input addonAfter="кг" />
               </Form.Item>
               <Form.Item name="cargo_places_qty" label="Кол-во грузовых мест">
                 <InputNumber min={0} style={{ width: "100%" }} />

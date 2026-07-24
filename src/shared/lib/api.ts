@@ -1,4 +1,4 @@
-import { ApiError, extractApiDetail } from "@/shared/lib/errors";
+import { ApiError, extractApiDetail, extractApiValidationIssues } from "@/shared/lib/errors";
 import { buildQueryString, type QueryValue } from "@/shared/lib/query-string";
 
 type RequestBody = BodyInit | Record<string, unknown> | unknown[] | null;
@@ -72,7 +72,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const payload = await parseResponsePayload(response, options.responseType ?? "json");
 
   if (!response.ok) {
-    throw new ApiError(response.status, extractApiDetail(payload, `HTTP ${response.status}`));
+    throw new ApiError(
+      response.status,
+      extractApiDetail(payload, `HTTP ${response.status}`),
+      extractApiValidationIssues(payload),
+    );
   }
 
   return payload as T;

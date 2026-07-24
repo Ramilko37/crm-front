@@ -1,4 +1,4 @@
-import { ApiError, extractApiDetail } from "@/shared/lib/errors";
+import { ApiError, extractApiDetail, extractApiValidationIssues } from "@/shared/lib/errors";
 
 async function parseErrorPayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
@@ -37,7 +37,11 @@ export async function downloadFileWithCredentials(path: string, fallbackFileName
 
   if (!response.ok) {
     const payload = await parseErrorPayload(response);
-    throw new ApiError(response.status, extractApiDetail(payload, `HTTP ${response.status}`));
+    throw new ApiError(
+      response.status,
+      extractApiDetail(payload, `HTTP ${response.status}`),
+      extractApiValidationIssues(payload),
+    );
   }
 
   const fileName = extractFileName(response.headers.get("content-disposition"), fallbackFileName);

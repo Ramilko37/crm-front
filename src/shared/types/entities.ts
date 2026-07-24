@@ -10,7 +10,7 @@ import type {
 } from "@/shared/lib/domain-enums";
 
 export type ApiErrorPayload = {
-  detail: string;
+  detail: string | Array<{ loc: Array<string | number>; msg: string; type?: string }>;
 };
 
 export type AuthTokenResponse = {
