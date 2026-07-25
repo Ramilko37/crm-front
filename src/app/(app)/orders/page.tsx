@@ -62,6 +62,10 @@ import {
 import { ApiError } from "@/shared/lib/errors";
 import { downloadFileWithCredentials, getFileOperationErrorMessage } from "@/shared/lib/file-operations";
 import {
+  readFilterPanelOpenState,
+  writeFilterPanelOpenState,
+} from "@/shared/lib/filter-panel-state";
+import {
   clampOrderCreateWizardStep,
   getOrderCreateWizardSteps,
 } from "@/shared/lib/order-create-wizard";
@@ -419,8 +423,30 @@ function normalizeGoodsLineFromDetail(line: unknown): OrderCreateGoodsLineForm {
   };
 }
 
+const ORDER_FILTER_PANEL_STORAGE_KEY = "crm-orders-filter-panel-open-v1";
 const ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY = "crm-orders-column-widths-v1";
 const ORDER_TABLE_MIN_COLUMN_WIDTH = 72;
+
+function parseFilterPanelQueryState(value: string | null) {
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return undefined;
+}
+
+function getBrowserLocalStorage() {
+  try {
+    return typeof window === "undefined" ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeFilterPanelUrlState(isOpen: boolean) {
+  if (typeof window === "undefined") return;
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set("filters_open", isOpen ? "1" : "0");
+  window.history.replaceState(null, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+}
 
 type ResizableHeaderCellProps = React.ThHTMLAttributes<HTMLTableCellElement> & {
   onResizeStart?: (event: React.MouseEvent<HTMLSpanElement>) => void;
@@ -858,6 +884,7 @@ function OrdersPageContent() {
   const deepLinkEditOrderId = pathnameOrderId ?? parseNumber(searchParams.get("edit_order_id"));
   const standaloneOrderView = pathnameOrderId !== undefined || searchParams.get("single_order_view") === "1";
   const deepLinkedOrderIdRef = useRef<number | null>(null);
+  const filtersOpenFromQuery = parseFilterPanelQueryState(searchParams.get("filters_open"));
   const hasActiveFilters = Boolean(
     params.id ||
       params.query ||
@@ -869,9 +896,43 @@ function OrdersPageContent() {
       (params.priority_codes?.length ?? 0) > 0 ||
       (params.office_mark_codes?.length ?? 0) > 0,
   );
-  const [filtersOpen, setFiltersOpen] = useState(() => hasActiveFilters);
+  const [filtersOpen, setFiltersOpen] = useState(() => filtersOpenFromQuery ?? hasActiveFilters);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+
+  useEffect(() => {
+    if (filtersOpenFromQuery !== undefined) {
+      setFiltersOpen(filtersOpenFromQuery);
+      return;
+    }
+    const savedState = readFilterPanelOpenState(
+      getBrowserLocalStorage(),
+      ORDER_FILTER_PANEL_STORAGE_KEY,
+      typeof document === "undefined" ? undefined : document.cookie,
+    );
+    if (savedState !== undefined) {
+      setFiltersOpen(savedState);
+    }
+  }, [filtersOpenFromQuery]);
+
+  function persistFilterPanelOpenState(next: boolean) {
+    setFiltersOpen(next);
+    writeFilterPanelOpenState(
+      getBrowserLocalStorage(),
+      ORDER_FILTER_PANEL_STORAGE_KEY,
+      next,
+      typeof document === "undefined"
+        ? undefined
+        : (cookie) => {
+            document.cookie = cookie;
+          },
+    );
+  }
+
+  function setPersistedFiltersOpen(next: boolean) {
+    persistFilterPanelOpenState(next);
+    writeFilterPanelUrlState(next);
+  }
 
   useEffect(() => {
     if (columnWidthsHydrated || typeof window === "undefined") return;
@@ -4395,7 +4456,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
         <>
           <PageToolbar
         filtersOpen={filtersOpen}
-        onToggleFilters={() => setFiltersOpen((open) => !open)}
+        onToggleFilters={() => setPersistedFiltersOpen(!filtersOpen)}
         toggleLabel="Фильтр"
         search={
           <Input.Search
@@ -4575,8 +4636,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             <Button
               onClick={() => {
                 filterForm.resetFields();
-                router.replace("/orders");
-                setFiltersOpen(false);
+                persistFilterPanelOpenState(false);
+                router.replace("/orders?filters_open=0");
               }}
             >
               Сбросить
