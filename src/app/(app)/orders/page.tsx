@@ -24,6 +24,7 @@ import {
   InputNumber,
   Modal,
   Pagination,
+  Segmented,
   Select,
   Space,
   Steps,
@@ -71,6 +72,12 @@ import {
 } from "@/shared/lib/order-create-wizard";
 import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
+import {
+  getOrderPeriodPresetCodeForRange,
+  getOrderPeriodPresetRange,
+  ORDER_PERIOD_PRESET_OPTIONS,
+  type OrderPeriodPresetCode,
+} from "@/shared/lib/order-period-presets";
 import {
   factoryMatchesSelectedCountry,
   isCommercialOrderType,
@@ -890,6 +897,8 @@ function OrdersPageContent() {
       params.query ||
       params.country ||
       params.document_type ||
+      params.order_date_from ||
+      params.order_date_to ||
       (params.status_names?.length ?? 0) > 0 ||
       (params.order_types?.length ?? 0) > 0 ||
       (params.quote_statuses?.length ?? 0) > 0 ||
@@ -3305,6 +3314,18 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
+  function applyOrderPeriodPreset(preset: OrderPeriodPresetCode) {
+    const range = getOrderPeriodPresetRange(preset);
+    filterForm.setFieldsValue({
+      order_date_from: dayjs(range.order_date_from),
+      order_date_to: dayjs(range.order_date_to),
+    });
+    applySearchPatch({
+      ...range,
+      page: 1,
+    });
+  }
+
   function openEdit(record: OrderListItem) {
     router.push(`/orders/${record.id}`);
   }
@@ -4203,6 +4224,10 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
   const currentPage = listQuery.data?.meta.page ?? params.page ?? 1;
   const currentPageSize = listQuery.data?.meta.page_size ?? params.page_size ?? 50;
   const totalRows = listQuery.data?.meta.total ?? 0;
+  const activeOrderPeriodPreset = useMemo(
+    () => getOrderPeriodPresetCodeForRange(params.order_date_from, params.order_date_to),
+    [params.order_date_from, params.order_date_to],
+  );
   const quickTabs = listQuery.data?.meta.quick_tabs ?? [
     { code: "all", label: "Все", count: totalRows, is_active: !params.quick_tab || params.quick_tab === "all" },
   ];
@@ -4597,6 +4622,16 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             <Form.Item name="order_date_to" className="crm-col-3" style={{ marginBottom: 0 }}>
               <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан до" />
             </Form.Item>
+            <div className="crm-col-6 crm-order-period-presets">
+              <Segmented
+                size="small"
+                value={activeOrderPeriodPreset ?? ""}
+                options={ORDER_PERIOD_PRESET_OPTIONS}
+                onChange={(value) => {
+                  applyOrderPeriodPreset(value as OrderPeriodPresetCode);
+                }}
+              />
+            </div>
             <Form.Item name="has_certificate" className="crm-col-2" style={{ marginBottom: 0 }}>
               <Select
                 allowClear

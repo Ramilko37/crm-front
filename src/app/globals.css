@@ -267,6 +267,16 @@ a {
   grid-column: span 12;
 }
 
+.crm-order-period-presets {
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.crm-order-period-presets .ant-segmented {
+  min-width: max-content;
+}
+
 .crm-bulk-card .ant-card-body {
   padding-block: 10px;
 }
