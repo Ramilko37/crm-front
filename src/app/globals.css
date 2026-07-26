@@ -1038,6 +1038,11 @@ body.crm-column-resizing * {
   line-height: 1.45;
 }
 
+.crm-order-activity-change {
+  display: block;
+  margin-top: 2px;
+}
+
 .login-page {
   min-height: 100vh;
   display: grid;

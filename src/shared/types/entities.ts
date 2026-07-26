@@ -128,6 +128,10 @@ export type OrderStatusHistoryItem = {
   comment: string | null;
   changed_by_user_id: number | null;
   created_at: string | null;
+  source?: "card" | "chat" | string | null;
+  field_name?: string | null;
+  old_value?: string | null;
+  new_value?: string | null;
 };
 
 export type OrderChatMessage = {

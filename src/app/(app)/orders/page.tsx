@@ -552,20 +552,62 @@ function formatOrderActivityDate(value: string | null | undefined) {
   return value ? dayjs(value).format("DD.MM.YYYY HH:mm") : "—";
 }
 
+function formatOrderActivitySource(value: string | null | undefined) {
+  if (value === "chat") return { label: "Chat", color: "blue" };
+  if (value === "card") return { label: "Card", color: "green" };
+  if (value) return { label: formatEnumCode(value), color: "default" };
+  return { label: "Archive", color: "default" };
+}
+
+function formatOrderActivityActor(userId: number | null | undefined) {
+  return userId ? `Пользователь #${userId}` : "Пользователь —";
+}
+
+function formatOrderActivityValue(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : "—";
+}
+
 function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
   return (
     <>
       {items.length ? (
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
-          {items.map((item) => (
-            <div className="crm-order-activity-item" key={item.id}>
-              <Typography.Text>{getOrderActivityText(item)}</Typography.Text>
-              <Typography.Text type="secondary" className="crm-order-activity-meta">
-                {formatOrderActivityDate(item.created_at)} · Статус: {item.status_name} · Дата статуса:{" "}
-                {item.status_date ?? "—"} · Пользователь: {item.changed_by_user_id ?? "—"}
-              </Typography.Text>
-            </div>
-          ))}
+          {items.map((item) => {
+            const source = formatOrderActivitySource(item.source);
+            const hasField = Boolean(item.field_name);
+            const hasValueChange = item.old_value !== undefined || item.new_value !== undefined;
+            const fallbackText = getOrderActivityText(item);
+
+            return (
+              <div className="crm-order-activity-item" key={item.id}>
+                <Space size={8} wrap>
+                  <Tag color={source.color}>{source.label}</Tag>
+                  <Typography.Text type="secondary">{formatOrderActivityDate(item.created_at)}</Typography.Text>
+                  <Typography.Text type="secondary">{formatOrderActivityActor(item.changed_by_user_id)}</Typography.Text>
+                </Space>
+
+                {hasField ? (
+                  <div>
+                    <Typography.Text strong>{formatEnumCode(item.field_name!)}</Typography.Text>
+                    {hasValueChange ? (
+                      <Typography.Text className="crm-order-activity-change">
+                        {formatOrderActivityValue(item.old_value)} → {formatOrderActivityValue(item.new_value)}
+                      </Typography.Text>
+                    ) : null}
+                  </div>
+                ) : (
+                  <Typography.Text>{fallbackText}</Typography.Text>
+                )}
+
+                {hasField && item.comment ? (
+                  <Typography.Text type="secondary" className="crm-order-activity-meta">
+                    {item.comment}
+                  </Typography.Text>
+                ) : null}
+              </div>
+            );
+          })}
         </Space>
       ) : (
         <Typography.Text type="secondary">Нет событий</Typography.Text>
@@ -823,7 +865,6 @@ function OrdersPageContent() {
   const [quoteDecisionForm] = Form.useForm<{ decision: "agree" | "decline" | "request_again" }>();
   const [filterForm] = Form.useForm<{
     id?: number;
-    query?: string;
     country?: string;
     status_names?: OrderStatus[];
     order_types?: OrderType[];
@@ -909,6 +950,7 @@ function OrdersPageContent() {
   );
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const [orderSearchText, setOrderSearchText] = useState(params.query ?? "");
   const pathnameOrderId = useMemo(() => {
     const matched = pathname.match(/^\/orders\/(\d+)$/);
     if (!matched) return undefined;
@@ -921,7 +963,6 @@ function OrdersPageContent() {
   const filtersOpenFromQuery = parseFilterPanelQueryState(searchParams.get("filters_open"));
   const hasActiveFilters = Boolean(
     params.id ||
-      params.query ||
       params.country ||
       params.document_type ||
       params.user_id ||
@@ -1056,7 +1097,6 @@ function OrdersPageContent() {
   useEffect(() => {
     filterForm.setFieldsValue({
       id: params.id,
-      query: params.query,
       country: params.country,
       status_names: params.status_names?.length ? params.status_names : undefined,
       order_types: params.order_types?.length ? params.order_types : undefined,
@@ -1077,6 +1117,32 @@ function OrdersPageContent() {
       office_mark_codes: params.office_mark_codes?.length ? params.office_mark_codes : undefined,
     });
   }, [filterForm, params]);
+
+  useEffect(() => {
+    setOrderSearchText(params.query ?? "");
+  }, [params.query]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const nextQuery = trimOrUndefined(orderSearchText);
+    const currentQuery = trimOrUndefined(params.query);
+    if (nextQuery === currentQuery) return;
+
+    const timeout = window.setTimeout(() => {
+      const latestQuery = trimOrUndefined(orderSearchText);
+      const latestCurrentQuery = trimOrUndefined(params.query);
+      if (latestQuery === latestCurrentQuery) return;
+      const nextSearch = setSearchPatch(searchParams, {
+        query: latestQuery ?? null,
+        page: 1,
+      });
+      router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [orderSearchText, params.query, router, searchParams]);
 
   const listQuery = useQuery({
     queryKey: queryKeys.orders.list(params),
@@ -3462,6 +3528,15 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
+  function applyGlobalOrderSearch(value: string) {
+    const query = trimOrUndefined(value);
+    setOrderSearchText(value);
+    applySearchPatch({
+      query: query ?? null,
+      page: 1,
+    });
+  }
+
   function applyOrderPeriodPreset(preset: OrderPeriodPresetCode) {
     const range = getOrderPeriodPresetRange(preset);
     filterForm.setFieldsValue({
@@ -4680,82 +4755,73 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
       {!standaloneOrderView ? (
         <>
           <PageToolbar
-        filtersOpen={filtersOpen}
-        onToggleFilters={() => setPersistedFiltersOpen(!filtersOpen)}
-        toggleLabel="Фильтр"
-        search={
-          <Input.Search
-            key={params.query ?? "orders-query"}
-            allowClear
-            enterButton="Найти"
-            placeholder="Поиск (номер, инвойс, фабрика, компания, комментарий)"
-            defaultValue={params.query}
-            onSearch={(value) => {
-              applySearchPatch({
-                query: value || null,
-                page: 1,
-              });
-            }}
+            filtersOpen={filtersOpen}
+            onToggleFilters={() => setPersistedFiltersOpen(!filtersOpen)}
+            toggleLabel="Фильтр"
+            search={
+              <Input.Search
+                allowClear
+                enterButton="Найти"
+                placeholder="Search by order ID, invoice, client, company, factory, trip, plate, MRN"
+                value={orderSearchText}
+                onChange={(event) => setOrderSearchText(event.target.value)}
+                onSearch={applyGlobalOrderSearch}
+              />
+            }
+            actions={
+              canCreateUi ? (
+                <Button type="primary" onClick={openCreateModal}>
+                  + Новый заказ
+                </Button>
+              ) : null
+            }
           />
-        }
-        actions={
-          canCreateUi ? (
-            <Button type="primary" onClick={openCreateModal}>
-              + Новый заказ
-            </Button>
-          ) : null
-        }
-      />
 
-      <FilterPanel open={filtersOpen}>
-        <Form
-          form={filterForm}
-          onFinish={(values) => {
-            applySearchPatch({
-              id: values.id,
-              query: values.query,
-              country: values.country,
-              status_names: values.status_names,
-              order_types: values.order_types,
-              quote_statuses: values.quote_statuses,
-              user_id: values.user_id,
-              company_id: values.company_id,
-              personal_manager_id: values.personal_manager_id,
-              assigned_forwarder_user_id: values.assigned_forwarder_user_id,
-              factory_id: values.factory_id,
-              trip_id: values.trip_id,
-              order_date_from: values.order_date_from?.format("YYYY-MM-DD"),
-              order_date_to: values.order_date_to?.format("YYYY-MM-DD"),
-              has_certificate: values.has_certificate,
-              has_documents: values.has_documents,
-              is_checked: values.is_checked,
-              document_type: values.document_type,
-              priority_codes: values.priority_codes,
-              office_mark_codes: values.office_mark_codes,
-              page: 1,
-            });
-          }}
-        >
-          <div className="crm-filter-grid">
-            <Form.Item name="id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="ID" />
-            </Form.Item>
-            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
-              <Input placeholder="Поиск" allowClear />
-            </Form.Item>
-            <Form.Item
-              name="country"
-              className="crm-col-2"
-              style={{ marginBottom: 0 }}
-              getValueProps={(countryName?: string) => ({
-                value: findCountry(countryDirectory.countries, countryName)?.id,
-              })}
-              getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
-                getCountryEnglishName(country) ?? undefined
-              }
+          <FilterPanel open={filtersOpen}>
+            <Form
+              form={filterForm}
+              onFinish={(values) => {
+                applySearchPatch({
+                  id: values.id,
+                  country: values.country,
+                  status_names: values.status_names,
+                  order_types: values.order_types,
+                  quote_statuses: values.quote_statuses,
+                  user_id: values.user_id,
+                  company_id: values.company_id,
+                  personal_manager_id: values.personal_manager_id,
+                  assigned_forwarder_user_id: values.assigned_forwarder_user_id,
+                  factory_id: values.factory_id,
+                  trip_id: values.trip_id,
+                  order_date_from: values.order_date_from?.format("YYYY-MM-DD"),
+                  order_date_to: values.order_date_to?.format("YYYY-MM-DD"),
+                  has_certificate: values.has_certificate,
+                  has_documents: values.has_documents,
+                  is_checked: values.is_checked,
+                  document_type: values.document_type,
+                  priority_codes: values.priority_codes,
+                  office_mark_codes: values.office_mark_codes,
+                  page: 1,
+                });
+              }}
             >
-              <CountrySelect scope={countryDirectoryScope} allowClear placeholder="Страна" />
-            </Form.Item>
+              <div className="crm-filter-grid">
+                <Form.Item name="id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                  <InputNumber min={1} style={{ width: "100%" }} placeholder="ID" />
+                </Form.Item>
+                <Form.Item
+                  name="country"
+                  className="crm-col-2"
+                  style={{ marginBottom: 0 }}
+                  getValueProps={(countryName?: string) => ({
+                    value: findCountry(countryDirectory.countries, countryName)?.id,
+                  })}
+                  getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
+                    getCountryEnglishName(country) ?? undefined
+                  }
+                >
+                  <CountrySelect scope={countryDirectoryScope} allowClear placeholder="Страна" />
+                </Form.Item>
             <Form.Item name="status_names" className="crm-col-4" style={{ marginBottom: 0 }}>
               <Select
                 mode="multiple"

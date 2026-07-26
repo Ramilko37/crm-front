@@ -2,6 +2,17 @@
 
 ## 2026-07-26
 
+### Orders / Search and Audit
+- Закрыт ORD-SRC-01: глобальный поиск вынесен в постоянное поле списка заказов, работает через `query`, не зависит от раскрытых фильтров, debounce ~300 ms, trim, пустой ввод удаляет параметр, новый поиск сбрасывает страницу на 1 и сохраняет сортировку/quick tab/остальные фильтры.
+- Placeholder глобального поиска приведён к реальному backend scope: order ID, invoice, client, company, factory, trip, plate, MRN; UI больше не обещает CMR, container, comments, `order_number` и EX1-файлы.
+- Закрыт CHAT-AUD-01: журнал `status_history` отображает автора, дату/время, источник `Card`/`Chat`, поле, переход `old_value -> new_value` и fallback-комментарий для legacy-записей.
+
+### Проверки
+- `pnpm typecheck`
+- `pnpm lint`
+- `pnpm build`
+- Browser check `/orders?filters_open=1`: глобальный поиск отображается, advanced query input удалён.
+
 ### Orders / Filters
 - Закрыт frontend scope ORD-FLT-02: в фильтрах заказов `Клиент`, `Компания`, `Менеджер`, `Экспедитор`, `Фабрика`, `Рейс` и `Тип документа` выбираются через searchable Select по читаемым названиям вместо ручного ввода технических ID.
 - Для связанных order-модалок включён поиск в Select по рейсу/экспедитору; в мобильных карточках заказов убран fallback на `company_id`/`factory_id`.
