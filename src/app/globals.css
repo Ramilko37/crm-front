@@ -736,6 +736,40 @@ body.crm-column-resizing * {
   margin-bottom: 0 !important;
 }
 
+.crm-document-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--crm-border);
+  background: #f7f8fb;
+}
+
+.crm-document-draft-card {
+  border-color: var(--crm-border);
+}
+
+.crm-document-draft-card-duplicate {
+  border-color: #faad14;
+}
+
+.crm-document-draft-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  color: var(--crm-muted);
+  font-size: 12px;
+}
+
+.crm-document-draft-meta span:not(:last-child)::after {
+  content: "·";
+  margin-left: 8px;
+  color: var(--crm-muted);
+}
+
 .crm-order-inline-pair {
   display: flex;
   gap: 8px;

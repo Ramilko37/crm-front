@@ -32,7 +32,6 @@ import {
   Tag,
   Tabs,
   Typography,
-  Upload,
 } from "antd";
 import type { NamePath } from "antd/es/form/interface";
 import type { ColumnType, ColumnsType, TablePaginationConfig } from "antd/es/table";
@@ -44,6 +43,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { OrderChatPanel } from "@/features/orders/order-chat-panel";
+import { OrderDocumentsDraftUploader } from "@/features/orders/order-documents-draft-uploader";
 import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
 import {
@@ -141,7 +141,10 @@ type OrderCreateGoodsLineForm = {
 };
 
 type OrderCreateDocumentForm = {
+  client_uid?: string;
   document_type?: string;
+  display_name?: string;
+  comment?: string;
   file_list?: UploadFile[];
 };
 
@@ -2686,7 +2689,7 @@ function OrdersPageContent() {
         return {
           document_type: resolvedDocumentType,
           file_slot: slot,
-          display_name: file.name,
+          display_name: trimOrUndefined(document.display_name) ?? file.name,
         };
       });
 
@@ -3025,7 +3028,7 @@ function OrdersPageContent() {
         return [
           compact({
             document_type: docType,
-            display_name: file.name,
+            display_name: trimOrUndefined(entry.display_name) ?? file.name,
             file_slot: slot,
           }),
         ];
@@ -5876,54 +5879,12 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   Документы
                 </Typography.Title>
               ) : null}
-              <Form.List name="documents">
-                {(fields, { add, remove }) => (
-                  <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                    <Button onClick={() => add()} block disabled={fields.length >= 10}>
-                      Добавить документ
-                    </Button>
-                    {fields.map((field) => (
-                      <Card
-                        key={field.key}
-                        size="small"
-                        title={`Документ #${field.name + 1}`}
-                        extra={
-                          <Button danger size="small" onClick={() => remove(field.name)}>
-                            Удалить
-                          </Button>
-                        }
-                      >
-                        <div className="crm-order-create-grid">
-                          <Form.Item
-                            name={[field.name, "document_type"]}
-                            label="Тип документа"
-                            rules={[{ required: true, message: "Укажите тип документа" }]}
-                            className="crm-order-create-col"
-                          >
-                            <Select allowClear options={isRequestCreate ? REQUEST_DOCUMENT_TYPE_OPTIONS : documentTypeOptions} />
-                          </Form.Item>
-                          <Form.Item
-                            name={[field.name, "file_list"]}
-                            label="Выбрать файл"
-                            valuePropName="fileList"
-                            getValueFromEvent={(event) => event?.fileList}
-                            rules={[{ required: true, message: "Выберите файл" }]}
-                            className="crm-order-create-col"
-                          >
-                            <Upload
-                              accept={isRequestCreate ? ".doc,.docx,.xlsx,.xls,.pdf,.zip" : undefined}
-                              beforeUpload={() => false}
-                              maxCount={1}
-                            >
-                              <Button>Выбрать файл</Button>
-                            </Upload>
-                          </Form.Item>
-                        </div>
-                      </Card>
-                    ))}
-                  </Space>
-                )}
-              </Form.List>
+              <OrderDocumentsDraftUploader
+                accept={isRequestCreate ? ".doc,.docx,.xlsx,.xls,.pdf,.zip" : undefined}
+                documentTypeOptions={isRequestCreate ? REQUEST_DOCUMENT_TYPE_OPTIONS : documentTypeOptions}
+                form={createForm}
+                onDocumentsChange={(documents) => mergeCreateDraft({ documents })}
+              />
             </div>
           ) : null}
         </Form>
@@ -6863,53 +6824,16 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   notFoundContent={tripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
                 />
               </Form.Item>
-              <Form.List name="documents">
-                {(fields, { add, remove }) => (
-                  <Space orientation="vertical" style={{ width: "100%" }} size={8}>
-                    {fields.map((field) => (
-                      <Card
-                        key={field.key}
-                        size="small"
-                        title={`Документ #${field.name + 1}`}
-                        extra={
-                          <Button danger size="small" disabled={!isEditMode} onClick={() => remove(field.name)}>
-                            Удалить
-                          </Button>
-                        }
-                      >
-                        <div className="crm-order-create-grid">
-                          <Form.Item
-                            name={[field.name, "document_type"]}
-                            label="Тип документа"
-                            rules={[{ required: true, message: "Укажите тип документа" }]}
-                          >
-                            <Select
-                              allowClear
-                              loading={editMetadataQuery.isLoading}
-                              options={editDocumentTypeOptions}
-                              notFoundContent={editMetadataQuery.isLoading ? "Загрузка..." : "Типы документов не найдены"}
-                            />
-                          </Form.Item>
-                          <Form.Item
-                            name={[field.name, "file_list"]}
-                            label="Выбрать файл"
-                            valuePropName="fileList"
-                            getValueFromEvent={(event) => event?.fileList}
-                            rules={[{ required: true, message: "Выберите файл" }]}
-                          >
-                            <Upload beforeUpload={() => false} maxCount={1}>
-                              <Button>Выбрать файл</Button>
-                            </Upload>
-                          </Form.Item>
-                        </div>
-                      </Card>
-                    ))}
-                    <Button onClick={() => add()} disabled={!isEditMode || fields.length >= 10} block>
-                      Добавить документ
-                    </Button>
-                  </Space>
-                )}
-              </Form.List>
+              <OrderDocumentsDraftUploader
+                disabled={!isEditMode}
+                documentTypeOptions={editDocumentTypeOptions}
+                form={editForm}
+                onDocumentsChange={(documents) => {
+                  if (selectedOrderId) {
+                    mergeEditDraft(selectedOrderId, { documents });
+                  }
+                }}
+              />
             </div>
           </div>
         </Form>
