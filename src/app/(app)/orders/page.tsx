@@ -120,6 +120,7 @@ import type {
   PaginatedResponse,
   Trip,
   UserAdmin,
+  UserManagerLookupItem,
 } from "@/shared/types/entities";
 
 type CreateMode = "existing" | "create";
@@ -354,6 +355,23 @@ function toSelectOptions(options?: DictionaryOption[]) {
     label: option.label || formatEnumCode(option.code),
     value: option.code,
   }));
+}
+
+function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
+  if (!response) return [];
+  return Array.isArray(response) ? response : (response.items ?? []);
+}
+
+function formatUserSelectLabel(user: Pick<UserAdmin, "full_name" | "login" | "email" | "company_name">) {
+  return [user.full_name, user.company_name, user.login, user.email].filter(Boolean).join(" · ") || "Пользователь";
+}
+
+function filterSelectOptionByLabel(input: string, option?: { label?: unknown }) {
+  const normalizedInput = input.trim().toLowerCase();
+  if (!normalizedInput) return true;
+  return String(option?.label ?? "")
+    .toLowerCase()
+    .startsWith(normalizedInput);
 }
 
 function trimOrUndefined(value: string | null | undefined) {
@@ -747,6 +765,12 @@ function OrdersPageContent() {
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
   const [clientCompaniesQueryText, setClientCompaniesQueryText] = useState("");
+  const [filterClientQueryText, setFilterClientQueryText] = useState("");
+  const [filterCompanyQueryText, setFilterCompanyQueryText] = useState("");
+  const [filterManagerQueryText, setFilterManagerQueryText] = useState("");
+  const [filterForwarderQueryText, setFilterForwarderQueryText] = useState("");
+  const [filterFactoryQueryText, setFilterFactoryQueryText] = useState("");
+  const [filterTripQueryText, setFilterTripQueryText] = useState("");
   const [factoryContactModalOpen, setFactoryContactModalOpen] = useState(false);
   const [factoryLoadingAddressModalOpen, setFactoryLoadingAddressModalOpen] = useState(false);
   const [editFactoryLoadingAddressModalOpen, setEditFactoryLoadingAddressModalOpen] = useState(false);
@@ -900,6 +924,12 @@ function OrdersPageContent() {
       params.query ||
       params.country ||
       params.document_type ||
+      params.user_id ||
+      params.company_id ||
+      params.personal_manager_id ||
+      params.assigned_forwarder_user_id ||
+      params.factory_id ||
+      params.trip_id ||
       params.order_date_from ||
       params.order_date_to ||
       (params.status_names?.length ?? 0) > 0 ||
@@ -1122,7 +1152,7 @@ function OrdersPageContent() {
       isClientRole
         ? apiRequest<ClientOrderCreateMetadata>("/api/client/orders/create-metadata")
         : apiRequest<OrderCreateMetadata>("/api/orders/create-metadata"),
-    enabled: createOpen && canCreate,
+    enabled: meQuery.isSuccess && ((createOpen && canCreate) || filtersOpen || documentsOpen),
   });
 
   const editMetadataQuery = useQuery({
@@ -1186,6 +1216,121 @@ function OrdersPageContent() {
         query: { page: 1, page_size: 200, role_name: "forwarder" },
       }),
     enabled: canRunOperationalActions,
+  });
+
+  const filterClientsQuery = useQuery({
+    queryKey: queryKeys.users.list({
+      page: 1,
+      page_size: 50,
+      role_name: "client",
+      query: filterClientQueryText || undefined,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<UserAdmin>>("/api/users", {
+        query: {
+          page: 1,
+          page_size: 50,
+          role_name: "client",
+          query: filterClientQueryText || undefined,
+        },
+      }),
+    enabled: filtersOpen && canWriteOrder,
+  });
+
+  const filterCompaniesQuery = useQuery({
+    queryKey: ["orders", "filter-client-companies", filterCompanyQueryText],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<OrderClientCompanyLookupItem>>("/api/orders/client-companies", {
+        query: {
+          page: 1,
+          page_size: 50,
+          query: filterCompanyQueryText || undefined,
+        },
+      }),
+    enabled: filtersOpen && !isClientRole && canWriteOrder,
+  });
+
+  const filterManagersQuery = useQuery({
+    queryKey: queryKeys.users.lookupManagers({ query: filterManagerQueryText || undefined }),
+    queryFn: () =>
+      apiRequest<UserManagerLookupItem[] | { items: UserManagerLookupItem[] }>("/api/users/lookups/managers", {
+        query: { query: filterManagerQueryText || undefined },
+      }),
+    enabled: filtersOpen && (canWriteOrder || isClientRole),
+  });
+
+  const filterForwardersQuery = useQuery({
+    queryKey: queryKeys.users.list({
+      page: 1,
+      page_size: 50,
+      role_name: "forwarder",
+      query: filterForwarderQueryText || undefined,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<UserAdmin>>("/api/users", {
+        query: {
+          page: 1,
+          page_size: 50,
+          role_name: "forwarder",
+          query: filterForwarderQueryText || undefined,
+        },
+      }),
+    enabled: filtersOpen && canWriteOrder,
+  });
+
+  const filterFactoriesQuery = useQuery({
+    queryKey: [
+      isClientRole ? "client-factories" : "factories",
+      "order-filter-options",
+      filterFactoryQueryText,
+    ],
+    queryFn: async () => {
+      if (isClientRole) {
+        const response = await apiRequest<PaginatedResponse<ClientFactoryListItem>>("/api/client/factories", {
+          query: {
+            page: 1,
+            page_size: 50,
+            sort_desc: false,
+            query: filterFactoryQueryText || undefined,
+          },
+        });
+        return response.items.map((factory) => ({
+          id: factory.id,
+          label: [factory.name, factory.country, factory.city].filter(Boolean).join(" · "),
+        }));
+      }
+
+      const response = await apiRequest<PaginatedResponse<Factory>>("/api/factories", {
+        query: {
+          page: 1,
+          page_size: 50,
+          sort_desc: false,
+          query: filterFactoryQueryText || undefined,
+        },
+      });
+      return response.items.map((factory) => ({
+        id: factory.id,
+        label: [factory.name, factory.country, factory.city].filter(Boolean).join(" · "),
+      }));
+    },
+    enabled: filtersOpen && canWriteOrder,
+  });
+
+  const filterTripsQuery = useQuery({
+    queryKey: queryKeys.trips.list({
+      page: 1,
+      page_size: 50,
+      query: filterTripQueryText || undefined,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Trip>>("/api/trips", {
+        query: {
+          page: 1,
+          page_size: 50,
+          query: filterTripQueryText || undefined,
+        },
+      }),
+    enabled: filtersOpen && canWriteOrder,
   });
 
   const factoryOptionsQuery = useQuery({
@@ -4267,6 +4412,58 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
     [quantityUnitOptions],
   );
   const documentTypeOptions = toSelectOptions(createMetadataQuery.data?.document_type_options);
+  const documentTypeLabelByValue = useMemo(
+    () => new Map(documentTypeOptions.map((option) => [option.value, String(option.label)])),
+    [documentTypeOptions],
+  );
+  const filterClientOptions = useMemo(
+    () =>
+      (filterClientsQuery.data?.items ?? []).map((user) => ({
+        label: formatUserSelectLabel(user),
+        value: user.id,
+      })),
+    [filterClientsQuery.data?.items],
+  );
+  const filterCompanyOptions = useMemo(
+    () =>
+      (filterCompaniesQuery.data?.items ?? []).map((company) => ({
+        label: company.company_name,
+        value: company.company_id,
+      })),
+    [filterCompaniesQuery.data?.items],
+  );
+  const filterManagerOptions = useMemo(
+    () =>
+      extractItems(filterManagersQuery.data).map((manager) => ({
+        label: [manager.label || manager.full_name, manager.email].filter(Boolean).join(" · ") || "Менеджер",
+        value: manager.id,
+      })),
+    [filterManagersQuery.data],
+  );
+  const filterForwarderOptions = useMemo(
+    () =>
+      (filterForwardersQuery.data?.items ?? []).map((user) => ({
+        label: formatUserSelectLabel(user),
+        value: user.id,
+      })),
+    [filterForwardersQuery.data?.items],
+  );
+  const filterFactoryOptions = useMemo(
+    () =>
+      (filterFactoriesQuery.data ?? []).map((factory) => ({
+        label: factory.label || "Фабрика",
+        value: factory.id,
+      })),
+    [filterFactoriesQuery.data],
+  );
+  const filterTripOptions = useMemo(
+    () =>
+      (filterTripsQuery.data?.items ?? []).map((trip) => ({
+        label: [trip.name, trip.truck_plate].filter(Boolean).join(" · ") || "Рейс",
+        value: trip.id,
+      })),
+    [filterTripsQuery.data?.items],
+  );
   const measurementStatusOptions = toSelectOptions(
     (createMetadataQuery.data as OrderCreateMetadata | undefined)?.measurement_status_options,
   );
@@ -4593,25 +4790,93 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               />
             </Form.Item>
             <Form.Item name="user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Клиент ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterClientsQuery.isLoading}
+                options={filterClientOptions}
+                placeholder="Клиент"
+                notFoundContent={filterClientsQuery.isLoading ? "Загрузка..." : "Клиенты не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Клиент выбран")}
+                onSearch={setFilterClientQueryText}
+              />
             </Form.Item>
             <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Компания ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterCompaniesQuery.isLoading}
+                options={filterCompanyOptions}
+                placeholder="Компания"
+                notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
+                onSearch={setFilterCompanyQueryText}
+              />
             </Form.Item>
             <Form.Item name="personal_manager_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Менеджер ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterManagersQuery.isLoading}
+                options={filterManagerOptions}
+                placeholder="Менеджер"
+                notFoundContent={filterManagersQuery.isLoading ? "Загрузка..." : "Менеджеры не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Менеджер выбран")}
+                onSearch={setFilterManagerQueryText}
+              />
             </Form.Item>
             <Form.Item name="assigned_forwarder_user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Экспедитор ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterForwardersQuery.isLoading}
+                options={filterForwarderOptions}
+                placeholder="Экспедитор"
+                notFoundContent={filterForwardersQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Экспедитор выбран")}
+                onSearch={setFilterForwarderQueryText}
+              />
             </Form.Item>
             <Form.Item name="factory_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Фабрика ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterFactoriesQuery.isLoading}
+                options={filterFactoryOptions}
+                placeholder="Фабрика"
+                notFoundContent={filterFactoriesQuery.isLoading ? "Загрузка..." : "Фабрики не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Фабрика выбрана")}
+                onSearch={setFilterFactoryQueryText}
+              />
             </Form.Item>
             <Form.Item name="trip_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Рейс ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterTripsQuery.isLoading}
+                options={filterTripOptions}
+                placeholder="Рейс"
+                notFoundContent={filterTripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Рейс выбран")}
+                onSearch={setFilterTripQueryText}
+              />
             </Form.Item>
             <Form.Item name="document_type" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Input placeholder="Тип документа" allowClear />
+              <Select
+                allowClear
+                showSearch
+                filterOption={filterSelectOptionByLabel}
+                loading={createMetadataQuery.isLoading}
+                options={documentTypeOptions}
+                placeholder="Тип документа"
+                notFoundContent={createMetadataQuery.isLoading ? "Загрузка..." : "Типы не найдены"}
+              />
             </Form.Item>
             <Form.Item name="priority_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
               <Select mode="tags" allowClear placeholder="Приоритеты" />
@@ -4840,11 +5105,11 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   <div className="crm-row-meta">
                     <div className="crm-row-meta-item">
                       Компания
-                      <strong>{record.company_name ?? record.company_id ?? "-"}</strong>
+                      <strong>{record.company_name ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Фабрика
-                      <strong>{record.factory_name ?? record.factory_id}</strong>
+                      <strong>{record.factory_name ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item">
                       Рейс
@@ -5183,6 +5448,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     >
                       <Select
                         allowClear
+                        showSearch
+                        filterOption={filterSelectOptionByLabel}
                         loading={!isClientRole && createMetadataQuery.isLoading}
                         options={isClientRole ? clientForwarderUiOptions : selfDeliveryForwarderOptions}
                         placeholder={
@@ -5207,6 +5474,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                   >
                     <Select
                       allowClear
+                      showSearch
+                      filterOption={filterSelectOptionByLabel}
                       loading={!isClientRole && forwardersQuery.isLoading}
                       options={
                         isClientRole
@@ -6337,6 +6606,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               <Form.Item name="assigned_forwarder_user_id" label="Назначить экспедитора">
                 <Select
                   allowClear
+                  showSearch
+                  filterOption={filterSelectOptionByLabel}
                   loading={forwardersQuery.isLoading}
                   options={(forwardersQuery.data?.items ?? []).map((user) => ({
                     label: [user.full_name, user.login].filter(Boolean).join(" · "),
@@ -6349,6 +6620,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                 <Form.Item name="self_delivery_forwarder_user_id" label="Экспедитор для самодоставки">
                   <Select
                     allowClear
+                    showSearch
+                    filterOption={filterSelectOptionByLabel}
                     loading={editMetadataQuery.isLoading}
                     options={(editMetadataQuery.data?.self_delivery_forwarder_options ?? []).map((forwarder) => ({
                       label: [forwarder.full_name, forwarder.email].filter(Boolean).join(" · "),
@@ -6816,6 +7089,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               <Form.Item name="trip_id" label="Рейс">
                 <Select
                   allowClear
+                  showSearch
+                  filterOption={filterSelectOptionByLabel}
                   loading={tripsQuery.isLoading}
                   options={(tripsQuery.data?.items ?? []).map((trip) => ({
                     label: trip.name,
@@ -6959,7 +7234,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               dataIndex: "document_type",
               key: "document_type",
               width: 180,
-              render: (value: string | null) => value ?? "—",
+              render: (value: string | null) => (value ? (documentTypeLabelByValue.get(value) ?? formatEnumCode(value)) : "—"),
             },
             {
               title: "Файл",
@@ -7161,6 +7436,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           <Form.Item name="trip_id" label="Рейс">
             <Select
               allowClear
+              showSearch
+              filterOption={filterSelectOptionByLabel}
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
                 label: trip.name,
@@ -7194,6 +7471,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           <Form.Item name="assigned_forwarder_user_id" label="Экспедитор">
             <Select
               allowClear
+              showSearch
+              filterOption={filterSelectOptionByLabel}
               loading={forwardersQuery.isLoading}
               options={(forwardersQuery.data?.items ?? []).map((user) => ({
                 label: [user.full_name, user.login].filter(Boolean).join(" · ") || "Экспедитор",
@@ -7423,6 +7702,8 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           <Form.Item name="trip_id" label="Рейс">
             <Select
               allowClear
+              showSearch
+              filterOption={filterSelectOptionByLabel}
               loading={tripsQuery.isLoading}
               options={(tripsQuery.data?.items ?? []).map((trip) => ({
                 label: trip.name,

@@ -285,6 +285,8 @@ export function OrderDocumentsDraftUploader({
                       <Select
                         allowClear
                         disabled={disabled}
+                        showSearch
+                        optionFilterProp="label"
                         options={options}
                         placeholder="Выберите тип"
                       />
