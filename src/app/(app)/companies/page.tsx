@@ -12,20 +12,29 @@ import {
   Modal,
   Pagination,
   Popconfirm,
+  Select,
   Space,
   Switch,
   Table,
+  Tag,
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { Suspense, useMemo, useState } from "react";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import {
+  countryMatchesEnglishPrefix,
+  formatCountryEnglishName,
+  getCountryEnglishName,
+  getSelectableCountries,
+} from "@/shared/lib/countries";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { normalizeRoleName } from "@/shared/lib/rbac";
-import { PageHeader } from "@/shared/ui/page-frame";
+import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type {
   Company,
   CompanyContact,
@@ -44,7 +53,26 @@ type ContactFormValues = {
   is_primary?: boolean;
 };
 
+type CompanyFilterFormValues = {
+  countries?: string[];
+  cities?: string[];
+  roles?: string[];
+};
+
 const STRICT_PHONE_REGEX = /^\+[1-9]\d{7,14}$/;
+
+const COMPANY_ROLE_OPTIONS = [
+  "Client",
+  "Factory",
+  "Supplier",
+  "Forwarder",
+  "Carrier",
+  "Warehouse",
+  "Customs Broker",
+  "Dealer",
+  "Partner",
+  "Other",
+].map((role) => ({ label: role, value: role }));
 
 function trimOrUndefined(value: string | undefined | null) {
   const next = value?.trim();
@@ -98,15 +126,42 @@ function buildContactPayload(values: ContactFormValues, isOwnerManagedPrimary: b
   };
 }
 
+function getCompanyRoles(company: Company) {
+  const roles = company.role_names ?? company.roles ?? [company.role_name, company.role];
+  return roles
+    .flatMap((role) => (typeof role === "string" ? role.split(",") : []))
+    .map((role) => role.trim())
+    .filter(Boolean);
+}
+
+function renderCompanyRoles(company: Company) {
+  const roles = getCompanyRoles(company);
+  if (roles.length === 0) {
+    return "-";
+  }
+  return (
+    <Space size={4} wrap>
+      {roles.map((role) => (
+        <Tag key={role}>{role}</Tag>
+      ))}
+    </Space>
+  );
+}
+
 function CompaniesPageContent() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const meQuery = useCurrentUser(true);
   const normalizedRole = normalizeRoleName(meQuery.data?.role_name);
   const canWrite = meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager";
+  const countryDirectory = useCountryDirectory();
 
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [countryFilters, setCountryFilters] = useState<string[]>([]);
+  const [cityFilters, setCityFilters] = useState<string[]>([]);
+  const [roleFilters, setRoleFilters] = useState<string[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [companyPage, setCompanyPage] = useState(1);
   const [companyPageSize, setCompanyPageSize] = useState(20);
   const [contactPage, setContactPage] = useState(1);
@@ -120,22 +175,41 @@ function CompaniesPageContent() {
   const [selectedContact, setSelectedContact] = useState<CompanyContact | null>(null);
 
   const [renameForm] = Form.useForm<{ name: string }>();
+  const [filterForm] = Form.useForm<CompanyFilterFormValues>();
   const [createContactForm] = Form.useForm<ContactFormValues>();
   const [editContactForm] = Form.useForm<ContactFormValues>();
 
-  const companiesQuery = useQuery({
-    queryKey: queryKeys.companies.list({
+  const companyListParams = useMemo(
+    () => ({
       page: companyPage,
       page_size: companyPageSize,
       query: searchQuery || undefined,
+      country: countryFilters,
+      city: cityFilters,
+      role: roleFilters,
     }),
+    [cityFilters, companyPage, companyPageSize, countryFilters, roleFilters, searchQuery],
+  );
+
+  const hasActiveFilters = Boolean(
+    searchQuery || countryFilters.length > 0 || cityFilters.length > 0 || roleFilters.length > 0,
+  );
+
+  const countryFilterOptions = useMemo(
+    () =>
+      getSelectableCountries(countryDirectory.countries).map((country) => ({
+        label: getCountryEnglishName(country)!,
+        value: getCountryEnglishName(country)!,
+        country,
+      })),
+    [countryDirectory.countries],
+  );
+
+  const companiesQuery = useQuery({
+    queryKey: queryKeys.companies.list(companyListParams),
     queryFn: () =>
       apiRequest<PaginatedResponse<Company>>("/api/companies", {
-        query: {
-          page: companyPage,
-          page_size: companyPageSize,
-          query: searchQuery || undefined,
-        },
+        query: companyListParams,
       }),
     enabled: canWrite,
   });
@@ -245,11 +319,24 @@ function CompaniesPageContent() {
     { title: "ID", dataIndex: "id", key: "id", width: 90 },
     { title: "Название", dataIndex: "name", key: "name" },
     {
-      title: "owner_user_id",
-      dataIndex: "owner_user_id",
-      key: "owner_user_id",
-      width: 140,
+      title: "Страна",
+      dataIndex: "country",
+      key: "country",
+      width: 180,
+      render: (value, row) => formatCountryEnglishName(countryDirectory.countries, value, row.country_id),
+    },
+    {
+      title: "Город",
+      dataIndex: "city",
+      key: "city",
+      width: 160,
       render: (value) => value ?? "-",
+    },
+    {
+      title: "Роль",
+      key: "role",
+      width: 220,
+      render: (_, row) => renderCompanyRoles(row),
     },
     {
       title: "Действия",
@@ -348,8 +435,11 @@ function CompaniesPageContent() {
     <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader title="Компании" subtitle="Управление компаниями и контактной книгой" />
 
-      <Card className="crm-panel">
-        <Space.Compact style={{ width: "100%" }}>
+      <PageToolbar
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((open) => !open)}
+        toggleLabel="Фильтры"
+        search={
           <Input.Search
             allowClear
             enterButton="Найти"
@@ -368,17 +458,98 @@ function CompaniesPageContent() {
               setCompanyPage(1);
             }}
           />
+        }
+        actions={
           <Button
             onClick={() => {
               setSearchInput("");
               setSearchQuery("");
+              setCountryFilters([]);
+              setCityFilters([]);
+              setRoleFilters([]);
+              filterForm.resetFields();
               setCompanyPage(1);
+              setFiltersOpen(false);
             }}
           >
             Сброс
           </Button>
-        </Space.Compact>
-      </Card>
+        }
+      />
+
+      <FilterPanel open={filtersOpen}>
+        <Form<CompanyFilterFormValues>
+          form={filterForm}
+          initialValues={{
+            countries: countryFilters,
+            cities: cityFilters,
+            roles: roleFilters,
+          }}
+          onFinish={(values) => {
+            setCountryFilters(values.countries ?? []);
+            setCityFilters(values.cities ?? []);
+            setRoleFilters(values.roles ?? []);
+            setCompanyPage(1);
+          }}
+        >
+          <div className="crm-filter-grid">
+            <Form.Item name="countries" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                filterOption={(input, option) => Boolean(option?.country && countryMatchesEnglishPrefix(option.country, input))}
+                loading={countryDirectory.isLoading}
+                options={countryFilterOptions}
+                placeholder="Страны"
+                notFoundContent={countryDirectory.isLoading ? "Загрузка..." : "Страны не найдены"}
+              />
+            </Form.Item>
+            <Form.Item name="cities" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Select
+                mode="tags"
+                allowClear
+                tokenSeparators={[","]}
+                placeholder="Города"
+                options={cityFilters.map((city) => ({ label: city, value: city }))}
+              />
+            </Form.Item>
+            <Form.Item name="roles" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="Роли компании"
+                options={COMPANY_ROLE_OPTIONS}
+              />
+            </Form.Item>
+          </div>
+
+          <div className="crm-filter-actions">
+            <Button type="primary" htmlType="submit">
+              Применить
+            </Button>
+            <Button
+              onClick={() => {
+                filterForm.resetFields();
+                setCountryFilters([]);
+                setCityFilters([]);
+                setRoleFilters([]);
+                setCompanyPage(1);
+                setFiltersOpen(false);
+              }}
+            >
+              Сбросить фильтры
+            </Button>
+            {hasActiveFilters ? (
+              <Typography.Text type="secondary">
+                Фильтры комбинируются; значения отправляются названиями, без внутренних ID.
+              </Typography.Text>
+            ) : null}
+          </div>
+        </Form>
+      </FilterPanel>
 
       <Card className="crm-panel crm-table-card">
         {companiesQuery.error ? (
@@ -433,6 +604,11 @@ function CompaniesPageContent() {
             <Descriptions bordered size="small" column={1} style={{ marginBottom: 16 }}>
               <Descriptions.Item label="ID">{selectedCompany.id}</Descriptions.Item>
               <Descriptions.Item label="Название">{selectedCompany.name}</Descriptions.Item>
+              <Descriptions.Item label="Страна">
+                {formatCountryEnglishName(countryDirectory.countries, selectedCompany.country, selectedCompany.country_id)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Город">{selectedCompany.city ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Роль">{renderCompanyRoles(selectedCompany)}</Descriptions.Item>
               <Descriptions.Item label="owner_user_id">{selectedCompany.owner_user_id ?? "-"}</Descriptions.Item>
             </Descriptions>
 

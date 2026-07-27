@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-07-27
+
+### Backend TZ / Task Status
+- Свежий backend docx `Техническое_задание_Логистическая_CRM_v1_0 (1).docx` перегнан в markdown: `docs/backend-logistics-crm-v1.0-2026-07-27.md`.
+- Добавлен merged-срез актуального состояния задач: `docs/tz-logistics-crm-merged-status-2026-07-27.md`.
+- В свежем docx не найдено явных пометок `ready-to-test`, `canceled`, `ready`; задачи без явной пометки оставлены `open`, закрытые позиции взяты из текущего checklist.
+- В Linear Customer заведены все 43 задачи из merged-среза: SAR-24...SAR-66. Frontend-задачи назначены на `rgalyamdin@saraffan.radio`; backend-задачи оставлены без assignee с пометкой `Target assignee: Павел Козлов`, потому что Павел не найден среди пользователей workspace.
+
+### Factories / Loading Addresses
+- Взят в работу frontend scope FAC-ADR-01: блок `Адреса погрузки` добавлен прямо в create/edit форму фабрики.
+- Create factory поддерживает optional nested `loading_address`; edit загружает адреса через `include_inactive=true`, показывает inactive/primary badges и даёт add/update/deactivate/delete/make-primary.
+- Directory payload адресов переведён на `postcode_id`/`city_id`; read-only snapshots `postcode`/`city` больше не отправляются из формы.
+
+### Users / Filters
+- Реализован frontend scope USR-FLT-02: фильтр `Компания ID` в `/users` заменён на searchable select по названию компании через `/api/companies`.
+- В таблице пользователей удалён fallback на технический `company_id`; при отсутствии `company_name` отображается пустое значение.
+- Глобальный поиск пользователей теперь явно подписан как поиск по ФИО, логину, email и компании; пустой trim удаляет `query`, новый поиск сбрасывает страницу на 1.
+- Browser check показал backend gap: `/users?query=Test+Company+2&page=1` отправляется корректно, но backend вернул `Нет данных`, поэтому полное закрытие USR-FLT-02 зависит от поддержки поиска users по company name.
+
+### Companies / Filters
+- Подготовлен frontend scope CMP-FLT-01: в `/companies` добавлена панель фильтров по странам, городам и ролям компании.
+- Страны выбираются через searchable multi-select с английскими названиями, города через multi-value tags, роли через фиксированный справочник CRM: Client, Factory, Supplier, Forwarder, Carrier, Warehouse, Customs Broker, Dealer, Partner, Other.
+- Фильтры отправляются в `/api/companies` названиями (`country`, `city`, `role`) и комбинируются с глобальным поиском; reset очищает search/filter state.
+- Browser check показал backend gap: `/api/companies?country=__no_country__&city=__definitely_no_city__&role=__no_role__` возвращает тот же полный список, а объекты компании пока не содержат `country`/`city`/`role`.
+
+### Проверки
+- `pnpm typecheck`
+- `pnpm lint`
+- `pnpm build`
+- Browser check `/users`: `Компания ID` не отображается; company filter ищет и показывает `Test Company 1...5`; выбор `Test Company 1` даёт `company_id=1` в URL и label `Test Company 1` в UI.
+- Browser check `/companies`: фильтры `Страны`/`Города`/`Роли компании` отображаются, `Компания ID` в фильтрах нет, таблица показывает `Страна`/`Город`/`Роль`, reset очищает выбранные фильтры.
+
 ## 2026-07-26
 
 ### Orders / Search and Audit
