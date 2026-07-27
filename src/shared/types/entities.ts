@@ -531,13 +531,14 @@ export type FactoryLoadingAddress = {
   fax: string | null;
   messenger_type: string | null;
   messenger_value: string | null;
+  comment?: string | null;
   is_primary: boolean;
+  is_active?: boolean;
 };
 
 export type FactoryLoadingAddressWritePayload = {
+  name?: string | null;
   country_id?: number | null;
-  postcode?: string | null;
-  city?: string | null;
   postcode_id?: number | null;
   city_id?: number | null;
   address?: string | null;
@@ -546,6 +547,8 @@ export type FactoryLoadingAddressWritePayload = {
   fax?: string | null;
   messenger_type?: string | null;
   messenger_value?: string | null;
+  comment?: string | null;
+  is_active?: boolean;
 };
 
 export type FactoryCertificate = {
@@ -934,6 +937,13 @@ export type Company = {
   id: number;
   name: string;
   owner_user_id: number | null;
+  country?: string | null;
+  country_id?: number | null;
+  city?: string | null;
+  role?: string | null;
+  role_name?: string | null;
+  roles?: string[] | null;
+  role_names?: string[] | null;
   created_at?: string | null;
   updated_at?: string | null;
 };

@@ -38,6 +38,7 @@ import { buildUserWritePayload, requiredWhenForwarder } from "@/shared/lib/user-
 import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type {
+  Company,
   PaginatedResponse,
   UserAdmin,
   UserCityLookupItem,
@@ -56,6 +57,11 @@ function parseBool(value: string | null): boolean | undefined {
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
+}
+
+function trimOrUndefined(value: string | undefined | null) {
+  const next = value?.trim();
+  return next ? next : undefined;
 }
 
 function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
@@ -119,6 +125,7 @@ function UsersPageContent() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [managerSearch, setManagerSearch] = useState("");
+  const [companySearch, setCompanySearch] = useState("");
   const [createCitySearch, setCreateCitySearch] = useState("");
   const [editCitySearch, setEditCitySearch] = useState("");
   const [selected, setSelected] = useState<UserAdmin | null>(null);
@@ -157,6 +164,29 @@ function UsersPageContent() {
     enabled: canWrite,
   });
 
+  const filterCompaniesQuery = useQuery({
+    queryKey: queryKeys.companies.list({
+      page: 1,
+      page_size: 50,
+      query: companySearch || undefined,
+    }),
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Company>>("/api/companies", {
+        query: {
+          page: 1,
+          page_size: 50,
+          query: companySearch || undefined,
+        },
+      }),
+    enabled: canWrite && filtersOpen,
+  });
+
+  const selectedCompanyQuery = useQuery({
+    queryKey: params.company_id ? queryKeys.companies.detail(params.company_id) : ["companies", "detail", "idle"],
+    queryFn: () => apiRequest<Company>(`/api/companies/${params.company_id}`),
+    enabled: canWrite && Boolean(params.company_id),
+  });
+
   const managersQuery = useQuery({
     queryKey: queryKeys.users.lookupManagers({ query: managerSearch || undefined }),
     queryFn: () =>
@@ -193,6 +223,18 @@ function UsersPageContent() {
     [managersQuery.data],
   );
 
+  const companyOptions = useMemo(() => {
+    const companies = [...(filterCompaniesQuery.data?.items ?? [])];
+    if (selectedCompanyQuery.data && !companies.some((company) => company.id === selectedCompanyQuery.data.id)) {
+      companies.unshift(selectedCompanyQuery.data);
+    }
+
+    return companies.map((company) => ({
+      label: company.name,
+      value: company.id,
+    }));
+  }, [filterCompaniesQuery.data?.items, selectedCompanyQuery.data]);
+
   const createCityOptions = useMemo(
     () => extractItems(createCitiesQuery.data).map((item) => ({ label: item.city, value: item.city })),
     [createCitiesQuery.data],
@@ -216,6 +258,16 @@ function UsersPageContent() {
       });
     }
   }, [countryDirectory.countries, editCountryId, editForm, editOpen]);
+
+  useEffect(() => {
+    filterForm.setFieldsValue({
+      query: params.query,
+      company_id: params.company_id,
+      role_name: params.role_name,
+      has_email: params.has_email,
+      has_orders: params.has_orders,
+    });
+  }, [filterForm, params]);
 
   const createMutation = useMutation({
     mutationFn: (payload: UserWritePayload) =>
@@ -273,6 +325,11 @@ function UsersPageContent() {
     router.replace(`/users${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
+  function applyGlobalUserSearch(value: string) {
+    const query = trimOrUndefined(value);
+    applySearchPatch({ query: query ?? null, page: 1 });
+  }
+
   const sortOrderFor = (field: string) => {
     if (params.sort_by !== field) return null;
     return params.sort_desc ? "descend" : "ascend";
@@ -309,7 +366,7 @@ function UsersPageContent() {
       title: "Компания",
       key: "company",
       width: 180,
-      render: (_, record) => record.company_name ?? (record.company_id ? `ID ${record.company_id}` : "-"),
+      render: (_, record) => record.company_name ?? "-",
     },
     {
       title: "Роль",
@@ -411,9 +468,9 @@ function UsersPageContent() {
             key={params.query ?? "users-query"}
             allowClear
             enterButton="Найти"
-            placeholder="Поиск по ФИО/логину/email"
+            placeholder="Поиск по ФИО, логину, email, компании"
             defaultValue={params.query}
-            onSearch={(value) => applySearchPatch({ query: value || null, page: 1 })}
+            onSearch={applyGlobalUserSearch}
           />
         }
       />
@@ -430,7 +487,7 @@ function UsersPageContent() {
           }}
           onFinish={(values) => {
             applySearchPatch({
-              query: values.query,
+              query: trimOrUndefined(values.query) ?? null,
               company_id: values.company_id,
               role_name: values.role_name,
               has_email: values.has_email,
@@ -444,7 +501,17 @@ function UsersPageContent() {
               <Input placeholder="Поиск" allowClear />
             </Form.Item>
             <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <InputNumber min={1} style={{ width: "100%" }} placeholder="Компания ID" />
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterCompaniesQuery.isLoading || selectedCompanyQuery.isLoading}
+                options={companyOptions}
+                placeholder="Компания"
+                notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
+                onSearch={setCompanySearch}
+              />
             </Form.Item>
             <Form.Item name="role_name" className="crm-col-3" style={{ marginBottom: 0 }}>
               <Select
