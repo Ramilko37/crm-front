@@ -108,6 +108,8 @@ type UserEditForm = Omit<UserCreateForm, "password" | "company_name"> & {
   last_order_date?: dayjs.Dayjs;
 };
 
+type UserQuickFilterCode = "logist" | "manager";
+
 function UsersPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -330,6 +332,15 @@ function UsersPageContent() {
     applySearchPatch({ query: query ?? null, page: 1 });
   }
 
+  function toggleQuickFilter(code: UserQuickFilterCode) {
+    applySearchPatch({ role_name: params.role_name === code ? null : code, page: 1 });
+  }
+
+  const quickFilters = [
+    { code: "logist" as const, label: "Только логисты", checked: params.role_name === "logist" },
+    { code: "manager" as const, label: "Только менеджеры", checked: params.role_name === "manager" },
+  ];
+
   const sortOrderFor = (field: string) => {
     if (params.sort_by !== field) return null;
     return params.sort_desc ? "descend" : "ascend";
@@ -496,52 +507,67 @@ function UsersPageContent() {
             });
           }}
         >
-          <div className="crm-filter-grid">
-            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
-              <Input placeholder="Поиск" allowClear />
-            </Form.Item>
-            <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterCompaniesQuery.isLoading || selectedCompanyQuery.isLoading}
-                options={companyOptions}
-                placeholder="Компания"
-                notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
-                onSearch={setCompanySearch}
-              />
-            </Form.Item>
-            <Form.Item name="role_name" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="Роль"
-                options={roleOptions.map((role) => ({ label: role, value: role }))}
-              />
-            </Form.Item>
-            <Form.Item name="has_email" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="С email"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="has_orders" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="С заказами"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
-              />
-            </Form.Item>
+          <div className="crm-user-filter-stack">
+            <div className="crm-filter-grid crm-user-filter-row">
+              <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+                <Input placeholder="Поиск" allowClear />
+              </Form.Item>
+              <Form.Item name="company_id" className="crm-col-4" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  showSearch
+                  filterOption={false}
+                  loading={filterCompaniesQuery.isLoading || selectedCompanyQuery.isLoading}
+                  options={companyOptions}
+                  placeholder="Компания"
+                  notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                  labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
+                  onSearch={setCompanySearch}
+                />
+              </Form.Item>
+              <Form.Item name="role_name" className="crm-col-4" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  placeholder="Роль"
+                  options={roleOptions.map((role) => ({ label: role, value: role }))}
+                />
+              </Form.Item>
+            </div>
+            <div className="crm-filter-grid crm-user-filter-row">
+              <div className="crm-col-8 crm-user-quick-filters">
+                {quickFilters.map((filter) => (
+                  <Tag.CheckableTag
+                    key={filter.code}
+                    checked={filter.checked}
+                    onChange={() => toggleQuickFilter(filter.code)}
+                  >
+                    {filter.label}
+                  </Tag.CheckableTag>
+                ))}
+              </div>
+              <Form.Item name="has_email" className="crm-col-2" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  placeholder="С email"
+                  options={[
+                    { label: "Да", value: true },
+                    { label: "Нет", value: false },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item name="has_orders" className="crm-col-2" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  placeholder="С заказами"
+                  options={[
+                    { label: "Да", value: true },
+                    { label: "Нет", value: false },
+                  ]}
+                />
+              </Form.Item>
+            </div>
           </div>
-          <div className="crm-filter-actions">
+          <div className="crm-filter-actions crm-user-filter-actions">
             <Button type="primary" htmlType="submit">
               Применить
             </Button>
