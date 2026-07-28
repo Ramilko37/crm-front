@@ -12,6 +12,7 @@ import {
   InputNumber,
   Modal,
   Pagination,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -101,7 +102,9 @@ function getParams(searchParams: URLSearchParams): UserFilterParams {
 }
 
 type UserCreateForm = {
+  company_id?: number;
   company_name?: string;
+  company_mode?: "existing" | "new" | "none";
   personal_manager_id?: number;
   full_name: string;
   login: string;
@@ -168,6 +171,7 @@ function UsersPageContent() {
     has_orders?: boolean;
   }>();
   const createRoleName = Form.useWatch("role_name", createForm) as RoleName | string | undefined;
+  const createCompanyMode = Form.useWatch("company_mode", createForm) as UserCreateForm["company_mode"] | undefined;
   const editRoleName = Form.useWatch("role_name", editForm) as RoleName | string | undefined;
   const createCountryId = Form.useWatch("selectedCountryId", createForm) as number | undefined;
   const editCountryId = Form.useWatch("selectedCountryId", editForm) as number | undefined;
@@ -205,7 +209,7 @@ function UsersPageContent() {
           query: companySearch || undefined,
         },
       }),
-    enabled: canWrite && filtersOpen,
+    enabled: canWrite && (filtersOpen || createOpen),
   });
 
   const selectedCompanyQuery = useQuery({
@@ -653,28 +657,90 @@ function UsersPageContent() {
         <Form<UserCreateForm>
           form={createForm}
           layout="vertical"
-          initialValues={{ is_active: true }}
+          initialValues={{ company_mode: "existing", is_active: true }}
           onFinish={(values) => {
-            createMutation.mutate(buildUserWritePayload(values, { includeCompanyName: true, isManagerActor }));
+            createMutation.mutate(
+              buildUserWritePayload(values, {
+                includeCompanyLink: values.company_mode === "existing",
+                includeCompanyName: values.company_mode === "new",
+                isManagerActor,
+              }),
+            );
           }}
         >
           <Form.Item name="country" hidden>
             <Input />
           </Form.Item>
           <Form.Item
-            name="company_name"
-            label="Название компании"
+            name="company_mode"
+            label="Компания"
             rules={[
               {
                 validator: async (_, value) => {
-                  const nextValue = typeof value === "string" ? value.trim() : "";
-                  if (createRoleName === "client" && !nextValue) {
-                    throw new Error("Для роли client укажите название компании");
+                  if (createRoleName === "client" && value === "none") {
+                    throw new Error("Для роли client выберите существующую компанию или создайте новую");
                   }
                 },
               },
             ]}
-            extra="Для роли client поле обязательно. Для остальных ролей можно оставить пустым."
+          >
+            <Segmented
+              block
+              options={[
+                { label: "Существующая", value: "existing" },
+                { label: "Новая", value: "new" },
+                { label: "Без компании", value: "none" },
+              ]}
+              onChange={(value) => {
+                if (value !== "existing") {
+                  createForm.setFieldValue("company_id", undefined);
+                }
+                if (value !== "new") {
+                  createForm.setFieldValue("company_name", undefined);
+                }
+              }}
+            />
+          </Form.Item>
+          {createCompanyMode === "existing" ? (
+            <Form.Item
+              name="company_id"
+              label="Существующая компания"
+              rules={[
+                {
+                  validator: async (_, value) => {
+                    if (createRoleName === "client" && !value) {
+                      throw new Error("Для роли client выберите компанию или создайте новую");
+                    }
+                  },
+                },
+              ]}
+            >
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={filterCompaniesQuery.isLoading}
+                options={companyOptions}
+                placeholder="Начните вводить название компании"
+                notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                onSearch={setCompanySearch}
+              />
+            </Form.Item>
+          ) : null}
+          <Form.Item
+            name="company_name"
+            label="Новая компания"
+            hidden={createCompanyMode !== "new"}
+            rules={[
+              {
+                validator: async (_, value) => {
+                  const nextValue = typeof value === "string" ? value.trim() : "";
+                  if (createRoleName === "client" && createCompanyMode === "new" && !nextValue) {
+                    throw new Error("Для роли client укажите название новой компании");
+                  }
+                },
+              },
+            ]}
           >
             <Input />
           </Form.Item>

@@ -7,21 +7,13 @@ export async function GET(
   { params }: { params: Promise<{ companyId: string }> },
 ) {
   const { companyId } = await params;
-  return proxyToBackend(request, `/companies/${companyId}`);
+  return proxyToBackend(request, `/companies/${companyId}/users`);
 }
 
-export async function PATCH(
+export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ companyId: string }> },
 ) {
   const { companyId } = await params;
-  return proxyToBackend(request, `/companies/${companyId}`);
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ companyId: string }> },
-) {
-  const { companyId } = await params;
-  return proxyToBackend(request, `/companies/${companyId}`);
+  return proxyToBackend(request, `/companies/${companyId}/users`);
 }

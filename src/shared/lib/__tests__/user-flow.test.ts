@@ -41,6 +41,56 @@ describe("user flow helpers", () => {
     expect(payload).not.toHaveProperty("selectedCountryId");
   });
 
+  it("sends only company_id when creating a user for an existing company", () => {
+    const payload = buildUserWritePayload(
+      {
+        company_id: 10,
+        company_name: " New Company ",
+        full_name: "Client One",
+        login: "client-one",
+        password: "password123",
+        role_name: "client",
+        is_active: true,
+      },
+      { includeCompanyLink: true },
+    );
+
+    expect(payload).toMatchObject({
+      company_id: 10,
+      full_name: "Client One",
+      login: "client-one",
+      password: "password123",
+      role_name: "client",
+      is_active: true,
+    });
+    expect(payload).not.toHaveProperty("company_name");
+  });
+
+  it("sends only company_name when creating a user with a new company", () => {
+    const payload = buildUserWritePayload(
+      {
+        company_id: 10,
+        company_name: " New Company ",
+        full_name: "Client One",
+        login: "client-one",
+        password: "password123",
+        role_name: "client",
+        is_active: true,
+      },
+      { includeCompanyName: true },
+    );
+
+    expect(payload).toMatchObject({
+      company_name: "New Company",
+      full_name: "Client One",
+      login: "client-one",
+      password: "password123",
+      role_name: "client",
+      is_active: true,
+    });
+    expect(payload).not.toHaveProperty("company_id");
+  });
+
   it("detects forwarder role by normalized role_name only", () => {
     expect(isForwarderRole("forwarder")).toBe(true);
     expect(isForwarderRole("logist")).toBe(false);

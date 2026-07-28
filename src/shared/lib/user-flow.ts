@@ -4,6 +4,7 @@ import type { RoleName } from "@/shared/lib/domain-enums";
 import type { UserWritePayload } from "@/shared/types/entities";
 
 export type UserFormValues = {
+  company_id?: number | null;
   company_name?: string;
   full_name?: string;
   login?: string;
@@ -22,6 +23,7 @@ export type UserFormValues = {
 };
 
 type BuildUserWritePayloadOptions = {
+  includeCompanyLink?: boolean;
   includeCompanyName?: boolean;
   isManagerActor?: boolean;
 };
@@ -57,6 +59,7 @@ export function buildUserWritePayload(
   options: BuildUserWritePayloadOptions = {},
 ): UserWritePayload {
   return {
+    ...(options.includeCompanyLink && values.company_id ? { company_id: values.company_id } : {}),
     ...(options.includeCompanyName ? { company_name: trimOptional(values.company_name) } : {}),
     full_name: values.full_name,
     login: values.login,

@@ -744,6 +744,7 @@ export type UserAdmin = {
 };
 
 export type UserWritePayload = {
+  company_id?: number | null;
   company_name?: string | null;
   full_name?: string;
   login?: string;
@@ -968,6 +969,7 @@ export type Company = {
 
 export type CompanyWritePayload = {
   name?: string;
+  owner_user_id?: number | null;
 };
 
 export type CompanyContact = {
