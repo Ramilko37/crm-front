@@ -45,7 +45,7 @@ Merge rules:
 | REQ-MOD-01 | Раздельные сущности и списки | frontend | Functional requirement | High | done |  |
 | USR-FLT-01 | Компактный двухуровневый интерфейс | frontend | Improvement | High | open |  |
 | USR-FLT-02 | Понятные поля вместо технических ID | backend | Improvement | High | open | frontend UI готов: company filter показывает searchable названия без Company ID; backend gap: `GET /api/v1/users?query=<company>` пока не вернул пользователя по компании в browser check |
-| USR-FLT-03 | Быстрые фильтры | frontend | Improvement | Medium | open |  |
+| USR-FLT-03 | Быстрые фильтры | frontend | Improvement | Medium | ready-to-test | frontend UI готов; backend gap вынесен в CRM-68 (`is_active=true`, `has_company=false`) |
 | USR-FLT-04 | Применение, сброс и единый стиль | frontend | Improvement | Medium | open |  |
 | WPT-CFM-01 | Ручное подтверждение логистом | backend | Functional requirement | High | open |  |
 | WPT-CHK-01 | Автоматическая проверка допустимости | backend | Functional requirement | Critical | open |  |

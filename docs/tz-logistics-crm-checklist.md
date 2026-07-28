@@ -72,5 +72,5 @@
 
 - ~~[x] **USR-FLT-01** — Компактный двухуровневый интерфейс~~
 - [ ] **USR-FLT-02** — Понятные поля вместо технических ID *(frontend UI готов: company filter показывает searchable названия без Company ID; backend gap: `GET /api/v1/users?query=<company>` пока не вернул пользователя по компании в browser check)*
-- [ ] **USR-FLT-03** — Быстрые фильтры *(frontend role chips `logist`/`manager` готовы; backend gap: `is_active=true/false` и `has_company/without_company/no_company` сейчас игнорируются, `company_id=null` возвращает 422)*
+- ~~[x] **USR-FLT-03** — Быстрые фильтры~~ *(frontend UI готов: `Только активные`, `Только логисты`, `Только менеджеры`, `Без компании`; backend gap вынесен в CRM-68 для серверной поддержки `is_active=true` и `has_company=false`)*
 - ~~[x] **USR-FLT-04** — Применение, сброс и единый стиль~~

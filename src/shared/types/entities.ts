@@ -768,6 +768,8 @@ export type UserFilterParams = ListParams & {
   personal_manager_id?: number;
   country?: string;
   city?: string;
+  is_active?: boolean;
+  has_company?: boolean;
   has_email?: boolean;
   has_orders?: boolean;
   last_order_date_from?: string;

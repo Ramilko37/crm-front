@@ -35,6 +35,11 @@ import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { canManageUsers, canResetUserPassword, normalizeRoleName } from "@/shared/lib/rbac";
 import { buildUserWritePayload, requiredWhenForwarder } from "@/shared/lib/user-flow";
+import {
+  getUserQuickFilterPatch,
+  getUserQuickFilters,
+  type UserQuickFilterCode,
+} from "@/shared/lib/user-quick-filters";
 import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
 import type {
@@ -64,6 +69,12 @@ function trimOrUndefined(value: string | undefined | null) {
   return next ? next : undefined;
 }
 
+function parseFilterPanelQueryState(value: string | null) {
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return undefined;
+}
+
 function extractItems<T>(response: T[] | { items?: T[] } | undefined): T[] {
   if (!response) return [];
   return Array.isArray(response) ? response : (response.items ?? []);
@@ -80,6 +91,8 @@ function getParams(searchParams: URLSearchParams): UserFilterParams {
     role_name: searchParams.get("role_name") ?? undefined,
     country: searchParams.get("country") ?? undefined,
     city: searchParams.get("city") ?? undefined,
+    is_active: parseBool(searchParams.get("is_active")),
+    has_company: parseBool(searchParams.get("has_company")),
     has_email: parseBool(searchParams.get("has_email")),
     has_orders: parseBool(searchParams.get("has_orders")),
     last_order_date_from: searchParams.get("last_order_date_from") ?? undefined,
@@ -108,8 +121,6 @@ type UserEditForm = Omit<UserCreateForm, "password" | "company_name"> & {
   last_order_date?: dayjs.Dayjs;
 };
 
-type UserQuickFilterCode = "logist" | "manager";
-
 function UsersPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -121,11 +132,26 @@ function UsersPageContent() {
   const canWrite = canManageUsers(meQuery.data?.role_name, meQuery.data?.is_superuser);
   const canResetPassword = canResetUserPassword(meQuery.data?.role_name, meQuery.data?.is_superuser);
   const isManagerActor = !meQuery.data?.is_superuser && normalizedRole === "manager";
+  const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const filtersOpenFromQuery = parseFilterPanelQueryState(searchParams.get("filters_open"));
+  const hasActiveFilters = Boolean(
+    params.query ||
+      params.company_id ||
+      params.role_name ||
+      params.country ||
+      params.city ||
+      typeof params.is_active === "boolean" ||
+      typeof params.has_company === "boolean" ||
+      typeof params.has_email === "boolean" ||
+      typeof params.has_orders === "boolean" ||
+      params.last_order_date_from ||
+      params.last_order_date_to,
+  );
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersOpenFallback, setFiltersOpenFallback] = useState(false);
   const [managerSearch, setManagerSearch] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [createCitySearch, setCreateCitySearch] = useState("");
@@ -146,8 +172,7 @@ function UsersPageContent() {
   const createCountryId = Form.useWatch("selectedCountryId", createForm) as number | undefined;
   const editCountryId = Form.useWatch("selectedCountryId", editForm) as number | undefined;
   const countryDirectory = useCountryDirectory();
-
-  const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const filtersOpen = filtersOpenFromQuery ?? (filtersOpenFallback || hasActiveFilters);
 
   const roleOptions = useMemo(() => {
     const all = ROLE_NAMES.filter((role) => role !== "anonymous");
@@ -333,13 +358,10 @@ function UsersPageContent() {
   }
 
   function toggleQuickFilter(code: UserQuickFilterCode) {
-    applySearchPatch({ role_name: params.role_name === code ? null : code, page: 1 });
+    applySearchPatch(getUserQuickFilterPatch(code, params));
   }
 
-  const quickFilters = [
-    { code: "logist" as const, label: "Только логисты", checked: params.role_name === "logist" },
-    { code: "manager" as const, label: "Только менеджеры", checked: params.role_name === "manager" },
-  ];
+  const quickFilters = getUserQuickFilters(params);
 
   const sortOrderFor = (field: string) => {
     if (params.sort_by !== field) return null;
@@ -472,7 +494,11 @@ function UsersPageContent() {
 
       <PageToolbar
         filtersOpen={filtersOpen}
-        onToggleFilters={() => setFiltersOpen((open) => !open)}
+        onToggleFilters={() => {
+          const nextFiltersOpen = !filtersOpen;
+          setFiltersOpenFallback(nextFiltersOpen);
+          applySearchPatch({ filters_open: nextFiltersOpen ? "1" : "0" });
+        }}
         toggleLabel="Фильтр"
         search={
           <Input.Search
@@ -575,7 +601,7 @@ function UsersPageContent() {
               onClick={() => {
                 filterForm.resetFields();
                 router.replace("/users");
-                setFiltersOpen(false);
+                setFiltersOpenFallback(false);
               }}
             >
               Сбросить
