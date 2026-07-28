@@ -379,6 +379,10 @@ function trimOrUndefined(value: string | null | undefined) {
   return next ? next : undefined;
 }
 
+function compactObject<T extends Record<string, unknown>>(source: T) {
+  return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
 function renderOrderNumber(value: string | null | undefined) {
   return value && value.trim().length > 0 ? value : "—";
 }
@@ -1818,14 +1822,19 @@ function OrdersPageContent() {
     const cityId = values.loading_city_id_ui;
     const primaryContactName =
       trimOrUndefined(values.create_factory_contact?.full_name) ??
-      trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
-      "Primary Contact";
+      trimOrUndefined(values.create_factory?.loading_address?.contact_name);
     const primaryContactPhone =
       trimOrUndefined(values.create_factory_contact?.phone) ??
-      trimOrUndefined(values.create_factory?.loading_address?.phone) ??
-      "+70000000000";
-    const primaryContactEmail =
-      trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+      trimOrUndefined(values.create_factory?.loading_address?.phone);
+    const primaryContactEmail = trimOrUndefined(values.create_factory_contact?.email);
+    const primaryContact =
+      primaryContactName && primaryContactPhone && primaryContactEmail
+        ? compactObject({
+            full_name: primaryContactName,
+            phone: primaryContactPhone,
+            email: primaryContactEmail,
+          })
+        : undefined;
 
     if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
       message.error("Заполните данные фабрики");
@@ -1843,12 +1852,8 @@ function OrdersPageContent() {
           city: postcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
           address,
           postcode: postcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
-          phone: trimOrUndefined(values.create_factory_contact?.phone),
-          primary_contact: {
-            full_name: primaryContactName,
-            phone: primaryContactPhone,
-            email: primaryContactEmail,
-          },
+          phone: primaryContactPhone,
+          primary_contact: primaryContact,
         },
       });
 
@@ -1862,8 +1867,8 @@ function OrdersPageContent() {
             postcode_id: postcodeId,
             city_id: cityId,
             address,
-            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
-            phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name),
+            phone: trimOrUndefined(values.create_factory?.loading_address?.phone),
           },
         },
       );
@@ -2010,14 +2015,19 @@ function OrdersPageContent() {
     const cityId = values.loading_city_id_ui;
     const primaryContactName =
       trimOrUndefined(values.create_factory_contact?.full_name) ??
-      trimOrUndefined(values.create_factory?.loading_address?.contact_name) ??
-      "Primary Contact";
+      trimOrUndefined(values.create_factory?.loading_address?.contact_name);
     const primaryContactPhone =
       trimOrUndefined(values.create_factory_contact?.phone) ??
-      trimOrUndefined(values.create_factory?.loading_address?.phone) ??
-      "+70000000000";
-    const primaryContactEmail =
-      trimOrUndefined(values.create_factory_contact?.email) ?? `factory.${Date.now()}@example.com`;
+      trimOrUndefined(values.create_factory?.loading_address?.phone);
+    const primaryContactEmail = trimOrUndefined(values.create_factory_contact?.email);
+    const primaryContact =
+      primaryContactName && primaryContactPhone && primaryContactEmail
+        ? compactObject({
+            full_name: primaryContactName,
+            phone: primaryContactPhone,
+            email: primaryContactEmail,
+          })
+        : undefined;
 
     if (!factoryName || !countryId || !address || !postcodeId || !cityId) {
       message.error("Заполните данные фабрики");
@@ -2035,12 +2045,8 @@ function OrdersPageContent() {
           city: editPostcodeCitiesQuery.data?.items?.find((city) => city.id === cityId)?.city,
           address,
           postcode: editPostcodeOptionsQuery.data?.items?.find((postcode) => postcode.id === postcodeId)?.postcode,
-          phone: trimOrUndefined(values.create_factory_contact?.phone),
-          primary_contact: {
-            full_name: primaryContactName,
-            phone: primaryContactPhone,
-            email: primaryContactEmail,
-          },
+          phone: primaryContactPhone,
+          primary_contact: primaryContact,
         },
       });
 
@@ -2054,8 +2060,8 @@ function OrdersPageContent() {
             postcode_id: postcodeId,
             city_id: cityId,
             address,
-            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name) ?? primaryContactName,
-            phone: trimOrUndefined(values.create_factory?.loading_address?.phone) ?? primaryContactPhone,
+            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name),
+            phone: trimOrUndefined(values.create_factory?.loading_address?.phone),
           },
         },
       );
@@ -2176,8 +2182,8 @@ function OrdersPageContent() {
           postcode_id: payload.postcode_id,
           city_id: payload.city_id,
           address: payload.address,
-          contact_name: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "full_name"])) ?? "Contact",
-          phone: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "phone"])) ?? "+70000000000",
+          contact_name: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "full_name"])),
+          phone: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "phone"])),
         },
       }),
     onSuccess: async (result) => {
@@ -2203,8 +2209,8 @@ function OrdersPageContent() {
           postcode_id: payload.postcode_id,
           city_id: payload.city_id,
           address: payload.address,
-          contact_name: trimOrUndefined(editForm.getFieldValue("factory_contact_name")) ?? "Contact",
-          phone: trimOrUndefined(editForm.getFieldValue("factory_contact_phone")) ?? "+70000000000",
+          contact_name: trimOrUndefined(editForm.getFieldValue("factory_contact_name")),
+          phone: trimOrUndefined(editForm.getFieldValue("factory_contact_phone")),
         },
       }),
     onSuccess: async (result) => {
