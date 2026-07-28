@@ -790,6 +790,14 @@ export type PathPoint = {
   name_ru: string;
   name_it: string | null;
   name_en: string | null;
+  type?: string | null;
+  country?: string | null;
+  city?: string | null;
+  company_id?: number | null;
+  company_name?: string | null;
+  status?: string | null;
+  has_active_trips?: boolean | null;
+  created_at?: string | null;
 };
 
 export type PathPointWritePayload = {
@@ -801,6 +809,14 @@ export type PathPointWritePayload = {
 export type PathPointFilterParams = ListParams & {
   query?: string;
   ids?: number[];
+  type?: string;
+  country?: string;
+  city?: string;
+  company_id?: number;
+  status?: string;
+  has_active_trips?: boolean;
+  created_at_from?: string;
+  created_at_to?: string;
 };
 
 export type Country = {

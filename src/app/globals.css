@@ -313,6 +313,18 @@ a {
   justify-content: flex-end;
 }
 
+.crm-order-saved-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.crm-order-saved-filter-actions .ant-btn {
+  min-width: 0;
+}
+
 .crm-user-filter-stack {
   display: flex;
   flex-direction: column;
@@ -1178,6 +1190,10 @@ body.crm-column-resizing * {
   .crm-order-filter-grid .crm-col-1,
   .crm-order-filter-grid .crm-col-2 {
     grid-column: span 12;
+  }
+
+  .crm-order-saved-filter-actions {
+    justify-content: flex-start;
   }
 
   .crm-top-nav {

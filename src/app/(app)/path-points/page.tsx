@@ -5,28 +5,37 @@ import {
   App,
   Button,
   Card,
+  DatePicker,
   Form,
   Input,
   Modal,
   Pagination,
   Popconfirm,
+  Select,
   Space,
   Table,
   Typography,
 } from "antd";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
-import { Suspense, useMemo, useState } from "react";
+import dayjs from "dayjs";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useCurrentUser } from "@/features/auth/use-current-user";
+import { useCountryDirectory } from "@/shared/hooks/use-country-directory";
 import { apiRequest } from "@/shared/lib/api";
+import {
+  findCountry,
+  getCountryEnglishName,
+} from "@/shared/lib/countries";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { setSearchPatch } from "@/shared/lib/query-string";
 import { canWriteSettingsDictionaries } from "@/shared/lib/rbac";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { FilterPanel, PageHeader, PageToolbar } from "@/shared/ui/page-frame";
-import type { PaginatedResponse, PathPoint, PathPointFilterParams, PathPointWritePayload } from "@/shared/types/entities";
+import type { Company, PaginatedResponse, PathPoint, PathPointFilterParams, PathPointWritePayload } from "@/shared/types/entities";
 
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -47,6 +56,14 @@ function getParams(searchParams: URLSearchParams): PathPointFilterParams {
     sort_by: searchParams.get("sort_by") ?? undefined,
     sort_desc: parseBool(searchParams.get("sort_desc")) ?? false,
     query: searchParams.get("query") ?? undefined,
+    type: searchParams.get("type") ?? undefined,
+    country: searchParams.get("country") ?? undefined,
+    city: searchParams.get("city") ?? undefined,
+    company_id: parseNumber(searchParams.get("company_id")),
+    status: searchParams.get("status") ?? undefined,
+    has_active_trips: parseBool(searchParams.get("has_active_trips")),
+    created_at_from: searchParams.get("created_at_from") ?? undefined,
+    created_at_to: searchParams.get("created_at_to") ?? undefined,
   };
 }
 
@@ -56,6 +73,43 @@ type PathPointForm = {
   name_en?: string;
 };
 
+type PathPointFilterForm = {
+  query?: string;
+  type?: string;
+  country?: number;
+  city?: string;
+  company_id?: number;
+  status?: string;
+  has_active_trips?: boolean;
+  created_at_from?: dayjs.Dayjs;
+  created_at_to?: dayjs.Dayjs;
+};
+
+const PATH_POINT_TYPE_OPTIONS = [
+  "Factory",
+  "Forwarder warehouse",
+  "Consolidation warehouse",
+  "Customs warehouse",
+  "Terminal",
+  "Loading point",
+  "Unloading point",
+  "Border crossing",
+  "Customs office",
+  "Transit point",
+  "Other",
+].map((value) => ({ label: value, value }));
+
+const PATH_POINT_STATUS_OPTIONS = [
+  { label: "Активна", value: "active" },
+  { label: "Неактивна", value: "inactive" },
+];
+
+function parseFilterPanelQueryState(value: string | null) {
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return undefined;
+}
+
 function PathPointsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -64,16 +118,30 @@ function PathPointsPageContent() {
 
   const meQuery = useCurrentUser(true);
   const canWrite = canWriteSettingsDictionaries(meQuery.data?.role_name, meQuery.data?.is_superuser);
+  const countryDirectory = useCountryDirectory();
+  const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const filtersOpenFromQuery = parseFilterPanelQueryState(searchParams.get("filters_open"));
+  const hasActiveFilters = Boolean(
+    params.query ||
+      params.type ||
+      params.country ||
+      params.city ||
+      params.company_id ||
+      params.status ||
+      typeof params.has_active_trips === "boolean" ||
+      params.created_at_from ||
+      params.created_at_to,
+  );
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersOpenFallback, setFiltersOpenFallback] = useState(false);
+  const [companyQueryText, setCompanyQueryText] = useState("");
   const [selected, setSelected] = useState<PathPoint | null>(null);
   const [createForm] = Form.useForm<PathPointForm>();
   const [editForm] = Form.useForm<PathPointForm>();
-  const [filterForm] = Form.useForm<{ query?: string }>();
-
-  const params = useMemo(() => getParams(searchParams), [searchParams]);
+  const [filterForm] = Form.useForm<PathPointFilterForm>();
+  const filtersOpen = filtersOpenFromQuery ?? (filtersOpenFallback || hasActiveFilters);
 
   const listQuery = useQuery({
     queryKey: queryKeys.pathPoints.list(params),
@@ -82,6 +150,42 @@ function PathPointsPageContent() {
         query: params,
       }),
   });
+
+  const companiesQuery = useQuery({
+    queryKey: ["path-points", "filter-companies", companyQueryText],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<Company>>("/api/companies", {
+        query: {
+          page: 1,
+          page_size: 20,
+          query: companyQueryText || undefined,
+        },
+      }),
+    enabled: filtersOpen,
+  });
+
+  const companyOptions = useMemo(
+    () =>
+      (companiesQuery.data?.items ?? []).map((company) => ({
+        label: [company.name, company.country, company.city].filter(Boolean).join(" · "),
+        value: company.id,
+      })),
+    [companiesQuery.data?.items],
+  );
+
+  useEffect(() => {
+    filterForm.setFieldsValue({
+      query: params.query,
+      type: params.type,
+      country: findCountry(countryDirectory.countries, params.country)?.id,
+      city: params.city,
+      company_id: params.company_id,
+      status: params.status,
+      has_active_trips: params.has_active_trips,
+      created_at_from: params.created_at_from ? dayjs(params.created_at_from) : undefined,
+      created_at_to: params.created_at_to ? dayjs(params.created_at_to) : undefined,
+    });
+  }, [countryDirectory.countries, filterForm, params]);
 
   const createMutation = useMutation({
     mutationFn: (payload: PathPointWritePayload) =>
@@ -177,6 +281,25 @@ function PathPointsPageContent() {
       sortOrder: sortOrderFor("name_en"),
       render: (value) => value ?? "-",
     },
+    { title: "Тип", dataIndex: "type", key: "type", width: 150, render: (value) => value ?? "-" },
+    { title: "Страна", dataIndex: "country", key: "country", width: 150, render: (value) => value ?? "-" },
+    { title: "Город", dataIndex: "city", key: "city", width: 150, render: (value) => value ?? "-" },
+    { title: "Компания", dataIndex: "company_name", key: "company_name", width: 190, render: (value) => value ?? "-" },
+    { title: "Статус", dataIndex: "status", key: "status", width: 120, render: (value) => value ?? "-" },
+    {
+      title: "Активные рейсы",
+      dataIndex: "has_active_trips",
+      key: "has_active_trips",
+      width: 140,
+      render: (value) => (typeof value === "boolean" ? (value ? "Да" : "Нет") : "-"),
+    },
+    {
+      title: "Создана",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 140,
+      render: (value) => (value ? dayjs(value).format("DD.MM.YYYY") : "-"),
+    },
     {
       title: "Действия",
       key: "actions",
@@ -236,16 +359,20 @@ function PathPointsPageContent() {
 
       <PageToolbar
         filtersOpen={filtersOpen}
-        onToggleFilters={() => setFiltersOpen((open) => !open)}
+        onToggleFilters={() => {
+          const nextFiltersOpen = !filtersOpen;
+          setFiltersOpenFallback(nextFiltersOpen);
+          applySearchPatch({ filters_open: nextFiltersOpen ? "1" : "0" });
+        }}
         toggleLabel="Фильтр"
         search={
           <Input.Search
             key={params.query ?? "path-point-query"}
             allowClear
             enterButton="Найти"
-            placeholder="Поиск по названию"
+            placeholder="Поиск по названию, типу, городу, компании"
             defaultValue={params.query}
-            onSearch={(value) => applySearchPatch({ query: value || null, page: 1 })}
+            onSearch={(value) => applySearchPatch({ query: value?.trim() || null, page: 1 })}
           />
         }
       />
@@ -253,14 +380,64 @@ function PathPointsPageContent() {
       <FilterPanel open={filtersOpen}>
         <Form
           form={filterForm}
-          initialValues={{ query: params.query }}
-          onFinish={(values: { query?: string }) => {
-            applySearchPatch({ query: values.query, page: 1 });
+          onFinish={(values) => {
+            applySearchPatch({
+              query: values.query?.trim() || null,
+              type: values.type,
+              country: getCountryEnglishName(findCountry(countryDirectory.countries, values.country)) ?? null,
+              city: values.city?.trim() || null,
+              company_id: values.company_id,
+              status: values.status,
+              has_active_trips: values.has_active_trips,
+              created_at_from: values.created_at_from?.format("YYYY-MM-DD"),
+              created_at_to: values.created_at_to?.format("YYYY-MM-DD"),
+              page: 1,
+            });
           }}
         >
-          <div className="crm-filter-grid">
-            <Form.Item name="query" className="crm-col-6" style={{ marginBottom: 0 }}>
-              <Input placeholder="Поиск" allowClear />
+          <div className="crm-filter-grid crm-path-point-filter-grid">
+            <Form.Item name="query" className="crm-col-4" style={{ marginBottom: 0 }}>
+              <Input placeholder="Наименование" allowClear />
+            </Form.Item>
+            <Form.Item name="type" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select allowClear showSearch placeholder="Тип" options={PATH_POINT_TYPE_OPTIONS} />
+            </Form.Item>
+            <Form.Item name="country" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <CountrySelect scope="staff" allowClear placeholder="Страна" />
+            </Form.Item>
+            <Form.Item name="city" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Input placeholder="Город" allowClear />
+            </Form.Item>
+            <Form.Item name="company_id" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                loading={companiesQuery.isLoading}
+                options={companyOptions}
+                placeholder="Компания"
+                onSearch={setCompanyQueryText}
+                notFoundContent={companiesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+              />
+            </Form.Item>
+            <Form.Item name="status" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select allowClear placeholder="Статус" options={PATH_POINT_STATUS_OPTIONS} />
+            </Form.Item>
+            <Form.Item name="has_active_trips" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <Select
+                allowClear
+                placeholder="Активные рейсы"
+                options={[
+                  { label: "Есть", value: true },
+                  { label: "Нет", value: false },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item name="created_at_from" className="crm-col-2" style={{ marginBottom: 0 }}>
+              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создана от" />
+            </Form.Item>
+            <Form.Item name="created_at_to" className="crm-col-3" style={{ marginBottom: 0 }}>
+              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создана до" />
             </Form.Item>
           </div>
           <div className="crm-filter-actions">
@@ -271,7 +448,7 @@ function PathPointsPageContent() {
               onClick={() => {
                 filterForm.resetFields();
                 router.replace("/path-points");
-                setFiltersOpen(false);
+                setFiltersOpenFallback(false);
               }}
             >
               Сбросить
@@ -292,7 +469,7 @@ function PathPointsPageContent() {
           loading={listQuery.isLoading}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 920 }}
+          scroll={{ x: 1500 }}
           pagination={false}
           onChange={handleTableChange}
           locale={{ emptyText: "Нет данных" }}

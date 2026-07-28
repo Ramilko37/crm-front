@@ -2,10 +2,13 @@
 
 import {
   ApartmentOutlined,
+  DeleteOutlined,
   EditOutlined,
   FileTextOutlined,
   MessageOutlined,
   MoreOutlined,
+  SaveOutlined,
+  StarOutlined,
   SwapOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -72,6 +75,18 @@ import {
 } from "@/shared/lib/order-create-wizard";
 import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
+import {
+  buildOrderSavedFilterSearchParams,
+  clearDefaultSavedOrderFilter,
+  deleteSavedOrderFilter,
+  extractOrderSavedFilterParams,
+  hasOrderSavedFilterParams,
+  markDefaultSavedOrderFilter,
+  parseSavedOrderFilters,
+  renameSavedOrderFilter,
+  type SavedOrderFilter,
+  upsertSavedOrderFilter,
+} from "@/shared/lib/order-saved-filters";
 import {
   getOrderPeriodPresetCodeForRange,
   getOrderPeriodPresetRange,
@@ -456,6 +471,7 @@ function normalizeGoodsLineFromDetail(line: unknown): OrderCreateGoodsLineForm {
 }
 
 const ORDER_FILTER_PANEL_STORAGE_KEY = "crm-orders-filter-panel-open-v1";
+const ORDER_SAVED_FILTERS_STORAGE_KEY = "crm-orders-saved-filters-v1";
 const ORDER_TABLE_COLUMN_WIDTH_STORAGE_KEY = "crm-orders-column-widths-v1";
 const ORDER_TABLE_MIN_COLUMN_WIDTH = 72;
 
@@ -888,6 +904,10 @@ function OrdersPageContent() {
     priority_codes?: string[];
     office_mark_codes?: string[];
   }>();
+  const [savedOrderFilters, setSavedOrderFilters] = useState<SavedOrderFilter[]>([]);
+  const [selectedSavedFilterId, setSelectedSavedFilterId] = useState<string>();
+  const [savedFilterName, setSavedFilterName] = useState("");
+  const defaultSavedFilterAppliedRef = useRef(false);
   const [bulkStatusForm] = Form.useForm<{ status_name: OrderStatus; status_date?: dayjs.Dayjs }>();
   const [bulkAssignForm] = Form.useForm<{ trip_id?: number }>();
   const [bulkPickupForm] = Form.useForm<{ pickup_date: dayjs.Dayjs }>();
@@ -984,8 +1004,49 @@ function OrdersPageContent() {
       (params.office_mark_codes?.length ?? 0) > 0,
   );
   const [filtersOpen, setFiltersOpen] = useState(() => filtersOpenFromQuery ?? hasActiveFilters);
+  const savedOrderFiltersStorageKey = useMemo(
+    () => `${ORDER_SAVED_FILTERS_STORAGE_KEY}:${meQuery.data?.id ?? "anonymous"}`,
+    [meQuery.data?.id],
+  );
+  const currentSavedFilterParams = useMemo(() => extractOrderSavedFilterParams(searchParams), [searchParams]);
+  const hasCurrentSavedFilterParams = useMemo(
+    () => hasOrderSavedFilterParams(currentSavedFilterParams),
+    [currentSavedFilterParams],
+  );
+  const selectedSavedFilter = useMemo(
+    () => savedOrderFilters.find((filter) => filter.id === selectedSavedFilterId),
+    [savedOrderFilters, selectedSavedFilterId],
+  );
+  const savedOrderFilterOptions = useMemo(
+    () =>
+      savedOrderFilters.map((filter) => ({
+        label: `${filter.name}${filter.isDefault ? " · по умолчанию" : ""}`,
+        value: filter.id,
+      })),
+    [savedOrderFilters],
+  );
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+
+  useEffect(() => {
+    const storage = getBrowserLocalStorage();
+    setSavedOrderFilters(parseSavedOrderFilters(storage?.getItem(savedOrderFiltersStorageKey)));
+    setSelectedSavedFilterId(undefined);
+    setSavedFilterName("");
+    defaultSavedFilterAppliedRef.current = false;
+  }, [savedOrderFiltersStorageKey]);
+
+  useEffect(() => {
+    if (defaultSavedFilterAppliedRef.current || hasCurrentSavedFilterParams || searchParams.has("filters_open")) return;
+    const defaultFilter = savedOrderFilters.find((filter) => filter.isDefault);
+    if (!defaultFilter) return;
+
+    defaultSavedFilterAppliedRef.current = true;
+    const nextParams = buildOrderSavedFilterSearchParams(defaultFilter.params);
+    nextParams.set("page", "1");
+    nextParams.set("filters_open", "1");
+    router.replace(`/orders?${nextParams.toString()}`);
+  }, [hasCurrentSavedFilterParams, router, savedOrderFilters, searchParams]);
 
   useEffect(() => {
     if (filtersOpenFromQuery !== undefined) {
@@ -3534,6 +3595,91 @@ function OrdersPageContent() {
     router.replace(`/orders${nextSearch ? `?${nextSearch}` : ""}`);
   }
 
+  function commitSavedOrderFilters(nextFilters: SavedOrderFilter[]) {
+    setSavedOrderFilters(nextFilters);
+    try {
+      getBrowserLocalStorage()?.setItem(savedOrderFiltersStorageKey, JSON.stringify(nextFilters));
+    } catch {
+      message.warning("Не удалось сохранить фильтры в браузере");
+    }
+  }
+
+  function applySavedOrderFilter(filterId: string | undefined) {
+    const filter = savedOrderFilters.find((item) => item.id === filterId);
+    if (!filter) {
+      message.warning("Выберите сохранённый набор");
+      return;
+    }
+
+    const nextParams = buildOrderSavedFilterSearchParams(filter.params);
+    nextParams.set("page", "1");
+    nextParams.set("filters_open", "1");
+    router.replace(`/orders?${nextParams.toString()}`);
+    persistFilterPanelOpenState(true);
+  }
+
+  function saveCurrentOrderFilter() {
+    const name = savedFilterName.trim();
+    if (!name) {
+      message.warning("Введите название набора");
+      return;
+    }
+    if (!hasCurrentSavedFilterParams) {
+      message.warning("Выберите хотя бы один фильтр");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const id = selectedSavedFilterId ?? (globalThis.crypto?.randomUUID?.() ?? `filter-${Date.now()}`);
+    const nextFilters = upsertSavedOrderFilter(savedOrderFilters, {
+      id,
+      name,
+      params: currentSavedFilterParams,
+      now,
+    });
+    commitSavedOrderFilters(nextFilters);
+    setSelectedSavedFilterId(id);
+    message.success(selectedSavedFilterId ? "Набор обновлён" : "Набор сохранён");
+  }
+
+  function renameSelectedOrderFilter() {
+    if (!selectedSavedFilterId) {
+      message.warning("Выберите сохранённый набор");
+      return;
+    }
+    const nextFilters = renameSavedOrderFilter(
+      savedOrderFilters,
+      selectedSavedFilterId,
+      savedFilterName,
+      new Date().toISOString(),
+    );
+    commitSavedOrderFilters(nextFilters);
+    message.success("Набор переименован");
+  }
+
+  function toggleDefaultSavedOrderFilter() {
+    if (!selectedSavedFilterId) {
+      message.warning("Выберите сохранённый набор");
+      return;
+    }
+    const nextFilters = selectedSavedFilter?.isDefault
+      ? clearDefaultSavedOrderFilter(savedOrderFilters)
+      : markDefaultSavedOrderFilter(savedOrderFilters, selectedSavedFilterId, new Date().toISOString());
+    commitSavedOrderFilters(nextFilters);
+    message.success(selectedSavedFilter?.isDefault ? "Default снят" : "Default назначен");
+  }
+
+  function removeSelectedOrderFilter() {
+    if (!selectedSavedFilterId) {
+      message.warning("Выберите сохранённый набор");
+      return;
+    }
+    commitSavedOrderFilters(deleteSavedOrderFilter(savedOrderFilters, selectedSavedFilterId));
+    setSelectedSavedFilterId(undefined);
+    setSavedFilterName("");
+    message.success("Набор удалён");
+  }
+
   function applyGlobalOrderSearch(value: string) {
     const query = trimOrUndefined(value);
     setOrderSearchText(value);
@@ -5022,6 +5168,51 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                           applyOrderPeriodPreset(value as OrderPeriodPresetCode);
                         }}
                       />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="crm-filter-group">
+                  <Typography.Text className="crm-filter-group-title">Сохранённые фильтры</Typography.Text>
+                  <div className="crm-filter-grid crm-order-filter-grid crm-order-saved-filter-grid">
+                    <div className="crm-col-4">
+                      <Select
+                        allowClear
+                        value={selectedSavedFilterId}
+                        options={savedOrderFilterOptions}
+                        placeholder="Выберите набор"
+                        style={{ width: "100%" }}
+                        onChange={(value) => {
+                          setSelectedSavedFilterId(value);
+                          const filter = savedOrderFilters.find((item) => item.id === value);
+                          setSavedFilterName(filter?.name ?? "");
+                        }}
+                        notFoundContent="Нет сохранённых наборов"
+                      />
+                    </div>
+                    <div className="crm-col-4">
+                      <Input
+                        value={savedFilterName}
+                        placeholder="Название набора"
+                        onChange={(event) => setSavedFilterName(event.target.value)}
+                      />
+                    </div>
+                    <div className="crm-col-4 crm-order-saved-filter-actions">
+                      <Button icon={<SaveOutlined />} onClick={saveCurrentOrderFilter}>
+                        {selectedSavedFilterId ? "Обновить" : "Сохранить"}
+                      </Button>
+                      <Button disabled={!selectedSavedFilterId} onClick={() => applySavedOrderFilter(selectedSavedFilterId)}>
+                        Применить
+                      </Button>
+                      <Button icon={<EditOutlined />} disabled={!selectedSavedFilterId} onClick={renameSelectedOrderFilter}>
+                        Переименовать
+                      </Button>
+                      <Button icon={<StarOutlined />} disabled={!selectedSavedFilterId} onClick={toggleDefaultSavedOrderFilter}>
+                        {selectedSavedFilter?.isDefault ? "Снять default" : "Default"}
+                      </Button>
+                      <Button danger icon={<DeleteOutlined />} disabled={!selectedSavedFilterId} onClick={removeSelectedOrderFilter}>
+                        Удалить
+                      </Button>
                     </div>
                   </div>
                 </section>
