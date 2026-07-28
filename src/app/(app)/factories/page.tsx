@@ -129,9 +129,34 @@ type FactoryLoadingAddressForm = {
   is_active?: boolean;
 };
 
+const FACTORY_PHONE_REGEX = /^\+[1-9]\d{7,14}$/;
+
 function compactText(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeInternationalPhone(value: string | undefined | null) {
+  const trimmed = compactText(value ?? undefined);
+  if (!trimmed) return undefined;
+
+  let next = trimmed.replace(/[\s()-]/g, "");
+  if (next.startsWith("00")) {
+    next = `+${next.slice(2)}`;
+  }
+  if (next.startsWith("+")) {
+    next = `+${next.slice(1).replace(/\+/g, "")}`;
+  }
+
+  return next;
+}
+
+function validateInternationalPhone(_: unknown, value: string | undefined) {
+  const normalized = normalizeInternationalPhone(value);
+  if (!normalized || FACTORY_PHONE_REGEX.test(normalized)) {
+    return Promise.resolve();
+  }
+  return Promise.reject(new Error("Введите телефон в международном формате +79991234567"));
 }
 
 function serializeLoadingAddressForm(
@@ -181,7 +206,7 @@ function serializeFactoryForm(values: FactoryForm) {
     city: compactText(values.city),
     address: compactText(values.address),
     postcode: compactText(values.postcode),
-    phone: compactText(values.phone),
+    phone: normalizeInternationalPhone(values.phone),
     primary_email: compactText(values.primary_email),
   };
 
@@ -1301,7 +1326,7 @@ function FactoriesPageContent() {
             createMutation.mutate({ ...values, loading_address: loadingAddress });
           }}
         >
-          <Form.Item name="name" label="Название" rules={[{ required: true }]}>
+          <Form.Item name="name" label="Название" rules={[{ required: true, message: "Введите название фабрики" }]}>
             <Input />
           </Form.Item>
           <Form.Item name="country" hidden>
@@ -1319,20 +1344,41 @@ function FactoriesPageContent() {
               }}
             />
           </Form.Item>
-          <Form.Item name="city" label="Город">
+          <Form.Item name="postcode" label="Индекс" rules={[{ required: true, message: "Введите почтовый индекс" }]}>
+            <Input autoComplete="postal-code" />
+          </Form.Item>
+          <Form.Item name="city" label="Город" rules={[{ required: true, message: "Введите город" }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="address" label="Адрес">
+          <Form.Item name="address" label="Адрес" rules={[{ required: true, message: "Введите адрес" }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="postcode" label="Индекс">
-            <Input />
+          <Form.Item
+            name="primary_email"
+            label="E-mail"
+            rules={[
+              { required: true, message: "Введите e-mail" },
+              { type: "email", message: "Введите корректный e-mail" },
+            ]}
+          >
+            <Input type="email" autoComplete="email" />
           </Form.Item>
-          <Form.Item name="phone" label="Телефон">
-            <Input />
-          </Form.Item>
-          <Form.Item name="primary_email" label="Primary email">
-            <Input />
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Введите телефон" },
+              { validator: validateInternationalPhone },
+            ]}
+            extra="Формат: +[код][номер], от 8 до 15 цифр после +."
+          >
+            <Input
+              autoComplete="tel"
+              placeholder="+79991234567"
+              onBlur={(event) => {
+                createForm.setFieldValue("phone", normalizeInternationalPhone(event.target.value));
+              }}
+            />
           </Form.Item>
           <Form.Item name="certificate_status" label="Статус сертификата">
             <Select
@@ -1416,7 +1462,7 @@ function FactoriesPageContent() {
             updateMutation.mutate({ id: selectedFactory.id, payload: values });
           }}
         >
-          <Form.Item name="name" label="Название">
+          <Form.Item name="name" label="Название" rules={[{ required: true, message: "Введите название фабрики" }]}>
             <Input />
           </Form.Item>
           <Form.Item name="country" hidden>
@@ -1434,20 +1480,41 @@ function FactoriesPageContent() {
               }}
             />
           </Form.Item>
-          <Form.Item name="city" label="Город">
+          <Form.Item name="postcode" label="Индекс" rules={[{ required: true, message: "Введите почтовый индекс" }]}>
+            <Input autoComplete="postal-code" />
+          </Form.Item>
+          <Form.Item name="city" label="Город" rules={[{ required: true, message: "Введите город" }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="address" label="Адрес">
+          <Form.Item name="address" label="Адрес" rules={[{ required: true, message: "Введите адрес" }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="postcode" label="Индекс">
-            <Input />
+          <Form.Item
+            name="primary_email"
+            label="E-mail"
+            rules={[
+              { required: true, message: "Введите e-mail" },
+              { type: "email", message: "Введите корректный e-mail" },
+            ]}
+          >
+            <Input type="email" autoComplete="email" />
           </Form.Item>
-          <Form.Item name="phone" label="Телефон">
-            <Input />
-          </Form.Item>
-          <Form.Item name="primary_email" label="Primary email">
-            <Input />
+          <Form.Item
+            name="phone"
+            label="Телефон"
+            rules={[
+              { required: true, message: "Введите телефон" },
+              { validator: validateInternationalPhone },
+            ]}
+            extra="Формат: +[код][номер], от 8 до 15 цифр после +."
+          >
+            <Input
+              autoComplete="tel"
+              placeholder="+79991234567"
+              onBlur={(event) => {
+                editForm.setFieldValue("phone", normalizeInternationalPhone(event.target.value));
+              }}
+            />
           </Form.Item>
           <Form.Item name="certificate_status" label="Статус сертификата">
             <Select
