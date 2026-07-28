@@ -72,6 +72,13 @@ async function toProxyResponse(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
   const headers = pickForwardHeaders(response);
 
+  if (response.status === 204 || response.status === 205 || response.status === 304) {
+    return new NextResponse(null, {
+      status: response.status,
+      headers,
+    });
+  }
+
   if (contentType.includes("application/json")) {
     const payload = await response.json();
     return NextResponse.json(payload, {
