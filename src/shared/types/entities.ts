@@ -476,7 +476,6 @@ export type OrderCreatePayload = {
   documents: Array<{
     document_type: string;
     file_slot: string;
-    display_name?: string;
   }>;
 };
 

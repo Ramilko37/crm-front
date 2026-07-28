@@ -3034,7 +3034,6 @@ function OrdersPageContent() {
         return {
           document_type: resolvedDocumentType,
           file_slot: slot,
-          display_name: trimOrUndefined(document.display_name) ?? file.name,
         };
       });
 
@@ -3454,7 +3453,6 @@ function OrdersPageContent() {
         return [
           compact({
             document_type: docType,
-            display_name: trimOrUndefined(entry.display_name) ?? file.name,
             file_slot: slot,
           }),
         ];

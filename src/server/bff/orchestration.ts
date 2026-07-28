@@ -60,6 +60,15 @@ function pickArray(value: unknown): unknown[] | undefined {
   return undefined;
 }
 
+function pickDocuments(value: unknown): JsonObject[] {
+  return (pickArray(value) ?? []).flatMap((item) => {
+    const document = asObject(item);
+    const documentType = pickString(document.document_type);
+    const fileSlot = pickString(document.file_slot);
+    return documentType && fileSlot ? [{ document_type: documentType, file_slot: fileSlot }] : [];
+  });
+}
+
 function compactObject<T extends JsonObject>(value: T): T {
   const next: JsonObject = {};
   Object.entries(value).forEach(([key, item]) => {
@@ -88,7 +97,7 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
       order: pickObject(body.order) ?? {},
       factory_selection: pickObject(body.factory_selection) ?? {},
       goods_lines: pickArray(body.goods_lines) ?? [],
-      documents: pickArray(body.documents) ?? [],
+      documents: pickDocuments(body.documents),
     };
   }
 
@@ -143,7 +152,7 @@ export function buildInternalOrderMultipartPayload(payload: unknown) {
   });
 
   const goodsLines = pickArray(body.goods_lines) ?? [];
-  const documents = pickArray(body.documents) ?? [];
+  const documents = pickDocuments(body.documents);
 
   if (!order.additional_description && order.comment && goodsLines.length === 0) {
     order.additional_description = order.comment;
@@ -174,7 +183,7 @@ export function buildClientOrderMultipartPayload(payload: unknown) {
       order: pickObject(body.order) ?? {},
       factory_selection: pickObject(body.factory_selection) ?? {},
       goods_lines: pickArray(body.goods_lines) ?? [],
-      documents: pickArray(body.documents) ?? [],
+      documents: pickDocuments(body.documents),
     };
   }
 
@@ -212,7 +221,7 @@ export function buildClientOrderMultipartPayload(payload: unknown) {
   });
 
   const goodsLines = pickArray(body.goods_lines) ?? [];
-  const documents = pickArray(body.documents) ?? [];
+  const documents = pickDocuments(body.documents);
 
   if (!order.additional_description && order.comment && goodsLines.length === 0) {
     order.additional_description = order.comment;

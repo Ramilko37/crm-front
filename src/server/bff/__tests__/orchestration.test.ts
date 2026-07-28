@@ -133,7 +133,7 @@ describe("orchestration payload builders", () => {
         loading_address_id: 3,
       },
       goods_lines: [{ item_type: "chair" }],
-      documents: [{ document_type: "invoice", file_slot: "request_file_1" }],
+      documents: [{ document_type: "invoice", file_slot: "request_file_1", display_name: "invoice.pdf" }],
     });
 
     expect(payload).toEqual({
