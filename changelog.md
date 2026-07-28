@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-28
+
+### Orders / Filters
+- Закрыт frontend scope ORD-FLT-01: advanced-фильтры заказов сгруппированы в блоки `Основное`, `Участники`, `Документы и метки`, `Период`; сохранены прежние URL/API-параметры и поведение apply/reset.
+- Проверена адаптивность `/orders?filters_open=1` на desktop, 768px и 390px; на мобильном поля уходят в одну колонку, периодные presets остаются горизонтально прокручиваемыми.
+
+### Users / Filters
+- Закрыт frontend scope USR-FLT-01: `/users` получил компактную двухстрочную панель фильтров: поиск/компания/роль в первой строке, быстрые роли и признаки во второй.
+- Закрыт frontend scope USR-FLT-04: кнопки users-фильтра выровнены справа, `Применить` primary, `Сбросить` очищает URL в едином стиле с остальными CRM-разделами.
+- По USR-FLT-03 добавлены рабочие frontend quick chips для ролей `Только логисты` и `Только менеджеры`.
+- Browser/API check показал backend gap для полного USR-FLT-03: `GET /api/users?is_active=true/false` и `has_company/without_company/no_company` возвращают полный список; `company_id=null` отдаёт 422, поэтому `Только активные` и `Без компании` нельзя закрыть честно только фронтом.
+
+### Factories / Resources
+- Закрыт frontend scope FAC-RES-01: абстрактная кнопка и модалка `Ресурсы` переименованы в `Email и сертификаты`, потому что адреса погрузки уже доступны непосредственно в create/edit карточке фабрики.
+- В factory UI русифицированы labels `Primary Email`/`Primary` -> `Основной email`/`Основной`.
+
+### Chat / QA
+- Выполнен browser smoke для CHAT-EDT-01: `/client-messages` открывается, `/orders/1?panel=chat` грузит карточку заказа, chat endpoint возвращает 200 и две реплики отображаются в панели чата; composer доступен.
+- Полный acceptance CHAT-EDT-01 остаётся открытым QA scope: сохранение всех изменений, отмена, отсутствие дублей и параллельное редактирование требуют отдельного сценарного прогона.
+
+### Проверки
+- `pnpm lint`
+- `pnpm typecheck`
+- `pnpm build`
+
 ## 2026-07-27
 
 ### Backend TZ / Task Status
