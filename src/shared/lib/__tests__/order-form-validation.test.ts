@@ -10,6 +10,7 @@ import {
   validateOrderFormValues,
   mapOrderValidationIssueToNamePath,
   isCommercialOrderType,
+  getExistingLoadingAddressFieldErrors,
 } from "@/shared/lib/order-form-validation";
 import type { ApiValidationIssue } from "@/shared/lib/errors";
 import type { Country } from "@/shared/types/entities";
@@ -157,6 +158,26 @@ describe("order form validation", () => {
         { id: 8, city: "Roma" },
       ]),
     ).toEqual({ value: undefined, reason: "stale" });
+  });
+
+  it("rejects existing loading addresses without backend-required contact data", () => {
+    expect(
+      getExistingLoadingAddressFieldErrors({
+        postcode_id: 12,
+        city_id: 34,
+        contact_name: "",
+        phone: "12345",
+      }),
+    ).toEqual([{ name: ["loading_address_id"], message: "Выбранный адрес погрузки должен содержать контактное лицо" }]);
+
+    expect(
+      getExistingLoadingAddressFieldErrors({
+        postcode_id: 12,
+        city_id: 34,
+        contact_name: "Mario Rossi",
+        phone: "abc",
+      }),
+    ).toEqual([{ name: ["loading_address_id"], message: "Телефон в выбранном адресе погрузки невалиден" }]);
   });
 
   it("maps backend validation locations to order form name paths", () => {

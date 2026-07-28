@@ -102,6 +102,7 @@ import {
 } from "@/shared/lib/order-trip-assignment";
 import {
   factoryMatchesSelectedCountry,
+  getExistingLoadingAddressFieldErrors,
   isCommercialOrderType,
   mapOrderValidationIssueToNamePath,
   mergeDefinedOrderFormValues,
@@ -2575,12 +2576,7 @@ function OrdersPageContent() {
     }
 
     if (!isRequestOrder && values.factory_mode !== "create" && selectedLoadingAddress) {
-      if (!selectedLoadingAddress.postcode_id || !selectedLoadingAddress.city_id) {
-        fieldErrors.push({
-          name: ["loading_address_id"],
-          message: "Выберите адрес с индексом и городом или добавьте новый адрес",
-        });
-      }
+      fieldErrors.push(...getExistingLoadingAddressFieldErrors(selectedLoadingAddress));
     }
 
     if (fieldErrors.length) {
@@ -2616,12 +2612,7 @@ function OrdersPageContent() {
     }
 
     if (values.factory_mode !== "create" && selectedEditLoadingAddress) {
-      if (!selectedEditLoadingAddress.postcode_id || !selectedEditLoadingAddress.city_id) {
-        fieldErrors.push({
-          name: ["loading_address_id"],
-          message: "Выберите адрес с индексом и городом или добавьте новый адрес",
-        });
-      }
+      fieldErrors.push(...getExistingLoadingAddressFieldErrors(selectedEditLoadingAddress));
     }
 
     if (fieldErrors.length) {
@@ -2936,8 +2927,15 @@ function OrdersPageContent() {
 
   async function validateCreateStep(step: number) {
     const names = getCreateStepFieldNames(step);
-    if (!names.length) return;
-    await createForm.validateFields(names);
+    if (names.length) {
+      await createForm.validateFields(names);
+    }
+    if (createWizardSteps[step]?.key === "factory" && createFactoryMode !== "create") {
+      const fieldErrors = getExistingLoadingAddressFieldErrors(selectedLoadingAddress);
+      if (applyCreateFieldErrors(fieldErrors)) {
+        throw new Error("Invalid loading address");
+      }
+    }
   }
 
   async function goToCreateStep(nextStep: number) {
