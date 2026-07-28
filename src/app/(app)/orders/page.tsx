@@ -4805,214 +4805,237 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                 });
               }}
             >
-              <div className="crm-filter-grid">
-                <Form.Item name="id" className="crm-col-2" style={{ marginBottom: 0 }}>
-                  <InputNumber min={1} style={{ width: "100%" }} placeholder="ID" />
-                </Form.Item>
-                <Form.Item
-                  name="country"
-                  className="crm-col-2"
-                  style={{ marginBottom: 0 }}
-                  getValueProps={(countryName?: string) => ({
-                    value: findCountry(countryDirectory.countries, countryName)?.id,
-                  })}
-                  getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
-                    getCountryEnglishName(country) ?? undefined
-                  }
-                >
-                  <CountrySelect scope={countryDirectoryScope} allowClear placeholder="Страна" />
-                </Form.Item>
-            <Form.Item name="status_names" className="crm-col-4" style={{ marginBottom: 0 }}>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Статусы"
-                options={ORDER_STATUS_VALUES.map((status) => ({
-                  label: formatEnumCode(status),
-                  value: status,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item name="order_types" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Тип заказа"
-                options={ORDER_TYPE_VALUES.map((orderType) => ({
-                  label: formatEnumCode(orderType),
-                  value: orderType,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item name="quote_statuses" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Статус квоты"
-                options={QUOTE_STATUS_VALUES.map((quoteStatus) => ({
-                  label: formatEnumCode(quoteStatus),
-                  value: quoteStatus,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item name="user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterClientsQuery.isLoading}
-                options={filterClientOptions}
-                placeholder="Клиент"
-                notFoundContent={filterClientsQuery.isLoading ? "Загрузка..." : "Клиенты не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Клиент выбран")}
-                onSearch={setFilterClientQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterCompaniesQuery.isLoading}
-                options={filterCompanyOptions}
-                placeholder="Компания"
-                notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
-                onSearch={setFilterCompanyQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="personal_manager_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterManagersQuery.isLoading}
-                options={filterManagerOptions}
-                placeholder="Менеджер"
-                notFoundContent={filterManagersQuery.isLoading ? "Загрузка..." : "Менеджеры не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Менеджер выбран")}
-                onSearch={setFilterManagerQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="assigned_forwarder_user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterForwardersQuery.isLoading}
-                options={filterForwarderOptions}
-                placeholder="Экспедитор"
-                notFoundContent={filterForwardersQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Экспедитор выбран")}
-                onSearch={setFilterForwarderQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="factory_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterFactoriesQuery.isLoading}
-                options={filterFactoryOptions}
-                placeholder="Фабрика"
-                notFoundContent={filterFactoriesQuery.isLoading ? "Загрузка..." : "Фабрики не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Фабрика выбрана")}
-                onSearch={setFilterFactoryQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="trip_id" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={false}
-                loading={filterTripsQuery.isLoading}
-                options={filterTripOptions}
-                placeholder="Рейс"
-                notFoundContent={filterTripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
-                labelRender={({ label }) => (label ? String(label) : "Рейс выбран")}
-                onSearch={setFilterTripQueryText}
-              />
-            </Form.Item>
-            <Form.Item name="document_type" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                showSearch
-                filterOption={filterSelectOptionByLabel}
-                loading={createMetadataQuery.isLoading}
-                options={documentTypeOptions}
-                placeholder="Тип документа"
-                notFoundContent={createMetadataQuery.isLoading ? "Загрузка..." : "Типы не найдены"}
-              />
-            </Form.Item>
-            <Form.Item name="priority_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Select mode="tags" allowClear placeholder="Приоритеты" />
-            </Form.Item>
-            <Form.Item name="office_mark_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <Select mode="tags" allowClear placeholder="Отметки офиса" />
-            </Form.Item>
-            <Form.Item name="order_date_from" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан от" />
-            </Form.Item>
-            <Form.Item name="order_date_to" className="crm-col-3" style={{ marginBottom: 0 }}>
-              <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан до" />
-            </Form.Item>
-            <div className="crm-col-6 crm-order-period-presets">
-              <Segmented
-                size="small"
-                value={activeOrderPeriodPreset ?? ""}
-                options={ORDER_PERIOD_PRESET_OPTIONS}
-                onChange={(value) => {
-                  applyOrderPeriodPreset(value as OrderPeriodPresetCode);
-                }}
-              />
-            </div>
-            <Form.Item name="has_certificate" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="Сертификат"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="has_documents" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="Документы"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item name="is_checked" className="crm-col-2" style={{ marginBottom: 0 }}>
-              <Select
-                allowClear
-                placeholder="Проверен"
-                options={[
-                  { label: "Да", value: true },
-                  { label: "Нет", value: false },
-                ]}
-              />
-            </Form.Item>
-          </div>
+              <div className="crm-order-filter-groups">
+                <section className="crm-filter-group">
+                  <Typography.Text className="crm-filter-group-title">Основное</Typography.Text>
+                  <div className="crm-filter-grid crm-order-filter-grid">
+                    <Form.Item name="id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <InputNumber min={1} style={{ width: "100%" }} placeholder="ID" />
+                    </Form.Item>
+                    <Form.Item
+                      name="country"
+                      className="crm-col-3"
+                      style={{ marginBottom: 0 }}
+                      getValueProps={(countryName?: string) => ({
+                        value: findCountry(countryDirectory.countries, countryName)?.id,
+                      })}
+                      getValueFromEvent={(_countryId: number | undefined, country: Country | undefined) =>
+                        getCountryEnglishName(country) ?? undefined
+                      }
+                    >
+                      <CountrySelect scope={countryDirectoryScope} allowClear placeholder="Страна" />
+                    </Form.Item>
+                    <Form.Item name="status_names" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder="Статусы"
+                        options={ORDER_STATUS_VALUES.map((status) => ({
+                          label: formatEnumCode(status),
+                          value: status,
+                        }))}
+                      />
+                    </Form.Item>
+                    <Form.Item name="order_types" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder="Тип заказа"
+                        options={ORDER_TYPE_VALUES.map((orderType) => ({
+                          label: formatEnumCode(orderType),
+                          value: orderType,
+                        }))}
+                      />
+                    </Form.Item>
+                    <Form.Item name="quote_statuses" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder="Статус квоты"
+                        options={QUOTE_STATUS_VALUES.map((quoteStatus) => ({
+                          label: formatEnumCode(quoteStatus),
+                          value: quoteStatus,
+                        }))}
+                      />
+                    </Form.Item>
+                  </div>
+                </section>
 
-          <div className="crm-filter-actions">
-            <Button type="primary" htmlType="submit">
-              Применить
-            </Button>
-            <Button
-              onClick={() => {
-                filterForm.resetFields();
-                persistFilterPanelOpenState(false);
-                router.replace("/orders?filters_open=0");
-              }}
-            >
-              Сбросить
-            </Button>
-          </div>
-        </Form>
+                <section className="crm-filter-group">
+                  <Typography.Text className="crm-filter-group-title">Участники</Typography.Text>
+                  <div className="crm-filter-grid crm-order-filter-grid">
+                    <Form.Item name="user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterClientsQuery.isLoading}
+                        options={filterClientOptions}
+                        placeholder="Клиент"
+                        notFoundContent={filterClientsQuery.isLoading ? "Загрузка..." : "Клиенты не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Клиент выбран")}
+                        onSearch={setFilterClientQueryText}
+                      />
+                    </Form.Item>
+                    <Form.Item name="company_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterCompaniesQuery.isLoading}
+                        options={filterCompanyOptions}
+                        placeholder="Компания"
+                        notFoundContent={filterCompaniesQuery.isLoading ? "Загрузка..." : "Компании не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Компания выбрана")}
+                        onSearch={setFilterCompanyQueryText}
+                      />
+                    </Form.Item>
+                    <Form.Item name="personal_manager_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterManagersQuery.isLoading}
+                        options={filterManagerOptions}
+                        placeholder="Менеджер"
+                        notFoundContent={filterManagersQuery.isLoading ? "Загрузка..." : "Менеджеры не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Менеджер выбран")}
+                        onSearch={setFilterManagerQueryText}
+                      />
+                    </Form.Item>
+                    <Form.Item name="assigned_forwarder_user_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterForwardersQuery.isLoading}
+                        options={filterForwarderOptions}
+                        placeholder="Экспедитор"
+                        notFoundContent={filterForwardersQuery.isLoading ? "Загрузка..." : "Экспедиторы не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Экспедитор выбран")}
+                        onSearch={setFilterForwarderQueryText}
+                      />
+                    </Form.Item>
+                    <Form.Item name="factory_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterFactoriesQuery.isLoading}
+                        options={filterFactoryOptions}
+                        placeholder="Фабрика"
+                        notFoundContent={filterFactoriesQuery.isLoading ? "Загрузка..." : "Фабрики не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Фабрика выбрана")}
+                        onSearch={setFilterFactoryQueryText}
+                      />
+                    </Form.Item>
+                    <Form.Item name="trip_id" className="crm-col-2" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={false}
+                        loading={filterTripsQuery.isLoading}
+                        options={filterTripOptions}
+                        placeholder="Рейс"
+                        notFoundContent={filterTripsQuery.isLoading ? "Загрузка..." : "Рейсы не найдены"}
+                        labelRender={({ label }) => (label ? String(label) : "Рейс выбран")}
+                        onSearch={setFilterTripQueryText}
+                      />
+                    </Form.Item>
+                  </div>
+                </section>
+
+                <section className="crm-filter-group">
+                  <Typography.Text className="crm-filter-group-title">Документы и метки</Typography.Text>
+                  <div className="crm-filter-grid crm-order-filter-grid">
+                    <Form.Item name="document_type" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        showSearch
+                        filterOption={filterSelectOptionByLabel}
+                        loading={createMetadataQuery.isLoading}
+                        options={documentTypeOptions}
+                        placeholder="Тип документа"
+                        notFoundContent={createMetadataQuery.isLoading ? "Загрузка..." : "Типы не найдены"}
+                      />
+                    </Form.Item>
+                    <Form.Item name="priority_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <Select mode="tags" allowClear placeholder="Приоритеты" />
+                    </Form.Item>
+                    <Form.Item name="office_mark_codes" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <Select mode="tags" allowClear placeholder="Отметки офиса" />
+                    </Form.Item>
+                    <Form.Item name="has_certificate" className="crm-col-1" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        placeholder="Сертификат"
+                        options={[
+                          { label: "Да", value: true },
+                          { label: "Нет", value: false },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item name="has_documents" className="crm-col-1" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        placeholder="Документы"
+                        options={[
+                          { label: "Да", value: true },
+                          { label: "Нет", value: false },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item name="is_checked" className="crm-col-1" style={{ marginBottom: 0 }}>
+                      <Select
+                        allowClear
+                        placeholder="Проверен"
+                        options={[
+                          { label: "Да", value: true },
+                          { label: "Нет", value: false },
+                        ]}
+                      />
+                    </Form.Item>
+                  </div>
+                </section>
+
+                <section className="crm-filter-group">
+                  <Typography.Text className="crm-filter-group-title">Период</Typography.Text>
+                  <div className="crm-filter-grid crm-order-filter-grid">
+                    <Form.Item name="order_date_from" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан от" />
+                    </Form.Item>
+                    <Form.Item name="order_date_to" className="crm-col-3" style={{ marginBottom: 0 }}>
+                      <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" placeholder="Создан до" />
+                    </Form.Item>
+                    <div className="crm-col-6 crm-order-period-presets">
+                      <Segmented
+                        size="small"
+                        value={activeOrderPeriodPreset ?? ""}
+                        options={ORDER_PERIOD_PRESET_OPTIONS}
+                        onChange={(value) => {
+                          applyOrderPeriodPreset(value as OrderPeriodPresetCode);
+                        }}
+                      />
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div className="crm-filter-actions crm-order-filter-actions">
+                <Button type="primary" htmlType="submit">
+                  Применить
+                </Button>
+                <Button
+                  onClick={() => {
+                    filterForm.resetFields();
+                    persistFilterPanelOpenState(false);
+                    router.replace("/orders?filters_open=0");
+                  }}
+                >
+                  Сбросить
+                </Button>
+              </div>
+            </Form>
       </FilterPanel>
 
       <Card className="crm-panel crm-status-tabs-bar">

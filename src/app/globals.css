@@ -243,6 +243,10 @@ a {
   gap: 8px 12px;
 }
 
+.crm-col-1 {
+  grid-column: span 1;
+}
+
 .crm-col-3 {
   grid-column: span 3;
 }
@@ -257,6 +261,10 @@ a {
 
 .crm-col-6 {
   grid-column: span 6;
+}
+
+.crm-col-8 {
+  grid-column: span 8;
 }
 
 .crm-col-2 {
@@ -275,6 +283,61 @@ a {
 
 .crm-order-period-presets .ant-segmented {
   min-width: max-content;
+}
+
+.crm-order-filter-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crm-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.crm-filter-group-title {
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.crm-order-filter-grid {
+  gap: 6px 10px;
+}
+
+.crm-order-filter-actions {
+  justify-content: flex-end;
+}
+
+.crm-user-filter-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crm-user-filter-row {
+  gap: 8px 12px;
+}
+
+.crm-user-filter-actions {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.crm-user-quick-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.crm-user-quick-filters .ant-tag {
+  margin-inline-end: 0;
 }
 
 .crm-bulk-card .ant-card-body {
@@ -1075,8 +1138,14 @@ body.crm-column-resizing * {
   .crm-col-3,
   .crm-col-4,
   .crm-col-5,
-  .crm-col-6 {
+  .crm-col-6,
+  .crm-col-8 {
     grid-column: span 6;
+  }
+
+  .crm-order-filter-grid .crm-col-1,
+  .crm-order-filter-grid .crm-col-2 {
+    grid-column: span 3;
   }
 }
 
@@ -1099,8 +1168,15 @@ body.crm-column-resizing * {
   .crm-col-4,
   .crm-col-5,
   .crm-col-6,
+  .crm-col-8,
+  .crm-col-1,
   .crm-col-2,
   .crm-col-12 {
+    grid-column: span 12;
+  }
+
+  .crm-order-filter-grid .crm-col-1,
+  .crm-order-filter-grid .crm-col-2 {
     grid-column: span 12;
   }
 
