@@ -858,7 +858,7 @@ function FactoriesPageContent() {
       render: (v) => v ?? "-",
       width: 150,
     },
-    { title: "Primary Email", dataIndex: "primary_email", key: "primary_email", render: (v) => v ?? "-" },
+    { title: "Основной email", dataIndex: "primary_email", key: "primary_email", render: (v) => v ?? "-" },
     {
       title: "Сертификат",
       dataIndex: "certificate_status",
@@ -880,7 +880,7 @@ function FactoriesPageContent() {
             </Button>
           ) : null}
           <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
-            Ресурсы
+            Email и сертификаты
           </Button>
         </Space>
       ),
@@ -920,7 +920,7 @@ function FactoriesPageContent() {
     { title: "ID", dataIndex: "id", key: "id", width: 90 },
     { title: "Email", dataIndex: "email", key: "email" },
     {
-      title: "Primary",
+      title: "Основной",
       dataIndex: "is_primary",
       key: "is_primary",
       width: 120,
@@ -1078,7 +1078,7 @@ function FactoriesPageContent() {
     <Space orientation="vertical" size={16} className="crm-page-stack">
       <PageHeader
         title="Фабрики"
-        subtitle="Каталог фабрик, адреса погрузки, emails и сертификаты."
+        subtitle="Каталог фабрик, адреса погрузки, email-адреса и сертификаты."
         actions={
           canMutate ? (
             <Button type="primary" onClick={() => setCreateOpen(true)}>
@@ -1216,7 +1216,7 @@ function FactoriesPageContent() {
                       <strong>{record.city ?? "-"}</strong>
                     </div>
                     <div className="crm-row-meta-item" style={{ gridColumn: "1 / -1" }}>
-                      Primary Email
+                      Основной email
                       <strong>{record.primary_email ?? "-"}</strong>
                     </div>
                   </div>
@@ -1228,7 +1228,7 @@ function FactoriesPageContent() {
                       </Button>
                     ) : null}
                     <Button size="small" icon={<SettingOutlined />} onClick={() => openResources(record)}>
-                      Ресурсы
+                      Email и сертификаты
                     </Button>
                   </div>
                 </article>
@@ -1582,7 +1582,7 @@ function FactoriesPageContent() {
       </Modal>
 
       <Modal
-        title={`Ресурсы фабрики #${selectedFactory?.id ?? ""} — ${selectedFactory?.name ?? ""}`}
+        title={`Email и сертификаты фабрики #${selectedFactory?.id ?? ""} — ${selectedFactory?.name ?? ""}`}
         open={resourcesOpen}
         destroyOnHidden
         width={980}
@@ -1602,7 +1602,7 @@ function FactoriesPageContent() {
           items={[
             {
               key: "emails",
-              label: "Emails",
+              label: "Email-адреса",
               children: (
                 <Space orientation="vertical" style={{ width: "100%" }} size={12}>
                   {canMutate ? (
@@ -1614,7 +1614,7 @@ function FactoriesPageContent() {
                       <Form.Item name="email" rules={[{ required: true, message: "Введите email" }]}>
                         <Input placeholder="Email" style={{ width: 280 }} />
                       </Form.Item>
-                      <Form.Item name="is_primary" label="Primary" valuePropName="checked" initialValue={false}>
+                      <Form.Item name="is_primary" label="Основной" valuePropName="checked" initialValue={false}>
                         <Switch />
                       </Form.Item>
                       <Button type="primary" htmlType="submit" loading={createEmailMutation.isPending}>
@@ -1734,7 +1734,7 @@ function FactoriesPageContent() {
           <Form.Item name="email" label="Email" rules={[{ required: true }]}> 
             <Input />
           </Form.Item>
-          <Form.Item name="is_primary" label="Primary" valuePropName="checked">
+          <Form.Item name="is_primary" label="Основной" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
