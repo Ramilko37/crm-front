@@ -94,6 +94,13 @@ import {
   type OrderPeriodPresetCode,
 } from "@/shared/lib/order-period-presets";
 import {
+  type AssignTripPreview,
+  type BulkAssignTripPreview,
+  type BulkAssignTripPreviewItem,
+  buildAssignTripConfirmPayload,
+  getAssignTripEligibilityErrorMessage,
+} from "@/shared/lib/order-trip-assignment";
+import {
   factoryMatchesSelectedCountry,
   isCommercialOrderType,
   mapOrderValidationIssueToNamePath,
@@ -346,6 +353,23 @@ type OrderBulkEndpoint =
   | "cancel-pickup"
   | "special-tariff";
 
+type AssignTripConfirmState = {
+  preview: AssignTripPreview;
+  expiresAt: number;
+  orderLabel: string;
+  previousTripId: number | null;
+};
+
+type BulkAssignTripConfirmState = {
+  preview: BulkAssignTripPreview;
+  expiresAt: number;
+};
+
+type EditAssignTripConfirmState = AssignTripConfirmState & {
+  id: number;
+  payload: OrderEditForm;
+};
+
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -527,7 +551,6 @@ const QUANTITY_UNIT_FALLBACK_OPTIONS = [
 ];
 
 const PHONE_FORMAT_REGEX = /^[0-9()+\-\s]{5,32}$/;
-const ORDER_TRIP_SOURCE_MISMATCH_CODE = "order-trip-source-mismatch";
 const REQUEST_DOCUMENT_TYPE_OPTIONS = [
   { label: "WORD", value: "word" },
   { label: "XLSX", value: "xlsx" },
@@ -559,13 +582,41 @@ function formatRatio(numerator: string | undefined, denominator: string | undefi
   }).format(nextNumerator / nextDenominator);
 }
 
-function isOrderTripSourceMismatch(detail: string | undefined) {
-  if (!detail) return false;
-  return detail.toLowerCase().includes(ORDER_TRIP_SOURCE_MISMATCH_CODE);
+function getAssignTripErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError) {
+    return getAssignTripEligibilityErrorMessage(error.detail);
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
 }
 
-function getOrderTripSourceMismatchMessage() {
-  return "Заказ не совпадает с точками выбранного рейса";
+function getOrderLabel(order: Pick<OrderListItem, "id" | "order_number"> | null | undefined) {
+  const orderNumber = order?.order_number?.trim();
+  return orderNumber ? orderNumber : order?.id ? `#${order.id}` : "—";
+}
+
+function getPreviewExpiresAt(expiresInSec: number) {
+  return Date.now() + expiresInSec * 1000;
+}
+
+function isAssignTripPreviewExpiring(expiresAt: number | undefined, now: number) {
+  return expiresAt !== undefined && expiresAt - now <= 30_000;
+}
+
+function formatAssignTripPreviewMeasure(
+  actual: string | null | undefined,
+  declared: string | null | undefined,
+  unit: string,
+) {
+  const value = actual ?? declared;
+  if (!value) return "—";
+  return `${value} ${unit} ${actual ? "(факт)" : "(заявл.)"}`;
+}
+
+function shouldPreviewTripAssignment(previousTripId: number | null | undefined, nextTripId: number | null | undefined) {
+  return nextTripId != null && nextTripId !== (previousTripId ?? null);
 }
 
 function formatOrderActivityDate(value: string | null | undefined) {
@@ -919,6 +970,10 @@ function OrdersPageContent() {
   const [editFactoryLoadingAddressQuickForm] = Form.useForm<{ name?: string; address?: string; postcode_id?: number; city_id?: number }>();
   const [goodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
   const [editGoodsLineQuickForm] = Form.useForm<OrderCreateGoodsLineForm>();
+  const [assignTripConfirm, setAssignTripConfirm] = useState<AssignTripConfirmState | null>(null);
+  const [bulkAssignTripConfirm, setBulkAssignTripConfirm] = useState<BulkAssignTripConfirmState | null>(null);
+  const [editAssignTripConfirm, setEditAssignTripConfirm] = useState<EditAssignTripConfirmState | null>(null);
+  const [assignTripPreviewTick, setAssignTripPreviewTick] = useState(() => Date.now());
   const loadingAddressQuickPostcodeId = Form.useWatch("postcode_id", factoryLoadingAddressQuickForm) as number | undefined;
   const editLoadingAddressQuickPostcodeId = Form.useWatch("postcode_id", editFactoryLoadingAddressQuickForm) as number | undefined;
   const createFactoryId = Form.useWatch("factory_id", createForm);
@@ -972,6 +1027,9 @@ function OrdersPageContent() {
     () => editGoodsLineRowsFromForm ?? ((editDraftRecord?.values.goods_lines as OrderCreateGoodsLineForm[] | undefined) ?? []),
     [editDraftRecord?.values.goods_lines, editGoodsLineRowsFromForm],
   );
+  const isSingleAssignTripConfirmExpiring = isAssignTripPreviewExpiring(assignTripConfirm?.expiresAt, assignTripPreviewTick);
+  const isBulkAssignTripConfirmExpiring = isAssignTripPreviewExpiring(bulkAssignTripConfirm?.expiresAt, assignTripPreviewTick);
+  const isEditAssignTripConfirmExpiring = isAssignTripPreviewExpiring(editAssignTripConfirm?.expiresAt, assignTripPreviewTick);
 
   const params = useMemo(() => getParams(searchParams), [searchParams]);
   const [orderSearchText, setOrderSearchText] = useState(params.query ?? "");
@@ -1035,6 +1093,13 @@ function OrdersPageContent() {
     setSavedFilterName("");
     defaultSavedFilterAppliedRef.current = false;
   }, [savedOrderFiltersStorageKey]);
+
+  useEffect(() => {
+    if (!assignTripConfirm && !bulkAssignTripConfirm && !editAssignTripConfirm) return;
+    setAssignTripPreviewTick(Date.now());
+    const intervalId = window.setInterval(() => setAssignTripPreviewTick(Date.now()), 10_000);
+    return () => window.clearInterval(intervalId);
+  }, [assignTripConfirm, bulkAssignTripConfirm, editAssignTripConfirm]);
 
   useEffect(() => {
     if (defaultSavedFilterAppliedRef.current || hasCurrentSavedFilterParams || searchParams.has("filters_open")) return;
@@ -2162,10 +2227,14 @@ function OrdersPageContent() {
     }
   }
 
-  function invalidateOrdersQueries(orderId?: number) {
+  function invalidateOrdersQueries(orderId?: number, tripIds: Array<number | null | undefined> = []) {
+    const affectedTripIds = Array.from(
+      new Set(tripIds.filter((tripId): tripId is number => typeof tripId === "number" && Number.isFinite(tripId))),
+    );
     return Promise.all([
       queryClient.invalidateQueries({ queryKey: ["orders"] }),
       orderId ? queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(orderId) }) : Promise.resolve(),
+      affectedTripIds.length ? queryClient.invalidateQueries({ queryKey: ["trips"] }) : Promise.resolve(),
     ]);
   }
 
@@ -3226,8 +3295,88 @@ function OrdersPageContent() {
     },
   });
 
+  const previewAssignTripMutation = useMutation({
+    mutationFn: ({ id, trip_id }: { id: number; trip_id: number }) =>
+      apiRequest<AssignTripPreview>(`/api/orders/${id}/assign-trip/preview`, {
+        method: "POST",
+        body: { trip_id },
+      }),
+    onSuccess: (preview, values) => {
+      const order = selected?.id === values.id ? selected : undefined;
+      setAssignTripConfirm({
+        preview,
+        expiresAt: getPreviewExpiresAt(preview.expires_in_sec),
+        orderLabel: getOrderLabel(order ?? { id: values.id, order_number: null }),
+        previousTripId: order?.trip_id ?? null,
+      });
+      setAssignOpen(false);
+    },
+    onError: (error) => {
+      message.error(getAssignTripErrorMessage(error, "Ошибка проверки рейса"));
+    },
+  });
+
+  const previewBulkAssignTripMutation = useMutation({
+    mutationFn: ({ order_ids, trip_id }: { order_ids: number[]; trip_id: number }) =>
+      apiRequest<BulkAssignTripPreview>("/api/orders/bulk/assign-trip/preview", {
+        method: "POST",
+        body: { order_ids, trip_id },
+      }),
+    onSuccess: (preview) => {
+      setBulkAssignTripConfirm({
+        preview,
+        expiresAt: getPreviewExpiresAt(preview.expires_in_sec),
+      });
+      setBulkAssignOpen(false);
+    },
+    onError: (error) => {
+      message.error(getAssignTripErrorMessage(error, "Ошибка проверки рейса"));
+    },
+  });
+
+  const previewEditAssignTripMutation = useMutation({
+    mutationFn: ({
+      id,
+      trip_id,
+      payload,
+      previousTripId,
+      orderLabel,
+    }: {
+      id: number;
+      trip_id: number;
+      payload: OrderEditForm;
+      previousTripId: number | null;
+      orderLabel: string;
+    }) =>
+      apiRequest<AssignTripPreview>(`/api/orders/${id}/assign-trip/preview`, {
+        method: "POST",
+        body: { trip_id },
+      }).then((preview) => ({ preview, id, payload, previousTripId, orderLabel })),
+    onSuccess: ({ preview, id, payload, previousTripId, orderLabel }) => {
+      setEditAssignTripConfirm({
+        preview,
+        id,
+        payload,
+        previousTripId,
+        orderLabel,
+        expiresAt: getPreviewExpiresAt(preview.expires_in_sec),
+      });
+    },
+    onError: (error) => {
+      message.error(getAssignTripErrorMessage(error, "Ошибка проверки рейса"));
+    },
+  });
+
   const updateMutation = useMutation({
-    mutationFn: async ({ id, payload }: { id: number; payload: OrderEditForm }) => {
+    mutationFn: async ({
+      id,
+      payload,
+      confirmationToken,
+    }: {
+      id: number;
+      payload: OrderEditForm;
+      confirmationToken?: string;
+    }) => {
       const compact = <T extends Record<string, unknown>>(source: T) =>
         Object.fromEntries(
           Object.entries(source).filter(([, value]) => value !== undefined),
@@ -3279,6 +3428,7 @@ function OrdersPageContent() {
         is_factory_payment_completed: payload.is_factory_payment_completed,
         mrn: trimOrUndefined(payload.mrn),
         trip_id: payload.trip_id ?? null,
+        confirmation_token: confirmationToken,
       });
 
       const factorySelection = buildOrderFactorySelectionPayload(payload);
@@ -3328,16 +3478,17 @@ function OrdersPageContent() {
         body: formData,
       });
     },
-    onSuccess: async (_, values) => {
+    onSuccess: async (updatedOrder) => {
       message.success("Заказ обновлен");
-      if (values?.id) {
-        resetEditDraft(values.id);
+      setEditAssignTripConfirm(null);
+      if (updatedOrder?.id) {
+        resetEditDraft(updatedOrder.id);
       }
       if (selected?.id) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(selected.id) });
         await editDetailQuery.refetch();
       }
-      await invalidateOrdersQueries(values.id);
+      await invalidateOrdersQueries(updatedOrder.id, [updatedOrder.trip_id, selected?.trip_id]);
     },
     onError: (error) => {
       if (error instanceof ApiError) {
@@ -3379,23 +3530,29 @@ function OrdersPageContent() {
   });
 
   const assignTripMutation = useMutation({
-    mutationFn: ({ id, trip_id }: { id: number; trip_id?: number }) =>
+    mutationFn: ({
+      id,
+      trip_id,
+      confirmation_token,
+    }: {
+      id: number;
+      trip_id?: number | null;
+      confirmation_token?: string | null;
+    }) =>
       apiRequest<OrderDetail>(`/api/orders/${id}/assign-trip`, {
         method: "POST",
-        body: { trip_id: trip_id ?? null },
+        body: buildAssignTripConfirmPayload({ tripId: trip_id ?? null, confirmationToken: confirmation_token }),
       }),
     onSuccess: async (_, values) => {
       message.success("Рейс назначен");
+      const confirmedTrip = assignTripConfirm;
+      setAssignTripConfirm(null);
       setAssignOpen(false);
       assignForm.resetFields();
-      await invalidateOrdersQueries(values.id);
+      await invalidateOrdersQueries(values.id, [values.trip_id, confirmedTrip?.previousTripId]);
     },
     onError: (error) => {
-      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
-        message.error(getOrderTripSourceMismatchMessage());
-        return;
-      }
-      message.error(error instanceof ApiError ? error.detail : "Ошибка назначения рейса");
+      message.error(getAssignTripErrorMessage(error, "Ошибка назначения рейса"));
     },
   });
 
@@ -3559,8 +3716,9 @@ function OrdersPageContent() {
         method: "POST",
         body,
       }),
-    onSuccess: async (payload) => {
+    onSuccess: async (payload, values) => {
       message.success(`Операция выполнена. Обновлено: ${payload.updated_count}`);
+      setBulkAssignTripConfirm(null);
       setBulkStatusOpen(false);
       setBulkAssignOpen(false);
       setBulkPickupOpen(false);
@@ -3572,14 +3730,13 @@ function OrdersPageContent() {
       bulkSpecialTariffForm.resetFields();
       bulkCommentForm.resetFields();
       setSelectedRowKeys([]);
-      await invalidateOrdersQueries();
+      await invalidateOrdersQueries(
+        undefined,
+        values.endpoint === "assign-trip" ? [Number(values.body.trip_id)] : [],
+      );
     },
     onError: (error) => {
-      if (error instanceof ApiError && isOrderTripSourceMismatch(error.detail)) {
-        message.error(getOrderTripSourceMismatchMessage());
-        return;
-      }
-      message.error(error instanceof ApiError ? error.detail : "Ошибка массовой операции");
+      message.error(getAssignTripErrorMessage(error, "Ошибка массовой операции"));
     },
   });
 
@@ -3735,6 +3892,28 @@ function OrdersPageContent() {
             }
           : previous,
     );
+  }
+
+  function submitOrderEdit(values: OrderEditForm) {
+    if (!selected) return;
+    if (!validateEditOrderBeforeSubmit(values)) {
+      return;
+    }
+
+    const nextTripId = values.trip_id ?? null;
+    const previousTripId = selected.trip_id ?? null;
+    if (nextTripId !== null && shouldPreviewTripAssignment(previousTripId, nextTripId)) {
+      previewEditAssignTripMutation.mutate({
+        id: selected.id,
+        trip_id: nextTripId,
+        payload: values,
+        previousTripId,
+        orderLabel: getOrderLabel(selected),
+      });
+      return;
+    }
+
+    updateMutation.mutate({ id: selected.id, payload: values });
   }
 
   useEffect(() => {
@@ -6829,11 +7008,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             });
           }}
           onFinish={(values) => {
-            if (!selected) return;
-            if (!validateEditOrderBeforeSubmit(values)) {
-              return;
-            }
-            updateMutation.mutate({ id: selected.id, payload: values });
+            submitOrderEdit(values);
           }}
         >
           <div className="crm-order-create-section">
@@ -7431,7 +7606,11 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               >
                 Отмена
               </Button>
-              <Button type="primary" loading={updateMutation.isPending} onClick={() => editForm.submit()}>
+              <Button
+                type="primary"
+                loading={updateMutation.isPending || previewEditAssignTripMutation.isPending}
+                onClick={() => editForm.submit()}
+              >
                 Сохранить
               </Button>
             </>
@@ -7706,14 +7885,21 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
         destroyOnHidden
         onCancel={() => setAssignOpen(false)}
         onOk={() => assignForm.submit()}
-        confirmLoading={assignTripMutation.isPending}
+        confirmLoading={assignTripMutation.isPending || previewAssignTripMutation.isPending}
       >
         <Form
           form={assignForm}
           layout="vertical"
           onFinish={(values: { trip_id?: number }) => {
             if (!selected) return;
-            assignTripMutation.mutate({
+            if (values.trip_id == null) {
+              assignTripMutation.mutate({
+                id: selected.id,
+                trip_id: null,
+              });
+              return;
+            }
+            previewAssignTripMutation.mutate({
               id: selected.id,
               trip_id: values.trip_id,
             });
@@ -7732,6 +7918,68 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Подтвердить добавление в рейс"
+        open={Boolean(assignTripConfirm)}
+        destroyOnHidden
+        onCancel={() => setAssignTripConfirm(null)}
+        onOk={() => {
+          if (!assignTripConfirm) return;
+            assignTripMutation.mutate({
+              id: assignTripConfirm.preview.order_id,
+              trip_id: assignTripConfirm.preview.trip_id,
+              confirmation_token: assignTripConfirm.preview.confirmation_token,
+            });
+          }}
+        okText="Подтвердить добавление"
+        cancelText="Отмена"
+        confirmLoading={assignTripMutation.isPending}
+        okButtonProps={{ disabled: isSingleAssignTripConfirmExpiring }}
+      >
+        {assignTripConfirm ? (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Descriptions
+              size="small"
+              column={1}
+              items={[
+                { key: "order", label: "Заказ", children: assignTripConfirm.orderLabel },
+                {
+                  key: "trip",
+                  label: "Рейс",
+                  children: `${assignTripConfirm.preview.trip_name ?? "—"} (#${assignTripConfirm.preview.trip_id})`,
+                },
+                {
+                  key: "point",
+                  label: "Точка погрузки",
+                  children: `${assignTripConfirm.preview.loading_point_name ?? "—"} · sequence ${assignTripConfirm.preview.loading_point_sequence}`,
+                },
+                {
+                  key: "volume",
+                  label: "Объем",
+                  children: formatAssignTripPreviewMeasure(
+                    assignTripConfirm.preview.actual_volume_m3,
+                    assignTripConfirm.preview.declared_volume_m3,
+                    "м³",
+                  ),
+                },
+                {
+                  key: "weight",
+                  label: "Вес",
+                  children: formatAssignTripPreviewMeasure(
+                    assignTripConfirm.preview.actual_weight_kg,
+                    assignTripConfirm.preview.declared_total_weight_kg,
+                    "кг",
+                  ),
+                },
+              ]}
+            />
+            {isSingleAssignTripConfirmExpiring ? (
+              <Typography.Text type="warning">Время подтверждения почти истекло — повторите проверку.</Typography.Text>
+            ) : null}
+          </Space>
+        ) : null}
       </Modal>
 
       <Modal
@@ -7974,14 +8222,21 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
         destroyOnHidden
         onCancel={() => setBulkAssignOpen(false)}
         onOk={() => bulkAssignForm.submit()}
-        confirmLoading={bulkMutation.isPending}
+        confirmLoading={bulkMutation.isPending || previewBulkAssignTripMutation.isPending}
       >
         <Form
           form={bulkAssignForm}
           layout="vertical"
           onFinish={(values: { trip_id?: number }) => {
-            runBulkMutation("assign-trip", {
-              trip_id: values.trip_id ?? null,
+            if (values.trip_id == null) {
+              runBulkMutation("assign-trip", {
+                trip_id: null,
+              });
+              return;
+            }
+            previewBulkAssignTripMutation.mutate({
+              order_ids: selectedRowKeys,
+              trip_id: values.trip_id,
             });
           }}
         >
@@ -7998,6 +8253,147 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Подтвердить массовое добавление в рейс"
+        open={Boolean(bulkAssignTripConfirm)}
+        width={760}
+        destroyOnHidden
+        onCancel={() => setBulkAssignTripConfirm(null)}
+        onOk={() => {
+          if (!bulkAssignTripConfirm) return;
+          const confirmPayload = buildAssignTripConfirmPayload({
+            tripId: bulkAssignTripConfirm.preview.trip_id,
+            confirmationToken: bulkAssignTripConfirm.preview.confirmation_token,
+          });
+          bulkMutation.mutate({
+            endpoint: "assign-trip",
+            body: {
+              order_ids: bulkAssignTripConfirm.preview.order_ids,
+              ...confirmPayload,
+            },
+          });
+        }}
+        okText="Подтвердить добавление"
+        cancelText="Отмена"
+        confirmLoading={bulkMutation.isPending}
+        okButtonProps={{ disabled: isBulkAssignTripConfirmExpiring }}
+      >
+        {bulkAssignTripConfirm ? (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Descriptions
+              size="small"
+              column={1}
+              items={[
+                {
+                  key: "trip",
+                  label: "Рейс",
+                  children: `${bulkAssignTripConfirm.preview.trip_name ?? "—"} (#${bulkAssignTripConfirm.preview.trip_id})`,
+                },
+                {
+                  key: "orders",
+                  label: "Заказов",
+                  children: bulkAssignTripConfirm.preview.order_ids.length,
+                },
+              ]}
+            />
+            <Table<BulkAssignTripPreviewItem>
+              size="small"
+              rowKey="order_id"
+              pagination={false}
+              dataSource={bulkAssignTripConfirm.preview.items}
+              columns={[
+                { title: "Заказ", dataIndex: "order_id", key: "order_id", width: 96 },
+                {
+                  title: "Точка погрузки",
+                  key: "loading_point",
+                  render: (_, item) =>
+                    `${item.loading_point_name ?? "—"} · sequence ${item.loading_point_sequence}`,
+                },
+                {
+                  title: "Объем",
+                  key: "volume",
+                  width: 150,
+                  render: (_, item) =>
+                    formatAssignTripPreviewMeasure(item.actual_volume_m3, item.declared_volume_m3, "м³"),
+                },
+                {
+                  title: "Вес",
+                  key: "weight",
+                  width: 150,
+                  render: (_, item) =>
+                    formatAssignTripPreviewMeasure(item.actual_weight_kg, item.declared_total_weight_kg, "кг"),
+                },
+              ]}
+            />
+            {isBulkAssignTripConfirmExpiring ? (
+              <Typography.Text type="warning">Время подтверждения почти истекло — повторите проверку.</Typography.Text>
+            ) : null}
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title="Подтвердить изменение рейса"
+        open={Boolean(editAssignTripConfirm)}
+        destroyOnHidden
+        onCancel={() => setEditAssignTripConfirm(null)}
+        onOk={() => {
+          if (!editAssignTripConfirm) return;
+          updateMutation.mutate({
+            id: editAssignTripConfirm.id,
+            payload: editAssignTripConfirm.payload,
+            confirmationToken: editAssignTripConfirm.preview.confirmation_token,
+          });
+        }}
+        okText="Подтвердить добавление"
+        cancelText="Отмена"
+        confirmLoading={updateMutation.isPending}
+        okButtonProps={{ disabled: isEditAssignTripConfirmExpiring }}
+      >
+        {editAssignTripConfirm ? (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Descriptions
+              size="small"
+              column={1}
+              items={[
+                { key: "order", label: "Заказ", children: editAssignTripConfirm.orderLabel },
+                {
+                  key: "trip",
+                  label: "Рейс",
+                  children: `${editAssignTripConfirm.preview.trip_name ?? "—"} (#${editAssignTripConfirm.preview.trip_id})`,
+                },
+                {
+                  key: "point",
+                  label: "Точка погрузки",
+                  children: `${editAssignTripConfirm.preview.loading_point_name ?? "—"} · sequence ${editAssignTripConfirm.preview.loading_point_sequence}`,
+                },
+                {
+                  key: "volume",
+                  label: "Объем",
+                  children: formatAssignTripPreviewMeasure(
+                    editAssignTripConfirm.preview.actual_volume_m3,
+                    editAssignTripConfirm.preview.declared_volume_m3,
+                    "м³",
+                  ),
+                },
+                {
+                  key: "weight",
+                  label: "Вес",
+                  children: formatAssignTripPreviewMeasure(
+                    editAssignTripConfirm.preview.actual_weight_kg,
+                    editAssignTripConfirm.preview.declared_total_weight_kg,
+                    "кг",
+                  ),
+                },
+              ]}
+            />
+            {isEditAssignTripConfirmExpiring ? (
+              <Typography.Text type="warning">Время подтверждения почти истекло — повторите проверку.</Typography.Text>
+            ) : null}
+          </Space>
+        ) : null}
       </Modal>
 
       <Modal

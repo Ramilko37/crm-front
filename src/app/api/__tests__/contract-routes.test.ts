@@ -99,4 +99,15 @@ describe("contract route mappings", () => {
 
     expect(proxyToBackend).toHaveBeenCalledWith(request, "/orders/42/chat-messages/read");
   });
+
+  it("proxies order trip assignment preview endpoints", async () => {
+    const singlePreview = await import("@/app/api/orders/[orderId]/assign-trip/preview/route");
+    const bulkPreview = await import("@/app/api/orders/bulk/assign-trip/preview/route");
+
+    await singlePreview.POST(request, { params: Promise.resolve({ orderId: "42" }) });
+    await bulkPreview.POST(request);
+
+    expect(proxyToBackend).toHaveBeenNthCalledWith(1, request, "/orders/42/assign-trip/preview");
+    expect(proxyToBackend).toHaveBeenNthCalledWith(2, request, "/orders/bulk/assign-trip/preview");
+  });
 });
