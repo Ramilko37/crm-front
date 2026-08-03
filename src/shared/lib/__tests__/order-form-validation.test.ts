@@ -160,24 +160,13 @@ describe("order form validation", () => {
     ).toEqual({ value: undefined, reason: "stale" });
   });
 
-  it("rejects existing loading addresses without backend-required contact data", () => {
+  it("accepts an existing loading address when it has postcode and city", () => {
     expect(
       getExistingLoadingAddressFieldErrors({
         postcode_id: 12,
         city_id: 34,
-        contact_name: "",
-        phone: "12345",
       }),
-    ).toEqual([{ name: ["loading_address_id"], message: "Выбранный адрес погрузки должен содержать контактное лицо" }]);
-
-    expect(
-      getExistingLoadingAddressFieldErrors({
-        postcode_id: 12,
-        city_id: 34,
-        contact_name: "Mario Rossi",
-        phone: "abc",
-      }),
-    ).toEqual([{ name: ["loading_address_id"], message: "Телефон в выбранном адресе погрузки невалиден" }]);
+    ).toEqual([]);
   });
 
   it("maps backend validation locations to order form name paths", () => {

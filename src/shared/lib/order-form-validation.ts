@@ -33,8 +33,6 @@ export type OrderFormFieldError = {
 type ExistingLoadingAddressValidationSource = {
   postcode_id?: number | null;
   city_id?: number | null;
-  contact_name?: string | null;
-  phone?: string | null;
 };
 
 export type OrderFormValidationResult =
@@ -171,12 +169,6 @@ export function getExistingLoadingAddressFieldErrors(
   if (!address) return [];
   if (!address.postcode_id || !address.city_id) {
     return [{ name: ["loading_address_id"], message: "Выберите адрес с индексом и городом или добавьте новый адрес" }];
-  }
-  if (!trimOrUndefined(address.contact_name)) {
-    return [{ name: ["loading_address_id"], message: "Выбранный адрес погрузки должен содержать контактное лицо" }];
-  }
-  if (!/^[0-9()+\-\s]{5,32}$/.test(address.phone ?? "")) {
-    return [{ name: ["loading_address_id"], message: "Телефон в выбранном адресе погрузки невалиден" }];
   }
   return [];
 }
