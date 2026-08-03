@@ -1044,25 +1044,11 @@ function OrdersPageContent() {
   const standaloneOrderView = pathnameOrderId !== undefined || searchParams.get("single_order_view") === "1";
   const deepLinkedOrderIdRef = useRef<number | null>(null);
   const filtersOpenFromQuery = parseFilterPanelQueryState(searchParams.get("filters_open"));
-  const hasActiveFilters = Boolean(
-    params.id ||
-      params.country ||
-      params.document_type ||
-      params.user_id ||
-      params.company_id ||
-      params.personal_manager_id ||
-      params.assigned_forwarder_user_id ||
-      params.factory_id ||
-      params.trip_id ||
-      params.order_date_from ||
-      params.order_date_to ||
-      (params.status_names?.length ?? 0) > 0 ||
-      (params.order_types?.length ?? 0) > 0 ||
-      (params.quote_statuses?.length ?? 0) > 0 ||
-      (params.priority_codes?.length ?? 0) > 0 ||
-      (params.office_mark_codes?.length ?? 0) > 0,
+  const [filtersOpen, setFiltersOpen] = useState(() => filtersOpenFromQuery ?? false);
+  const orderFilterPanelStorageKey = useMemo(
+    () => `${ORDER_FILTER_PANEL_STORAGE_KEY}:${meQuery.data?.id ?? "anonymous"}`,
+    [meQuery.data?.id],
   );
-  const [filtersOpen, setFiltersOpen] = useState(() => filtersOpenFromQuery ?? hasActiveFilters);
   const savedOrderFiltersStorageKey = useMemo(
     () => `${ORDER_SAVED_FILTERS_STORAGE_KEY}:${meQuery.data?.id ?? "anonymous"}`,
     [meQuery.data?.id],
@@ -1121,19 +1107,17 @@ function OrdersPageContent() {
     }
     const savedState = readFilterPanelOpenState(
       getBrowserLocalStorage(),
-      ORDER_FILTER_PANEL_STORAGE_KEY,
+      orderFilterPanelStorageKey,
       typeof document === "undefined" ? undefined : document.cookie,
     );
-    if (savedState !== undefined) {
-      setFiltersOpen(savedState);
-    }
-  }, [filtersOpenFromQuery]);
+    setFiltersOpen(savedState ?? false);
+  }, [filtersOpenFromQuery, orderFilterPanelStorageKey]);
 
   function persistFilterPanelOpenState(next: boolean) {
     setFiltersOpen(next);
     writeFilterPanelOpenState(
       getBrowserLocalStorage(),
-      ORDER_FILTER_PANEL_STORAGE_KEY,
+      orderFilterPanelStorageKey,
       next,
       typeof document === "undefined"
         ? undefined

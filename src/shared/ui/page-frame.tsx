@@ -46,7 +46,7 @@ export function PageToolbar({
         {actions ? <Space wrap>{actions}</Space> : null}
         <div className="crm-toolbar-search">{search}</div>
         <Button type="link" onClick={onToggleFilters}>
-          {filtersOpen ? `Скрыть ${toggleLabel.toLowerCase()}` : `Раскрыть ${toggleLabel.toLowerCase()}`}
+          {filtersOpen ? `Скрыть ${toggleLabel.toLowerCase()}` : `Показать ${toggleLabel.toLowerCase()}`}
         </Button>
       </div>
     </Card>
