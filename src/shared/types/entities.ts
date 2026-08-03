@@ -418,8 +418,7 @@ export type FactorySelectionCreatePayload = {
       create_postcode?: { postcode: string };
       create_city?: { city: string };
       address: string;
-      contact_name: string;
-      phone: string;
+      phone?: string;
       fax?: string | null;
       messenger_type?: string | null;
       messenger_value?: string | null;
@@ -525,7 +524,6 @@ export type FactoryLoadingAddress = {
   postcode: string | null;
   city: string | null;
   address: string | null;
-  contact_name?: string | null;
   phone: string | null;
   fax: string | null;
   messenger_type: string | null;
@@ -541,7 +539,6 @@ export type FactoryLoadingAddressWritePayload = {
   postcode_id?: number | null;
   city_id?: number | null;
   address?: string | null;
-  contact_name?: string | null;
   phone?: string | null;
   fax?: string | null;
   messenger_type?: string | null;

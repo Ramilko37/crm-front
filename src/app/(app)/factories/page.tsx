@@ -120,7 +120,6 @@ type FactoryLoadingAddressForm = {
   postcode_id?: number;
   city_id?: number;
   address?: string;
-  contact_name?: string;
   phone?: string;
   fax?: string;
   messenger_type?: string;
@@ -169,7 +168,6 @@ function serializeLoadingAddressForm(
     postcode_id: values.postcode_id,
     city_id: values.city_id,
     address: compactText(values.address),
-    contact_name: compactText(values.contact_name),
     phone: compactText(values.phone),
     fax: compactText(values.fax),
     messenger_type: compactText(values.messenger_type),
@@ -187,7 +185,6 @@ function hasLoadingAddressDraft(values: FactoryLoadingAddressForm | undefined) {
       values.city_id ||
       compactText(values.name) ||
       compactText(values.address) ||
-      compactText(values.contact_name) ||
       compactText(values.phone) ||
       compactText(values.fax) ||
       compactText(values.messenger_type) ||
@@ -378,9 +375,6 @@ function LoadingAddressFields({
         rules={[{ required: true, message: "Введите адрес" }]}
       >
         <Input disabled={disabled} placeholder="Улица, дом, ворота" />
-      </Form.Item>
-      <Form.Item name="contact_name" label="Контакт" className="crm-col-3">
-        <Input disabled={disabled} />
       </Form.Item>
       <Form.Item name="phone" label="Телефон" className="crm-col-3">
         <Input disabled={disabled} />
@@ -802,7 +796,6 @@ function FactoriesPageContent() {
       postcode_id: record.postcode_id ?? undefined,
       city_id: record.city_id ?? undefined,
       address: record.address ?? undefined,
-      contact_name: record.contact_name ?? undefined,
       phone: record.phone ?? undefined,
       fax: record.fax ?? undefined,
       messenger_type: record.messenger_type ?? undefined,
@@ -1029,7 +1022,6 @@ function FactoriesPageContent() {
     { title: "Город", dataIndex: "city", key: "city", width: 140, render: (v) => v ?? "-" },
     { title: "Адрес", dataIndex: "address", key: "address", render: (v) => v ?? "-" },
     { title: "Индекс", dataIndex: "postcode", key: "postcode", width: 120, render: (v) => v ?? "-" },
-    { title: "Контакт", dataIndex: "contact_name", key: "contact_name", width: 160, render: (v) => v ?? "-" },
     { title: "Телефон", dataIndex: "phone", key: "phone", width: 140, render: (v) => v ?? "-" },
     { title: "Комментарий", dataIndex: "comment", key: "comment", width: 220, render: (v) => v ?? "-" },
     {

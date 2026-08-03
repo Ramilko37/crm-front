@@ -206,7 +206,6 @@ type OrderCreateForm = {
         city?: string;
       };
       address?: string;
-      contact_name?: string;
       phone?: string;
       fax?: string;
       messenger_type?: string;
@@ -299,7 +298,6 @@ type OrderEditForm = {
         city?: string;
       };
       address?: string;
-      contact_name?: string;
       phone?: string;
       fax?: string;
       messenger_type?: string;
@@ -1931,12 +1929,8 @@ function OrdersPageContent() {
       "Основной адрес";
     const postcodeId = values.loading_postcode_id_ui;
     const cityId = values.loading_city_id_ui;
-    const primaryContactName =
-      trimOrUndefined(values.create_factory_contact?.full_name) ??
-      trimOrUndefined(values.create_factory?.loading_address?.contact_name);
-    const primaryContactPhone =
-      trimOrUndefined(values.create_factory_contact?.phone) ??
-      trimOrUndefined(values.create_factory?.loading_address?.phone);
+    const primaryContactName = trimOrUndefined(values.create_factory_contact?.full_name);
+    const primaryContactPhone = trimOrUndefined(values.create_factory_contact?.phone);
     const primaryContactEmail = trimOrUndefined(values.create_factory_contact?.email);
     const primaryContact =
       primaryContactName && primaryContactPhone && primaryContactEmail
@@ -1978,7 +1972,6 @@ function OrdersPageContent() {
             postcode_id: postcodeId,
             city_id: cityId,
             address,
-            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name),
             phone: trimOrUndefined(values.create_factory?.loading_address?.phone),
           },
         },
@@ -2124,12 +2117,8 @@ function OrdersPageContent() {
       "Основной адрес";
     const postcodeId = values.loading_postcode_id_ui;
     const cityId = values.loading_city_id_ui;
-    const primaryContactName =
-      trimOrUndefined(values.create_factory_contact?.full_name) ??
-      trimOrUndefined(values.create_factory?.loading_address?.contact_name);
-    const primaryContactPhone =
-      trimOrUndefined(values.create_factory_contact?.phone) ??
-      trimOrUndefined(values.create_factory?.loading_address?.phone);
+    const primaryContactName = trimOrUndefined(values.create_factory_contact?.full_name);
+    const primaryContactPhone = trimOrUndefined(values.create_factory_contact?.phone);
     const primaryContactEmail = trimOrUndefined(values.create_factory_contact?.email);
     const primaryContact =
       primaryContactName && primaryContactPhone && primaryContactEmail
@@ -2171,7 +2160,6 @@ function OrdersPageContent() {
             postcode_id: postcodeId,
             city_id: cityId,
             address,
-            contact_name: trimOrUndefined(values.create_factory?.loading_address?.contact_name),
             phone: trimOrUndefined(values.create_factory?.loading_address?.phone),
           },
         },
@@ -2297,7 +2285,6 @@ function OrdersPageContent() {
           postcode_id: payload.postcode_id,
           city_id: payload.city_id,
           address: payload.address,
-          contact_name: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "full_name"])),
           phone: trimOrUndefined(createForm.getFieldValue(["create_factory_contact", "phone"])),
         },
       }),
@@ -2324,7 +2311,6 @@ function OrdersPageContent() {
           postcode_id: payload.postcode_id,
           city_id: payload.city_id,
           address: payload.address,
-          contact_name: trimOrUndefined(editForm.getFieldValue("factory_contact_name")),
           phone: trimOrUndefined(editForm.getFieldValue("factory_contact_phone")),
         },
       }),
@@ -2437,16 +2423,6 @@ function OrdersPageContent() {
       mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
     }
 
-    if (text.includes("loading_address.contact_name")) {
-      mark(["create_factory", "loading_address", "contact_name"], "Укажите контактное лицо");
-    }
-    if (text.includes("selected loading address must have contact_name")) {
-      mark("loading_address_id", "Выбранный адрес погрузки должен содержать контактное лицо");
-    }
-    if (text.includes("selected loading address has invalid phone")) {
-      mark("loading_address_id", "Телефон в выбранном адресе погрузки невалиден");
-    }
-
     if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
       mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
       mark("loading_postcode_id_ui", "Выберите индекс");
@@ -2508,9 +2484,6 @@ function OrdersPageContent() {
     }
     if (text.includes("loading_address.phone")) {
       mark(["create_factory", "loading_address", "phone"], "Введите телефон в допустимом формате");
-    }
-    if (text.includes("loading_address.contact_name")) {
-      mark(["create_factory", "loading_address", "contact_name"], "Укажите контактное лицо");
     }
     if (text.includes("loading_address.postcode_id") || text.includes("create_postcode")) {
       mark(["create_factory", "loading_address", "postcode_id"], "Выберите индекс");
@@ -2837,8 +2810,6 @@ function OrdersPageContent() {
           ["create_factory", "loading_address", "address"],
           ["create_factory", "loading_address", "postcode_id"],
           ["create_factory", "loading_address", "city_id"],
-          ["create_factory", "loading_address", "phone"],
-          ["create_factory", "loading_address", "contact_name"],
           ["create_factory", "loading_address", "fax"],
           ["create_factory", "loading_address", "messenger_type"],
           ["create_factory", "loading_address", "messenger_value"],
@@ -3140,7 +3111,6 @@ function OrdersPageContent() {
               postcode_id: loadingAddress?.postcode_id,
               city_id: loadingAddress?.city_id,
               address: trimOrUndefined(loadingAddress?.address),
-              contact_name: trimOrUndefined(loadingAddress?.contact_name),
               phone: trimOrUndefined(loadingAddress?.phone),
               fax: trimOrUndefined(loadingAddress?.fax),
               messenger_type: canUseMessengerFields ? trimOrUndefined(loadingAddress?.messenger_type) : undefined,

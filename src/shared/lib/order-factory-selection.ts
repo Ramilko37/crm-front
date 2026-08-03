@@ -12,7 +12,6 @@ export type OrderFactorySelectionFormValues = {
       postcode_id?: number;
       city_id?: number;
       address?: string;
-      contact_name?: string;
       phone?: string;
       fax?: string;
       messenger_type?: string;
@@ -48,7 +47,6 @@ export function buildOrderFactorySelectionPayload(values: OrderFactorySelectionF
           postcode_id: loadingAddress?.postcode_id,
           city_id: loadingAddress?.city_id,
           address: trimOrUndefined(loadingAddress?.address),
-          contact_name: trimOrUndefined(loadingAddress?.contact_name),
           phone: trimOrUndefined(loadingAddress?.phone),
           fax: trimOrUndefined(loadingAddress?.fax),
           messenger_type: trimOrUndefined(loadingAddress?.messenger_type),
