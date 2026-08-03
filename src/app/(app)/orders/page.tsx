@@ -3083,6 +3083,10 @@ function OrdersPageContent() {
             return null;
           }
 
+          if (!quantity_unit) {
+            throw new Error("Для каждой строки товара выберите единицу измерения");
+          }
+
           if (itemTypeRaw === "other" && !customItemType) {
             throw new Error("Для типа позиции 'other' заполните custom тип");
           }
@@ -3431,16 +3435,20 @@ function OrdersPageContent() {
       const factorySelection = buildOrderFactorySelectionPayload(payload);
 
       const goodsLines = (payload.goods_lines ?? [])
-        .map((line) =>
-          compact({
+        .map((line) => {
+          const normalizedLine = compact({
             item_type: trimOrUndefined(line.item_type),
             custom_item_type: trimOrUndefined(line.custom_item_type),
             description: trimOrUndefined(line.description),
             weight_kg: trimOrUndefined(line.weight_kg),
             quantity_value: trimOrUndefined(line.quantity_value),
             quantity_unit: trimOrUndefined(line.quantity_unit),
-          }),
-        )
+          });
+          if (Object.keys(normalizedLine).length > 0 && !normalizedLine.quantity_unit) {
+            throw new Error("Для каждой строки товара выберите единицу измерения");
+          }
+          return normalizedLine;
+        })
         .filter((line) => Object.keys(line).length > 0);
 
       const filesToUpload: Array<{ slot: string; file: File }> = [];
@@ -6860,7 +6868,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           <Form.Item name="weight_kg" label="Вес, кг">
             <Input />
           </Form.Item>
-          <Form.Item name="quantity_unit" label="Единицы изм.">
+          <Form.Item name="quantity_unit" label="Единицы изм." rules={[{ required: true, message: "Выберите единицу измерения" }]}>
             <Select allowClear options={quantityUnitOptions} />
           </Form.Item>
           <Form.Item name="quantity_value" label="Кол-во">
@@ -6903,7 +6911,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
           <Form.Item name="weight_kg" label="Вес, кг">
             <Input />
           </Form.Item>
-          <Form.Item name="quantity_unit" label="Единицы изм.">
+          <Form.Item name="quantity_unit" label="Единицы изм." rules={[{ required: true, message: "Выберите единицу измерения" }]}>
             <Select allowClear options={editQuantityUnitOptions} />
           </Form.Item>
           <Form.Item name="quantity_value" label="Кол-во">
