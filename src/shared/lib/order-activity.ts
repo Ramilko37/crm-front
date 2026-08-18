@@ -9,3 +9,9 @@ export function getOrderActivityText(item: Pick<OrderStatusHistoryItem, "comment
   const comment = item.comment?.trim();
   return comment || `Status: ${item.status_name}`;
 }
+
+export function getOrderActivityEventCode(
+  item: Pick<OrderStatusHistoryItem, "event_type" | "field_name">,
+) {
+  return item.event_type || item.field_name || null;
+}

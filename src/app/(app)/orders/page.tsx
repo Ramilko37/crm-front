@@ -73,7 +73,7 @@ import {
   clampOrderCreateWizardStep,
   getOrderCreateWizardSteps,
 } from "@/shared/lib/order-create-wizard";
-import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
+import { getOrderActivityEventCode, getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import { buildOrderFactorySelectionPayload } from "@/shared/lib/order-factory-selection";
 import {
   buildOrderSavedFilterSearchParams,
@@ -98,7 +98,9 @@ import {
   type BulkAssignTripPreview,
   type BulkAssignTripPreviewItem,
   buildAssignTripConfirmPayload,
+  buildAssignTripForcePayload,
   getAssignTripEligibilityErrorMessage,
+  isForceAssignableTripPreviewError,
 } from "@/shared/lib/order-trip-assignment";
 import {
   factoryMatchesSelectedCountry,
@@ -369,6 +371,10 @@ type EditAssignTripConfirmState = AssignTripConfirmState & {
   payload: OrderEditForm;
 };
 
+type AssignTripForceState =
+  | { kind: "single"; orderId: number; tripId: number; previousTripId: number | null; rejection: string }
+  | { kind: "bulk"; orderIds: number[]; tripId: number; rejection: string };
+
 function parseNumber(value: string | null): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -386,6 +392,10 @@ function renderOrderStatus(value: OrderStatus | null) {
     return <Tag className="crm-status-tag">-</Tag>;
   }
   return <Tag className="crm-status-tag">{formatEnumCode(value)}</Tag>;
+}
+
+function renderTripOverrideBadge(order: Pick<OrderListItem, "trip_id" | "trip_assigned_via_override">) {
+  return order.trip_id && order.trip_assigned_via_override ? <Tag color="magenta">Добавлен с обходом</Tag> : null;
 }
 
 function toSelectOptions(options?: DictionaryOption[]) {
@@ -638,13 +648,22 @@ function formatOrderActivityValue(value: string | null | undefined) {
   return trimmed ? trimmed : "—";
 }
 
-function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
+function OrderActivityPanel({
+  items,
+  canEdit,
+  onEdit,
+}: {
+  items: OrderStatusHistoryItem[];
+  canEdit: boolean;
+  onEdit: (item: OrderStatusHistoryItem) => void;
+}) {
   return (
     <>
       {items.length ? (
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           {items.map((item) => {
             const source = formatOrderActivitySource(item.source);
+            const eventCode = getOrderActivityEventCode(item);
             const hasField = Boolean(item.field_name);
             const hasValueChange = item.old_value !== undefined || item.new_value !== undefined;
             const fallbackText = getOrderActivityText(item);
@@ -655,6 +674,16 @@ function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
                   <Tag color={source.color}>{source.label}</Tag>
                   <Typography.Text type="secondary">{formatOrderActivityDate(item.created_at)}</Typography.Text>
                   <Typography.Text type="secondary">{formatOrderActivityActor(item.changed_by_user_id)}</Typography.Text>
+                  {canEdit ? (
+                    <Button size="small" type="link" onClick={() => onEdit(item)}>
+                      Изменить запись
+                    </Button>
+                  ) : null}
+                </Space>
+
+                <Space size={8} wrap>
+                  <Typography.Text strong>{eventCode ? formatEnumCode(eventCode) : fallbackText}</Typography.Text>
+                  <Typography.Text type="secondary">Точка: {item.waypoint_name ?? "—"}</Typography.Text>
                 </Space>
 
                 {hasField ? (
@@ -666,11 +695,9 @@ function OrderActivityPanel({ items }: { items: OrderStatusHistoryItem[] }) {
                       </Typography.Text>
                     ) : null}
                   </div>
-                ) : (
-                  <Typography.Text>{fallbackText}</Typography.Text>
-                )}
+                ) : null}
 
-                {hasField && item.comment ? (
+                {eventCode && item.comment ? (
                   <Typography.Text type="secondary" className="crm-order-activity-meta">
                     {item.comment}
                   </Typography.Text>
@@ -829,6 +856,8 @@ function OrdersPageContent() {
   const canRunOperationalActions =
     meQuery.data?.is_superuser || ["administrator", "manager", "logist"].includes(normalizedRole);
   const canQuotePrice = meQuery.data?.is_superuser || normalizedRole === "administrator" || normalizedRole === "manager";
+  const canForceTripAssignment = canQuotePrice;
+  const canEditOrderHistory = canQuotePrice;
   const permissionsReady = isHydrated && meQuery.isSuccess;
   const canCreateUi = permissionsReady && canCreate;
   const canWriteOrderUi = permissionsReady && canWriteOrder;
@@ -972,6 +1001,10 @@ function OrdersPageContent() {
   const [assignTripConfirm, setAssignTripConfirm] = useState<AssignTripConfirmState | null>(null);
   const [bulkAssignTripConfirm, setBulkAssignTripConfirm] = useState<BulkAssignTripConfirmState | null>(null);
   const [editAssignTripConfirm, setEditAssignTripConfirm] = useState<EditAssignTripConfirmState | null>(null);
+  const [assignTripForce, setAssignTripForce] = useState<AssignTripForceState | null>(null);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<OrderStatusHistoryItem | null>(null);
+  const [forceReasonForm] = Form.useForm<{ force_reason: string }>();
+  const [historyItemForm] = Form.useForm<{ comment?: string; status_date?: dayjs.Dayjs }>();
   const [assignTripPreviewTick, setAssignTripPreviewTick] = useState(() => Date.now());
   const loadingAddressQuickPostcodeId = Form.useWatch("postcode_id", factoryLoadingAddressQuickForm) as number | undefined;
   const editLoadingAddressQuickPostcodeId = Form.useWatch("postcode_id", editFactoryLoadingAddressQuickForm) as number | undefined;
@@ -3266,8 +3299,26 @@ function OrdersPageContent() {
       });
       setAssignOpen(false);
     },
-    onError: (error) => {
-      message.error(getAssignTripErrorMessage(error, "Ошибка проверки рейса"));
+    onError: (error, values) => {
+      const rejection = getAssignTripErrorMessage(error, "Ошибка проверки рейса");
+      if (
+        canForceTripAssignment &&
+        error instanceof ApiError &&
+        error.status === 422 &&
+        isForceAssignableTripPreviewError(error.detail)
+      ) {
+        forceReasonForm.resetFields();
+        setAssignTripForce({
+          kind: "single",
+          orderId: values.id,
+          tripId: values.trip_id,
+          previousTripId: selected?.id === values.id ? (selected.trip_id ?? null) : null,
+          rejection,
+        });
+        setAssignOpen(false);
+        return;
+      }
+      message.error(rejection);
     },
   });
 
@@ -3284,8 +3335,25 @@ function OrdersPageContent() {
       });
       setBulkAssignOpen(false);
     },
-    onError: (error) => {
-      message.error(getAssignTripErrorMessage(error, "Ошибка проверки рейса"));
+    onError: (error, values) => {
+      const rejection = getAssignTripErrorMessage(error, "Ошибка проверки рейса");
+      if (
+        canForceTripAssignment &&
+        error instanceof ApiError &&
+        error.status === 422 &&
+        isForceAssignableTripPreviewError(error.detail)
+      ) {
+        forceReasonForm.resetFields();
+        setAssignTripForce({
+          kind: "bulk",
+          orderIds: values.order_ids,
+          tripId: values.trip_id,
+          rejection,
+        });
+        setBulkAssignOpen(false);
+        return;
+      }
+      message.error(rejection);
     },
   });
 
@@ -3487,27 +3555,71 @@ function OrdersPageContent() {
     },
   });
 
-  const assignTripMutation = useMutation({
+  const patchHistoryItemMutation = useMutation({
     mutationFn: ({
-      id,
-      trip_id,
-      confirmation_token,
+      orderId,
+      historyId,
+      comment,
+      statusDate,
     }: {
+      orderId: number;
+      historyId: number;
+      comment?: string;
+      statusDate?: string;
+    }) =>
+      apiRequest<OrderStatusHistoryItem>(`/api/orders/${orderId}/status-history/${historyId}`, {
+        method: "PATCH",
+        body: {
+          ...(comment !== undefined ? { comment } : {}),
+          ...(statusDate ? { status_date: statusDate } : {}),
+        },
+      }),
+    onSuccess: async (_, values) => {
+      message.success("Запись истории обновлена");
+      setSelectedHistoryItem(null);
+      historyItemForm.resetFields();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.orders.detail(values.orderId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.orders.statusHistory(values.orderId) }),
+      ]);
+    },
+    onError: (error) => {
+      message.error(getAssignTripErrorMessage(error, "Не удалось обновить запись истории"));
+    },
+  });
+
+  const assignTripMutation = useMutation({
+    mutationFn: (values: {
       id: number;
       trip_id?: number | null;
       confirmation_token?: string | null;
+      force_reason?: string;
+      previous_trip_id?: number | null;
     }) =>
-      apiRequest<OrderDetail>(`/api/orders/${id}/assign-trip`, {
+      apiRequest<OrderDetail>(`/api/orders/${values.id}/assign-trip`, {
         method: "POST",
-        body: buildAssignTripConfirmPayload({ tripId: trip_id ?? null, confirmationToken: confirmation_token }),
+        body: values.force_reason
+          ? buildAssignTripForcePayload({ tripId: values.trip_id!, reason: values.force_reason })
+          : buildAssignTripConfirmPayload({
+              tripId: values.trip_id ?? null,
+              confirmationToken: values.confirmation_token,
+            }),
       }),
     onSuccess: async (_, values) => {
-      message.success("Рейс назначен");
+      message.success(values.force_reason ? "Заказ добавлен с обходом проверки" : "Рейс назначен");
       const confirmedTrip = assignTripConfirm;
+      const forcedTrip = assignTripForce?.kind === "single" ? assignTripForce : null;
       setAssignTripConfirm(null);
+      setAssignTripForce(null);
       setAssignOpen(false);
       assignForm.resetFields();
-      await invalidateOrdersQueries(values.id, [values.trip_id, confirmedTrip?.previousTripId]);
+      forceReasonForm.resetFields();
+      await invalidateOrdersQueries(values.id, [
+        values.trip_id,
+        values.previous_trip_id,
+        confirmedTrip?.previousTripId,
+        forcedTrip?.previousTripId,
+      ]);
     },
     onError: (error) => {
       message.error(getAssignTripErrorMessage(error, "Ошибка назначения рейса"));
@@ -3669,7 +3781,14 @@ function OrdersPageContent() {
   });
 
   const bulkMutation = useMutation({
-    mutationFn: ({ endpoint, body }: { endpoint: OrderBulkEndpoint; body: Record<string, unknown> }) =>
+    mutationFn: ({
+      endpoint,
+      body,
+    }: {
+      endpoint: OrderBulkEndpoint;
+      body: Record<string, unknown>;
+      previousTripIds?: number[];
+    }) =>
       apiRequest<BulkMutationResponse<OrderListItem>>(`/api/orders/bulk/${endpoint}`, {
         method: "POST",
         body,
@@ -3677,6 +3796,7 @@ function OrdersPageContent() {
     onSuccess: async (payload, values) => {
       message.success(`Операция выполнена. Обновлено: ${payload.updated_count}`);
       setBulkAssignTripConfirm(null);
+      setAssignTripForce(null);
       setBulkStatusOpen(false);
       setBulkAssignOpen(false);
       setBulkPickupOpen(false);
@@ -3687,10 +3807,13 @@ function OrdersPageContent() {
       bulkPickupForm.resetFields();
       bulkSpecialTariffForm.resetFields();
       bulkCommentForm.resetFields();
+      forceReasonForm.resetFields();
       setSelectedRowKeys([]);
       await invalidateOrdersQueries(
         undefined,
-        values.endpoint === "assign-trip" ? [Number(values.body.trip_id)] : [],
+        values.endpoint === "assign-trip"
+          ? [typeof values.body.trip_id === "number" ? values.body.trip_id : null, ...(values.previousTripIds ?? [])]
+          : [],
       );
     },
     onError: (error) => {
@@ -3919,6 +4042,14 @@ function OrdersPageContent() {
     setStatusOpen(true);
   }
 
+  function openHistoryItem(item: OrderStatusHistoryItem) {
+    setSelectedHistoryItem(item);
+    historyItemForm.setFieldsValue({
+      comment: item.comment ?? undefined,
+      status_date: item.status_date ? dayjs(item.status_date) : undefined,
+    });
+  }
+
   function openAssign(record: OrderListItem) {
     setSelected(record);
     assignForm.setFieldsValue({ trip_id: record.trip_id ?? undefined });
@@ -3970,6 +4101,13 @@ function OrdersPageContent() {
   function runBulkMutation(endpoint: OrderBulkEndpoint, body: Record<string, unknown>) {
     bulkMutation.mutate({
       endpoint,
+      previousTripIds:
+        endpoint === "assign-trip"
+          ? rows
+              .filter((order) => selectedRowKeys.includes(order.id))
+              .map((order) => order.trip_id)
+              .filter((tripId): tripId is number => tripId != null)
+          : undefined,
       body: {
         order_ids: selectedRowKeys,
         ...body,
@@ -4442,6 +4580,18 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
       sortOrder: sortOrderFor("status_name"),
       render: (value: OrderStatus | null) => renderOrderStatus(value),
       width: 190,
+    },
+    {
+      title: "Рейс",
+      dataIndex: "trip_name",
+      key: "trip_name",
+      width: 200,
+      render: (value: string | null | undefined, record) => (
+        <Space size={4} wrap>
+          <span>{value ?? "—"}</span>
+          {renderTripOverrideBadge(record)}
+        </Space>
+      ),
     },
     {
       title: "Дней в текущем статусе",
@@ -5537,6 +5687,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
                     <div className="crm-row-meta-item">
                       Рейс
                       <strong>{record.trip_name ?? "-"}</strong>
+                      {renderTripOverrideBadge(record)}
                     </div>
                     <div className="crm-row-meta-item">
                       Готовность
@@ -7505,7 +7656,17 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               <Form.Item name="mrn" label="MRN">
                 <Input />
               </Form.Item>
-              <Form.Item name="trip_id" label="Рейс">
+              <Form.Item
+                name="trip_id"
+                label={
+                  <Space size={4} wrap>
+                    <span>Рейс</span>
+                    {editDetailQuery.data?.order || selected
+                      ? renderTripOverrideBadge(editDetailQuery.data?.order ?? selected!)
+                      : null}
+                  </Space>
+                }
+              >
                 <Select
                   allowClear
                   showSearch
@@ -7627,7 +7788,13 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             {
               key: "archive",
               label: "Архив",
-              children: <OrderActivityPanel items={editDetailQuery.data?.card?.status_history ?? []} />,
+              children: (
+                <OrderActivityPanel
+                  items={editDetailQuery.data?.card?.status_history ?? []}
+                  canEdit={canEditOrderHistory}
+                  onEdit={openHistoryItem}
+                />
+              ),
             },
           ]}
         />
@@ -7837,6 +8004,47 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
       </Modal>
 
       <Modal
+        title="Изменить запись истории"
+        open={Boolean(selectedHistoryItem)}
+        destroyOnHidden
+        onCancel={() => {
+          setSelectedHistoryItem(null);
+          historyItemForm.resetFields();
+        }}
+        onOk={() => historyItemForm.submit()}
+        okText="Сохранить"
+        confirmLoading={patchHistoryItemMutation.isPending}
+      >
+        <Form
+          form={historyItemForm}
+          layout="vertical"
+          preserve={false}
+          onFinish={(values: { comment?: string; status_date?: dayjs.Dayjs }) => {
+            if (!selectedHistoryItem) return;
+            const comment = values.comment?.trim();
+            const statusDate = values.status_date?.format("YYYY-MM-DD");
+            if (!comment && !statusDate) {
+              message.warning("Измените комментарий или дату");
+              return;
+            }
+            patchHistoryItemMutation.mutate({
+              orderId: selectedHistoryItem.order_id,
+              historyId: selectedHistoryItem.id,
+              comment,
+              statusDate,
+            });
+          }}
+        >
+          <Form.Item name="status_date" label="Дата">
+            <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item name="comment" label="Комментарий" rules={[{ max: 2000, message: "Не более 2000 символов" }]}>
+            <Input.TextArea autoSize={{ minRows: 3, maxRows: 8 }} maxLength={2000} showCount />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
         title={selected ? `Назначить рейс #${selected.id}` : "Назначить рейс"}
         open={assignOpen}
         forceRender
@@ -7854,6 +8062,7 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
               assignTripMutation.mutate({
                 id: selected.id,
                 trip_id: null,
+                previous_trip_id: selected.trip_id,
               });
               return;
             }
@@ -7938,6 +8147,62 @@ function getUserAddress(user: UserAdmin | undefined, source: Record<string, unkn
             ) : null}
           </Space>
         ) : null}
+      </Modal>
+
+      <Modal
+        title="Добавить с обходом проверки"
+        open={Boolean(assignTripForce)}
+        destroyOnHidden
+        onCancel={() => {
+          setAssignTripForce(null);
+          forceReasonForm.resetFields();
+        }}
+        onOk={() => forceReasonForm.submit()}
+        okText="Добавить с обходом"
+        cancelText="Отмена"
+        confirmLoading={assignTripMutation.isPending || bulkMutation.isPending}
+      >
+        <Form
+          form={forceReasonForm}
+          layout="vertical"
+          preserve={false}
+          onFinish={(values: { force_reason: string }) => {
+            if (!assignTripForce) return;
+            if (assignTripForce.kind === "single") {
+              assignTripMutation.mutate({
+                id: assignTripForce.orderId,
+                trip_id: assignTripForce.tripId,
+                force_reason: values.force_reason,
+              });
+              return;
+            }
+            bulkMutation.mutate({
+              endpoint: "assign-trip",
+              body: {
+                order_ids: assignTripForce.orderIds,
+                ...buildAssignTripForcePayload({ tripId: assignTripForce.tripId, reason: values.force_reason }),
+              },
+            });
+          }}
+        >
+          <Typography.Paragraph type="danger">
+            Обычная проверка отклонила добавление: {assignTripForce?.rejection}
+          </Typography.Paragraph>
+          <Typography.Paragraph type="secondary">
+            Рейс #{assignTripForce?.tripId}
+            {assignTripForce?.kind === "bulk" ? ` · заказов: ${assignTripForce.orderIds.length}` : null}
+          </Typography.Paragraph>
+          <Form.Item
+            name="force_reason"
+            label="Причина обхода"
+            rules={[
+              { required: true, whitespace: true, message: "Укажите причину обхода проверки" },
+              { max: 2000, message: "Не более 2000 символов" },
+            ]}
+          >
+            <Input.TextArea autoSize={{ minRows: 3, maxRows: 8 }} maxLength={2000} showCount />
+          </Form.Item>
+        </Form>
       </Modal>
 
       <Modal

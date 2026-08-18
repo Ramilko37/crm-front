@@ -54,12 +54,35 @@ export function buildAssignTripConfirmPayload({
   };
 }
 
+export function buildAssignTripForcePayload({ tripId, reason }: { tripId: number; reason: string }) {
+  const forceReason = reason.trim();
+  if (!forceReason) {
+    throw new Error("force_reason is required");
+  }
+
+  return {
+    trip_id: tripId,
+    force: true,
+    force_reason: forceReason,
+  };
+}
+
+export function isForceAssignableTripPreviewError(detail: string) {
+  return (
+    detail === "Order location is not on the trip route" ||
+    detail.startsWith("Trip has already left") ||
+    (detail.startsWith("Trip ") && detail.includes("is already finished")) ||
+    detail === "Order status does not allow loading" ||
+    detail.startsWith("Order is already assigned to active trip")
+  );
+}
+
 export function getAssignTripEligibilityErrorMessage(detail: string) {
-  if (detail === "order-trip-source-mismatch") {
-    return "Заказ нельзя добавить: фабрика/экспедитор не найдены среди непройденных точек погрузки рейса";
+  if (detail === "Order location is not on the trip route") {
+    return "Местоположение заказа не входит в маршрут";
   }
   if (detail.startsWith("Trip has already left")) {
-    return "Рейс уже покинул точку погрузки заказа";
+    return detail.replace("Trip has already left", "Рейс уже покинул");
   }
   if (detail.startsWith("Trip ") && detail.includes("is already finished")) {
     return "Рейс уже завершён";
@@ -78,6 +101,18 @@ export function getAssignTripEligibilityErrorMessage(detail: string) {
   }
   if (detail === "confirmation_token is invalid" || detail.includes("does not match")) {
     return "Подтверждение устарело — повторите проверку";
+  }
+  if (detail === "force_reason is required to force-assign trip") {
+    return "Укажите причину обхода проверки";
+  }
+  if (detail === "force is only allowed when assigning a trip") {
+    return "Обход нельзя использовать при снятии с рейса";
+  }
+  if (detail.startsWith("Trip with id=") && detail.endsWith("does not exist")) {
+    return "Рейс не найден";
+  }
+  if (detail === "Insufficient permissions") {
+    return "Недостаточно прав для обхода / правки истории";
   }
   return detail;
 }

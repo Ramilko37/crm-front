@@ -500,7 +500,12 @@ function TripDetailPageContent() {
       key: "order_number",
       sorter: true,
       sortOrder: orderSortOrderFor("order_number"),
-      render: (value: string | null) => value ?? "—",
+      render: (value: string | null, record) => (
+        <Space size={4} wrap>
+          <span>{value ?? "—"}</span>
+          {record.trip_id && record.trip_assigned_via_override ? <Tag color="magenta">Добавлен с обходом</Tag> : null}
+        </Space>
+      ),
     },
     {
       title: "Клиент",

@@ -1,12 +1,13 @@
 "use client";
 
-import { MoreOutlined } from "@ant-design/icons";
+import { MinusCircleOutlined, MoreOutlined, PlusOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   App,
   Button,
   Card,
   Descriptions,
+  Divider,
   Drawer,
   Dropdown,
   Form,
@@ -29,18 +30,22 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useCurrentUser } from "@/features/auth/use-current-user";
 import { ROLE_NAMES, type RoleName } from "@/shared/lib/domain-enums";
 import { apiRequest } from "@/shared/lib/api";
+import { buildCompanyCreatePayload, isCompanyPhoneValid } from "@/shared/lib/company-flow";
 import { ApiError } from "@/shared/lib/errors";
 import { queryKeys } from "@/shared/lib/query-keys";
 import { buildUserWritePayload } from "@/shared/lib/user-flow";
 import { normalizeRoleName } from "@/shared/lib/rbac";
+import { CountrySelect } from "@/shared/ui/country-select";
 import { PageHeader } from "@/shared/ui/page-frame";
 import type {
   Company,
   CompanyContact,
   CompanyContactWritePayload,
+  CompanyRole,
   CompanyWritePayload,
   PaginatedResponse,
   UserAdmin,
+  UserCityLookupItem,
   UserWritePayload,
 } from "@/shared/types/entities";
 
@@ -64,27 +69,30 @@ type CompanyUserFormValues = {
   is_active?: boolean;
 };
 
-const STRICT_PHONE_REGEX = /^\+[1-9]\d{7,14}$/;
+type CompanyCreateFormValues = Omit<CompanyWritePayload, "contacts"> & {
+  country_id?: number;
+  contacts?: ContactFormValues[];
+};
+
+type CompanyCountryLookupItem = { country: string };
+type CompanyCityLookupItem = { city: string };
+
+const COMPANY_ROLES: CompanyRole[] = [
+  "Client",
+  "Factory",
+  "Supplier",
+  "Forwarder",
+  "Carrier",
+  "Warehouse",
+  "Customs Broker",
+  "Dealer",
+  "Partner",
+  "Other",
+];
 
 function trimOrUndefined(value: string | undefined | null) {
   const next = value?.trim();
   return next ? next : undefined;
-}
-
-function normalizePhone(value: string | undefined | null) {
-  const trimmed = trimOrUndefined(value);
-  if (!trimmed) return undefined;
-
-  let next = trimmed.replace(/[\s()-]/g, "");
-  if (next.startsWith("00")) {
-    next = `+${next.slice(2)}`;
-  }
-
-  if (next.startsWith("+")) {
-    next = `+${next.slice(1).replace(/\+/g, "")}`;
-  }
-
-  return next;
 }
 
 function toListView<T>(payload: PaginatedResponse<T> | T[] | undefined, fallbackPage: number, fallbackPageSize: number) {
@@ -105,13 +113,11 @@ function toListView<T>(payload: PaginatedResponse<T> | T[] | undefined, fallback
 }
 
 function buildContactPayload(values: ContactFormValues, isOwnerManagedPrimary: boolean): CompanyContactWritePayload {
-  const normalizedPhone = normalizePhone(values.phone);
-
   return {
     full_name: isOwnerManagedPrimary ? undefined : trimOrUndefined(values.full_name),
     job_title: trimOrUndefined(values.job_title),
     email: isOwnerManagedPrimary ? undefined : trimOrUndefined(values.email),
-    phone: isOwnerManagedPrimary ? undefined : normalizedPhone,
+    phone: isOwnerManagedPrimary ? undefined : trimOrUndefined(values.phone),
     messenger_type: trimOrUndefined(values.messenger_type),
     messenger_value: trimOrUndefined(values.messenger_value),
     is_primary: isOwnerManagedPrimary ? undefined : values.is_primary,
@@ -151,8 +157,14 @@ function CompaniesPageContent() {
 
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
+  const [selectedCities, setSelectedCities] = useState<string[]>([]);
+  const [selectedRoles, setSelectedRoles] = useState<CompanyRole[]>([]);
+  const [countryLookupSearch, setCountryLookupSearch] = useState("");
+  const [cityLookupSearch, setCityLookupSearch] = useState("");
+  const [createCitySearch, setCreateCitySearch] = useState("");
   const [companyPage, setCompanyPage] = useState(1);
-  const [companyPageSize, setCompanyPageSize] = useState(20);
+  const [companyPageSize, setCompanyPageSize] = useState(50);
   const [usersPage, setUsersPage] = useState(1);
   const [usersPageSize, setUsersPageSize] = useState(20);
   const [contactPage, setContactPage] = useState(1);
@@ -170,13 +182,14 @@ function CompaniesPageContent() {
   const [editContactOpen, setEditContactOpen] = useState(false);
   const [selectedContact, setSelectedContact] = useState<CompanyContact | null>(null);
 
-  const [createCompanyForm] = Form.useForm<{ name: string }>();
+  const [createCompanyForm] = Form.useForm<CompanyCreateFormValues>();
   const [renameForm] = Form.useForm<{ name: string }>();
   const [createUserForm] = Form.useForm<CompanyUserFormValues>();
   const [attachUserForm] = Form.useForm<{ user_id: number }>();
   const [ownerForm] = Form.useForm<{ owner_user_id: number | null }>();
   const [createContactForm] = Form.useForm<ContactFormValues>();
   const [editContactForm] = Form.useForm<ContactFormValues>();
+  const createCountryId = Form.useWatch("country_id", createCompanyForm) as number | undefined;
 
   const roleOptions = useMemo(() => {
     const all = ROLE_NAMES.filter((role) => role !== "anonymous");
@@ -201,8 +214,11 @@ function CompaniesPageContent() {
       page: companyPage,
       page_size: companyPageSize,
       query: searchQuery || undefined,
+      country: selectedCountries.length ? selectedCountries : undefined,
+      city: selectedCities.length ? selectedCities : undefined,
+      role: selectedRoles.length ? selectedRoles : undefined,
     }),
-    [companyPage, companyPageSize, searchQuery],
+    [companyPage, companyPageSize, searchQuery, selectedCities, selectedCountries, selectedRoles],
   );
 
   const companiesQuery = useQuery({
@@ -212,6 +228,38 @@ function CompaniesPageContent() {
         query: companyListParams,
       }),
     enabled: canWrite,
+  });
+
+  const countryLookupQuery = useQuery({
+    queryKey: ["companies", "lookups", "countries", countryLookupSearch],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<CompanyCountryLookupItem>>("/api/companies/lookups/countries", {
+        query: { query: countryLookupSearch || undefined, page: 1, page_size: 50 },
+      }),
+    enabled: canWrite,
+  });
+
+  const cityLookupQuery = useQuery({
+    queryKey: ["companies", "lookups", "cities", selectedCountries, cityLookupSearch],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<CompanyCityLookupItem>>("/api/companies/lookups/cities", {
+        query: {
+          country: selectedCountries.length ? selectedCountries : undefined,
+          query: cityLookupSearch || undefined,
+          page: 1,
+          page_size: 50,
+        },
+      }),
+    enabled: canWrite,
+  });
+
+  const createCitiesQuery = useQuery({
+    queryKey: ["companies", "create", "cities", createCountryId, createCitySearch],
+    queryFn: () =>
+      apiRequest<PaginatedResponse<UserCityLookupItem> | UserCityLookupItem[]>("/api/users/lookups/cities", {
+        query: { country_id: createCountryId, query: createCitySearch || undefined, page: 1, page_size: 50 },
+      }),
+    enabled: createCompanyOpen && Boolean(createCountryId),
   });
 
   const companyDetailQuery = useQuery({
@@ -276,6 +324,9 @@ function CompaniesPageContent() {
   const attachOptions = (attachCandidatesQuery.data?.items ?? [])
     .filter((user) => user.company_id === null)
     .map((user) => ({ label: userLabel(user), value: user.id }));
+  const createCityItems = Array.isArray(createCitiesQuery.data)
+    ? createCitiesQuery.data
+    : (createCitiesQuery.data?.items ?? []);
 
   useEffect(() => {
     ownerForm.setFieldsValue({ owner_user_id: selectedCompany?.owner_user_id ?? null });
@@ -299,7 +350,7 @@ function CompaniesPageContent() {
   }
 
   const createCompanyMutation = useMutation({
-    mutationFn: (payload: Required<Pick<CompanyWritePayload, "name">>) =>
+    mutationFn: (payload: CompanyWritePayload) =>
       apiRequest<Company>("/api/companies", {
         method: "POST",
         body: payload,
@@ -307,6 +358,8 @@ function CompaniesPageContent() {
     onSuccess: async (company) => {
       message.success("Компания создана");
       setCreateCompanyOpen(false);
+      setCreateCitySearch("");
+      setCompanyPage(1);
       createCompanyForm.resetFields();
       await invalidateCompany(company.id);
       openDetails(company.id);
@@ -448,12 +501,26 @@ function CompaniesPageContent() {
   });
 
   const companyColumns: ColumnsType<Company> = [
-    { title: "ID", dataIndex: "id", key: "id", width: 90 },
     {
       title: "Название",
       dataIndex: "name",
       key: "name",
       render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
+    },
+    { title: "Страна", dataIndex: "country", key: "country", width: 150, render: (value) => value ?? "-" },
+    { title: "Город", dataIndex: "city", key: "city", width: 150, render: (value) => value ?? "-" },
+    {
+      title: "Роль",
+      dataIndex: "role",
+      key: "role",
+      width: 150,
+      render: (value: CompanyRole | null) => (value ? <Tag>{value}</Tag> : "-"),
+    },
+    {
+      title: "Основной контакт",
+      key: "primary_contact",
+      width: 190,
+      render: (_, row) => row.primary_contact?.full_name ?? "-",
     },
     {
       title: "Owner",
@@ -611,7 +678,7 @@ function CompaniesPageContent() {
   if (!canWrite) {
     return (
       <Space direction="vertical" size={16} className="crm-page-stack">
-        <PageHeader title="Компании" subtitle="Раздел доступен только administrator/manager" />
+        <PageHeader title="Компании" subtitle="Раздел доступен только administrator/manager/superuser" />
         <Card className="crm-panel">
           <Typography.Text>Недостаточно прав для просмотра этого раздела.</Typography.Text>
         </Card>
@@ -632,27 +699,88 @@ function CompaniesPageContent() {
       />
 
       <Card className="crm-toolbar-card">
-        <div className="crm-toolbar-row crm-toolbar-inline">
-          <Space wrap>
+        <div className="crm-filter-grid">
+          <div className="crm-col-4">
+            <Input.Search
+              allowClear
+              placeholder="Название, контакт, телефон, email, VAT"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              onSearch={(value) => {
+                setSearchQuery(value.trim());
+                setCompanyPage(1);
+              }}
+            />
+          </div>
+          <div className="crm-col-3">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              filterOption={false}
+              value={selectedCountries}
+              loading={countryLookupQuery.isLoading}
+              options={(countryLookupQuery.data?.items ?? []).map(({ country }) => ({ label: country, value: country }))}
+              placeholder="Страны"
+              notFoundContent={countryLookupQuery.isLoading ? "Загрузка..." : "Страны не найдены"}
+              style={{ width: "100%" }}
+              onSearch={(value) => setCountryLookupSearch(value.trim())}
+              onChange={(countries) => {
+                setSelectedCountries(countries);
+                setSelectedCities([]);
+                setCityLookupSearch("");
+                setCompanyPage(1);
+              }}
+            />
+          </div>
+          <div className="crm-col-3">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              filterOption={false}
+              value={selectedCities}
+              loading={cityLookupQuery.isLoading}
+              options={(cityLookupQuery.data?.items ?? []).map(({ city }) => ({ label: city, value: city }))}
+              placeholder="Города"
+              notFoundContent={cityLookupQuery.isLoading ? "Загрузка..." : "Города не найдены"}
+              style={{ width: "100%" }}
+              onSearch={(value) => setCityLookupSearch(value.trim())}
+              onChange={(cities) => {
+                setSelectedCities(cities);
+                setCompanyPage(1);
+              }}
+            />
+          </div>
+          <div className="crm-col-2">
+            <Select
+              mode="multiple"
+              allowClear
+              value={selectedRoles}
+              options={COMPANY_ROLES.map((role) => ({ label: role, value: role }))}
+              placeholder="Роли"
+              style={{ width: "100%" }}
+              onChange={(roles) => {
+                setSelectedRoles(roles);
+                setCompanyPage(1);
+              }}
+            />
+          </div>
+          <div className="crm-col-12">
             <Button
               onClick={() => {
                 setSearchInput("");
                 setSearchQuery("");
+                setSelectedCountries([]);
+                setSelectedCities([]);
+                setSelectedRoles([]);
+                setCountryLookupSearch("");
+                setCityLookupSearch("");
                 setCompanyPage(1);
               }}
             >
-              Сброс
+              Сбросить поиск и фильтры
             </Button>
-          </Space>
-          <div className="crm-toolbar-search">
-          <Input.Search
-            allowClear
-            enterButton="Найти"
-            placeholder="Поиск по названию компании"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            onSearch={(value) => setSearchQuery(value.trim())}
-          />
           </div>
         </div>
       </Card>
@@ -670,7 +798,7 @@ function CompaniesPageContent() {
           dataSource={companyRows}
           columns={companyColumns}
           pagination={false}
-          scroll={{ x: 720 }}
+          scroll={{ x: 1100 }}
           locale={{ emptyText: "Компании не найдены" }}
           onRow={(row) => ({
             onClick: () => openDetails(row.id),
@@ -875,21 +1003,196 @@ function CompaniesPageContent() {
       <Modal
         title="Создать компанию"
         open={createCompanyOpen}
+        width={900}
         destroyOnHidden
-        onCancel={() => setCreateCompanyOpen(false)}
+        styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
+        onCancel={() => {
+          setCreateCompanyOpen(false);
+          setCreateCitySearch("");
+          createCompanyForm.resetFields();
+        }}
         onOk={() => createCompanyForm.submit()}
         confirmLoading={createCompanyMutation.isPending}
       >
-        <Form
+        <Form<CompanyCreateFormValues>
           form={createCompanyForm}
           layout="vertical"
-          onFinish={(values: { name: string }) => {
-            createCompanyMutation.mutate({ name: values.name.trim() });
+          onFinish={(values) => {
+            createCompanyMutation.mutate(buildCompanyCreatePayload(values));
           }}
         >
-          <Form.Item name="name" label="Название" rules={[{ required: true, message: "Укажите название" }]}>
-            <Input autoFocus />
-          </Form.Item>
+          <div className="crm-filter-grid">
+            <Form.Item
+              name="name"
+              label="Название"
+              className="crm-col-6"
+              rules={[{ required: true, whitespace: true, max: 255, message: "Укажите название" }]}
+            >
+              <Input autoFocus maxLength={255} />
+            </Form.Item>
+            <Form.Item name="role" label="Роль" className="crm-col-3">
+              <Select allowClear options={COMPANY_ROLES.map((role) => ({ label: role, value: role }))} />
+            </Form.Item>
+            <Form.Item name="country_id" label="Страна" className="crm-col-3">
+              <CountrySelect
+                allowClear
+                onChange={(countryId, country) => {
+                  createCompanyForm.setFieldsValue({
+                    country_id: countryId,
+                    country: country?.name_en ?? undefined,
+                    city: undefined,
+                  });
+                  setCreateCitySearch("");
+                }}
+              />
+            </Form.Item>
+            <Form.Item name="country" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="city" label="Город" className="crm-col-3">
+              <Select
+                allowClear
+                showSearch
+                filterOption={false}
+                disabled={!createCountryId}
+                loading={createCitiesQuery.isLoading}
+                options={createCityItems.map(({ city }) => ({ label: city, value: city }))}
+                placeholder={createCountryId ? "Начните вводить город" : "Сначала выберите страну"}
+                notFoundContent={createCitiesQuery.isLoading ? "Загрузка..." : "Города не найдены"}
+                onSearch={(value) => setCreateCitySearch(value.trim())}
+              />
+            </Form.Item>
+            <Form.Item name="postcode" label="Индекс" className="crm-col-3" rules={[{ max: 20 }]}>
+              <Input maxLength={20} />
+            </Form.Item>
+            <Form.Item name="vat_number" label="Налоговый номер / VAT" className="crm-col-3" rules={[{ max: 64 }]}>
+              <Input maxLength={64} />
+            </Form.Item>
+            <Form.Item name="address" label="Адрес" className="crm-col-6" rules={[{ max: 255 }]}>
+              <Input maxLength={255} />
+            </Form.Item>
+            <Form.Item
+              name="phone"
+              label="Телефон офиса"
+              className="crm-col-3"
+              rules={[
+                {
+                  validator: async (_, value) => {
+                    if (!isCompanyPhoneValid(value)) throw new Error("Допустимы +, -, пробел, скобки и 6–20 цифр");
+                  },
+                },
+              ]}
+            >
+              <Input />
+            </Form.Item>
+            <Form.Item name="email" label="E-mail офиса" className="crm-col-3" rules={[{ type: "email", message: "Некорректный email" }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="website" label="Сайт" className="crm-col-6" rules={[{ max: 255 }]}>
+              <Input maxLength={255} />
+            </Form.Item>
+            <Form.Item name="comment" label="Комментарий" className="crm-col-6" rules={[{ max: 2000 }]}>
+              <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={2000} showCount />
+            </Form.Item>
+          </div>
+
+          <Divider>Контакты (необязательно)</Divider>
+          <Form.List
+            name="contacts"
+            rules={[
+              {
+                validator: async (_, contacts: ContactFormValues[] | undefined) => {
+                  if ((contacts ?? []).filter((contact) => contact?.is_primary).length > 1) {
+                    throw new Error("Основным можно назначить только один контакт");
+                  }
+                },
+              },
+            ]}
+          >
+            {(fields, { add, remove }, { errors }) => (
+              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                {fields.map((field, index) => (
+                  <Card
+                    key={field.key}
+                    size="small"
+                    title={`Контакт ${index + 1}`}
+                    extra={
+                      <Button
+                        type="text"
+                        danger
+                        icon={<MinusCircleOutlined />}
+                        aria-label={`Удалить контакт ${index + 1}`}
+                        onClick={() => remove(field.name)}
+                      />
+                    }
+                  >
+                    <div className="crm-filter-grid">
+                      <Form.Item name={[field.name, "full_name"]} label="ФИО" className="crm-col-6">
+                        <Input maxLength={255} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "job_title"]} label="Должность" className="crm-col-3">
+                        <Input maxLength={255} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "is_primary"]} label="Основной" valuePropName="checked" className="crm-col-3">
+                        <Switch />
+                      </Form.Item>
+                      <Form.Item
+                        name={[field.name, "phone"]}
+                        label="Телефон"
+                        className="crm-col-3"
+                        rules={[
+                          {
+                            validator: async (_, value) => {
+                              if (!isCompanyPhoneValid(value)) throw new Error("Допустимы +, -, пробел, скобки и 6–20 цифр");
+                            },
+                          },
+                        ]}
+                      >
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        name={[field.name, "email"]}
+                        label="E-mail"
+                        className="crm-col-3"
+                        rules={[{ type: "email", message: "Некорректный email" }]}
+                      >
+                        <Input />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "messenger_type"]} label="Мессенджер" className="crm-col-3">
+                        <Input maxLength={64} placeholder="Telegram, WhatsApp" />
+                      </Form.Item>
+                      <Form.Item
+                        name={[field.name, "messenger_value"]}
+                        label="Контакт мессенджера"
+                        className="crm-col-3"
+                        dependencies={[
+                          ["contacts", field.name, "full_name"],
+                          ["contacts", field.name, "messenger_type"],
+                        ]}
+                        rules={[
+                          ({ getFieldValue }) => ({
+                            validator: async (_, value) => {
+                              const type = getFieldValue(["contacts", field.name, "messenger_type"]);
+                              const fullName = getFieldValue(["contacts", field.name, "full_name"]);
+                              if (fullName?.trim() && type?.trim() && !value?.trim()) {
+                                throw new Error("Укажите контакт мессенджера");
+                              }
+                            },
+                          }),
+                        ]}
+                      >
+                        <Input maxLength={255} />
+                      </Form.Item>
+                    </div>
+                  </Card>
+                ))}
+                <Form.ErrorList errors={errors} />
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ is_primary: false })} block>
+                  Добавить контакт
+                </Button>
+              </Space>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 
@@ -1030,22 +1333,13 @@ function CompaniesPageContent() {
             rules={[
               {
                 validator: async (_, value) => {
-                  const normalized = normalizePhone(value);
-                  if (!normalized) return;
-                  if (!STRICT_PHONE_REGEX.test(normalized)) {
-                    throw new Error("Введите телефон в формате +79991234567");
-                  }
+                  if (!isCompanyPhoneValid(value)) throw new Error("Допустимы +, -, пробел, скобки и 6–20 цифр");
                 },
               },
             ]}
-            extra="Формат: +[код][номер], от 8 до 15 цифр после +."
+            extra="Допустимы +, -, пробел, скобки и 6–20 цифр."
           >
-            <Input
-              placeholder="+79991234567"
-              onBlur={(event) => {
-                createContactForm.setFieldValue("phone", normalizePhone(event.target.value));
-              }}
-            />
+            <Input placeholder="+39 (02) 123-456" />
           </Form.Item>
           <Form.Item name="messenger_type" label="Тип мессенджера">
             <Input />
@@ -1103,22 +1397,15 @@ function CompaniesPageContent() {
             rules={[
               {
                 validator: async (_, value) => {
-                  const normalized = normalizePhone(value);
-                  if (!normalized) return;
-                  if (!STRICT_PHONE_REGEX.test(normalized)) {
-                    throw new Error("Введите телефон в формате +79991234567");
-                  }
+                  if (!isCompanyPhoneValid(value)) throw new Error("Допустимы +, -, пробел, скобки и 6–20 цифр");
                 },
               },
             ]}
-            extra="Формат: +[код][номер], от 8 до 15 цифр после +."
+            extra="Допустимы +, -, пробел, скобки и 6–20 цифр."
           >
             <Input
-              placeholder="+79991234567"
+              placeholder="+39 (02) 123-456"
               disabled={Boolean(selectedCompany?.owner_user_id && selectedContact?.is_primary)}
-              onBlur={(event) => {
-                editContactForm.setFieldValue("phone", normalizePhone(event.target.value));
-              }}
             />
           </Form.Item>
           <Form.Item name="messenger_type" label="Тип мессенджера">

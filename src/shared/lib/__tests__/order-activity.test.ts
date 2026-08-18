@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
+import { getOrderActivityEventCode, getOrderActivityText, normalizeSpecialTariffText } from "@/shared/lib/order-activity";
 import type { OrderStatusHistoryItem } from "@/shared/types/entities";
 
 describe("order activity helpers", () => {
@@ -36,5 +36,13 @@ describe("order activity helpers", () => {
     };
 
     expect(getOrderActivityText(item)).toBe("Status: factory_confirmed");
+  });
+
+  it("uses event type before field name and supports legacy rows", () => {
+    expect(getOrderActivityEventCode({ event_type: "trip_assigned_override", field_name: "trip_id_override" })).toBe(
+      "trip_assigned_override",
+    );
+    expect(getOrderActivityEventCode({ event_type: null, field_name: "trip_unassigned" })).toBe("trip_unassigned");
+    expect(getOrderActivityEventCode({ event_type: null, field_name: null })).toBeNull();
   });
 });

@@ -130,6 +130,8 @@ export type OrderStatusHistoryItem = {
   created_at: string | null;
   source?: "card" | "chat" | string | null;
   field_name?: string | null;
+  event_type?: string | null;
+  waypoint_name?: string | null;
   old_value?: string | null;
   new_value?: string | null;
 };
@@ -241,6 +243,7 @@ export type OrderListItem = {
   factory_loading_address_id: number | null;
   trip_id: number | null;
   trip_name?: string | null;
+  trip_assigned_via_override: boolean;
   invoice_number: string | null;
   declared_volume_m3?: string | null;
   country: string | null;
@@ -948,14 +951,42 @@ export type OrderClientCompanyLookupItem = {
   contacts: OrderClientCompanyLookupContact[];
 };
 
+export type CompanyRole =
+  | "Client"
+  | "Factory"
+  | "Supplier"
+  | "Forwarder"
+  | "Carrier"
+  | "Warehouse"
+  | "Customs Broker"
+  | "Dealer"
+  | "Partner"
+  | "Other";
+
+export type CompanyPrimaryContact = {
+  id: number;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  job_title: string | null;
+};
+
 export type Company = {
   id: number;
   name: string;
   owner_user_id: number | null;
-  country?: string | null;
+  country: string | null;
   country_id?: number | null;
-  city?: string | null;
-  role?: string | null;
+  city: string | null;
+  address: string | null;
+  postcode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  vat_number: string | null;
+  comment: string | null;
+  role: CompanyRole | null;
+  primary_contact: CompanyPrimaryContact | null;
   role_name?: string | null;
   roles?: string[] | null;
   role_names?: string[] | null;
@@ -965,7 +996,18 @@ export type Company = {
 
 export type CompanyWritePayload = {
   name?: string;
+  country?: string;
+  city?: string;
+  address?: string;
+  postcode?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  vat_number?: string;
+  comment?: string;
+  role?: CompanyRole;
   owner_user_id?: number | null;
+  contacts?: CompanyContactWritePayload[];
 };
 
 export type CompanyContact = {

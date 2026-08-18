@@ -71,6 +71,17 @@ describe("contract route mappings", () => {
     expect(proxyToBackend).toHaveBeenNthCalledWith(2, request, "/users/lookups/cities");
   });
 
+  it("proxies company filter lookup endpoints", async () => {
+    const countries = await import("@/app/api/companies/lookups/countries/route");
+    const cities = await import("@/app/api/companies/lookups/cities/route");
+
+    await countries.GET(request);
+    await cities.GET(request);
+
+    expect(proxyToBackend).toHaveBeenNthCalledWith(1, request, "/companies/lookups/countries");
+    expect(proxyToBackend).toHaveBeenNthCalledWith(2, request, "/companies/lookups/cities");
+  });
+
   it("proxies unified trip points endpoints", async () => {
     const points = await import("@/app/api/trips/[tripId]/points/route");
     const point = await import("@/app/api/trips/[tripId]/points/[tripPointId]/route");
@@ -109,5 +120,13 @@ describe("contract route mappings", () => {
 
     expect(proxyToBackend).toHaveBeenNthCalledWith(1, request, "/orders/42/assign-trip/preview");
     expect(proxyToBackend).toHaveBeenNthCalledWith(2, request, "/orders/bulk/assign-trip/preview");
+  });
+
+  it("proxies order status history item updates", async () => {
+    const historyItem = await import("@/app/api/orders/[orderId]/status-history/[historyId]/route");
+
+    await historyItem.PATCH(request, { params: Promise.resolve({ orderId: "42", historyId: "9" }) });
+
+    expect(proxyToBackend).toHaveBeenCalledWith(request, "/orders/42/status-history/9");
   });
 });
