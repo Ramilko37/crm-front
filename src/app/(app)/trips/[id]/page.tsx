@@ -350,7 +350,14 @@ function TripDetailPageContent() {
         throw new Error("Sequence должен быть уникален внутри рейса");
       }
 
-      const payload = buildTripPointPayload({ ...values, sequence });
+      const payload = buildTripPointPayload(
+        { ...values, sequence },
+        {
+          factories: [...factories, ...pointFactoryOptions],
+          pathPoints,
+          forwarders: pointForwarderOptions,
+        },
+      );
 
       if (selectedPoint) {
         const updatePayload: TripPointUpdatePayload = payload;

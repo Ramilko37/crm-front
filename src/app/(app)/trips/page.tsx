@@ -488,17 +488,26 @@ function TripsPageContent() {
   }
 
   function buildPointPayload(values: TripPointForm): TripPointWritePayload {
-    return buildTripPointPayload({
-      point_kind: pointKind,
-      loading_source: values.loading_source,
-      sequence: values.sequence,
-      path_point_id: values.path_point_id,
-      factory_id: values.factory_id,
-      forwarder_user_id: values.forwarder_user_id,
-      planned_at: values.planned_at,
-      actual_at: values.actual_at,
-      is_completed: values.is_completed,
-    });
+    return buildTripPointPayload(
+      {
+        point_kind: pointKind,
+        loading_source: values.loading_source,
+        sequence: values.sequence,
+        path_point_id: values.path_point_id,
+        factory_id: values.factory_id,
+        forwarder_user_id: values.forwarder_user_id,
+        country: values.country,
+        city: values.city,
+        planned_at: values.planned_at,
+        actual_at: values.actual_at,
+        is_completed: values.is_completed,
+      },
+      {
+        factories: factoriesLookupQuery.data?.items ?? [],
+        pathPoints: pathPointsLookupQuery.data?.items ?? [],
+        forwarders: forwardersLookupQuery.data?.items ?? [],
+      },
+    );
   }
 
   function togglePointCompleted(point: TripPoint, checked: boolean) {

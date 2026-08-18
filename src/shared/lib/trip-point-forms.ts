@@ -25,6 +25,12 @@ export type TripPointFormValues = {
   is_completed?: boolean;
 };
 
+export type TripPointPayloadContext = {
+  factories: Factory[];
+  pathPoints: PathPoint[];
+  forwarders: TripForwarderLookupItem[];
+};
+
 export function formatTripPointKind(value: TripPointKind | TripCurrentStage["point_kind"] | undefined) {
   if (value === "loading") return "Погрузка";
   if (value === "path") return "Маршрут";
@@ -129,6 +135,7 @@ export function hasDuplicateTripPointSequence(
 
 export function buildTripPointPayload(
   values: TripPointFormValues,
+  context: TripPointPayloadContext,
 ): TripPointWritePayload {
   const sequence = values.sequence;
   if (!sequence || sequence < 1) {
@@ -139,11 +146,18 @@ export function buildTripPointPayload(
     if (!values.path_point_id) {
       throw new Error("Выберите маршрутную точку");
     }
+    const pathPoint = context.pathPoints.find((item) => item.id === values.path_point_id);
+    if (!pathPoint) {
+      throw new Error("Маршрутная точка не найдена в справочнике");
+    }
 
     return {
       path_point_id: values.path_point_id,
       sequence,
       is_loading_point: false,
+      name: pathPoint.name_ru,
+      country: pathPoint.country ?? null,
+      city: pathPoint.city ?? null,
       planned_at: toTripPointDateIso(values.planned_at),
       actual_at: toTripPointDateIso(values.actual_at),
       is_completed: values.is_completed ?? false,
@@ -154,11 +168,21 @@ export function buildTripPointPayload(
     if (!values.factory_id) {
       throw new Error("Выберите фабрику");
     }
+    const factory = context.factories.find((item) => item.id === values.factory_id);
+    if (!factory) {
+      throw new Error("Фабрика не найдена в справочнике");
+    }
 
     return {
       sequence,
       is_loading_point: true,
       factory_id: values.factory_id,
+      name: factory.name,
+      address: factory.address?.trim() || factory.name,
+      postcode: factory.postcode,
+      country: values.country?.trim() || factory.country,
+      city: values.city?.trim() || factory.city,
+      phone: factory.phone,
       planned_at: toTripPointDateIso(values.planned_at),
       actual_at: toTripPointDateIso(values.actual_at),
       is_completed: values.is_completed ?? false,
@@ -169,11 +193,23 @@ export function buildTripPointPayload(
     if (!values.forwarder_user_id) {
       throw new Error("Выберите экспедитора");
     }
+    const forwarder = context.forwarders.find((item) => item.id === values.forwarder_user_id);
+    if (!forwarder) {
+      throw new Error("Экспедитор не найден в справочнике");
+    }
+    const country = values.country?.trim() || forwarder.country;
+    const city = values.city?.trim() || forwarder.city;
+    const displayName = forwarder.company_name || forwarder.full_name || `Экспедитор #${forwarder.id}`;
 
     return {
       sequence,
       is_loading_point: true,
       forwarder_user_id: values.forwarder_user_id,
+      name: displayName,
+      address: [country, city].filter(Boolean).join(", ") || displayName,
+      country,
+      city,
+      contact_name: forwarder.full_name,
       planned_at: toTripPointDateIso(values.planned_at),
       actual_at: toTripPointDateIso(values.actual_at),
       is_completed: values.is_completed ?? false,

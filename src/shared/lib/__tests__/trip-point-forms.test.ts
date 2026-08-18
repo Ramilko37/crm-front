@@ -5,7 +5,7 @@ import {
   buildTripPointPayload,
   hasDuplicateTripPointSequence,
 } from "@/shared/lib/trip-point-forms";
-import type { Factory, UserAdmin } from "@/shared/types/entities";
+import type { Factory, PathPoint, TripForwarderLookupItem } from "@/shared/types/entities";
 
 const factory: Factory = {
   id: 7,
@@ -20,59 +20,74 @@ const factory: Factory = {
   certificate_status: null,
 };
 
-const forwarder: UserAdmin = {
+const forwarder: TripForwarderLookupItem = {
   id: 25,
   company_id: null,
-  personal_manager_id: null,
   full_name: "Forwarder One",
-  login: "forwarder",
-  email: "forwarder@example.com",
-  phone: "+7",
+  company_name: "Forwarder Company",
   country: "Russia",
   city: "Moscow",
-  address: "Tverskaya 1",
-  role_name: "forwarder",
-  is_active: true,
-  total_orders: null,
-  last_order_date: null,
+  label: "Forwarder Company · Forwarder One",
+};
+
+const pathPoint: PathPoint = {
+  id: 3,
+  name_ru: "Погранпереход",
+  name_it: null,
+  name_en: "Border crossing",
+  country: "Poland",
+  city: "Warsaw",
+};
+
+const pointContext = {
+  factories: [factory],
+  forwarders: [forwarder],
+  pathPoints: [pathPoint],
 };
 
 describe("trip point form helpers", () => {
-  it("builds factory loading point payload with its source id only", () => {
-    const payload = buildTripPointPayload(
-      {
-        point_kind: "loading",
-        loading_source: "factory",
-        factory_id: factory.id,
-        sequence: 1,
-        is_completed: false,
-      },
-    );
+  it("copies the selected factory snapshot into a loading point payload", () => {
+    const payload = buildTripPointPayload({
+      point_kind: "loading",
+      loading_source: "factory",
+      factory_id: factory.id,
+      sequence: 1,
+      is_completed: false,
+    }, pointContext);
 
     expect(payload).toEqual({
       sequence: 1,
       is_loading_point: true,
       factory_id: factory.id,
+      name: "Factory A",
+      address: "Via Roma 1",
+      postcode: "20100",
+      country: "Italy",
+      city: "Milan",
+      phone: "+39",
       planned_at: null,
       actual_at: null,
       is_completed: false,
     });
   });
 
-  it("builds forwarder loading point payload with its source id only", () => {
-    const payload = buildTripPointPayload(
-      {
-        point_kind: "loading",
-        loading_source: "forwarder",
-        forwarder_user_id: forwarder.id,
-        sequence: 2,
-      },
-    );
+  it("copies the selected forwarder snapshot into a loading point payload", () => {
+    const payload = buildTripPointPayload({
+      point_kind: "loading",
+      loading_source: "forwarder",
+      forwarder_user_id: forwarder.id,
+      sequence: 2,
+    }, pointContext);
 
     expect(payload).toEqual({
       sequence: 2,
       is_loading_point: true,
       forwarder_user_id: forwarder.id,
+      name: "Forwarder Company",
+      address: "Russia, Moscow",
+      country: "Russia",
+      city: "Moscow",
+      contact_name: "Forwarder One",
       planned_at: null,
       actual_at: null,
       is_completed: false,
@@ -88,25 +103,27 @@ describe("trip point form helpers", () => {
           forwarder_user_id: forwarder.id,
           sequence: 1,
         },
+        pointContext,
       ),
     ).toThrow("Выберите фабрику");
   });
 
-  it("builds path point payload with is_loading_point false", () => {
-    const payload = buildTripPointPayload(
-      {
-        point_kind: "path",
-        path_point_id: 3,
-        sequence: 3,
-        is_completed: true,
-      },
-    );
+  it("copies the selected path point snapshot into a route point payload", () => {
+    const payload = buildTripPointPayload({
+      point_kind: "path",
+      path_point_id: pathPoint.id,
+      sequence: 3,
+      is_completed: true,
+    }, pointContext);
 
     expect(payload).toMatchObject({
       is_loading_point: false,
       path_point_id: 3,
       sequence: 3,
       is_completed: true,
+      name: "Погранпереход",
+      country: "Poland",
+      city: "Warsaw",
     });
     expect(payload.factory_id).toBeUndefined();
     expect(payload.forwarder_user_id).toBeUndefined();
