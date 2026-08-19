@@ -12,6 +12,8 @@ export const CREATE_ORDER_DRAFT_DEFAULTS: Record<string, unknown> = {
   order_type: "delivery",
   factory_mode: "existing",
   client_goods_value_currency: "EUR",
+  measurement_status: "not_required",
+  weighing_status: "not_required",
   documents: [],
   goods_lines: [],
 };
